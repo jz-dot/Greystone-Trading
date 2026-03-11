@@ -525,51 +525,435 @@ function drawPnLChart() {
   ctx.fillText('BE: $' + breakeven.toFixed(2), beX, zeroY - 10);
 }
 
-// ---- ORDER FLOW FEED ----
+// ---- ORDER FLOW FEED (Engine-Powered) ----
+
+// Flow state
+let flowLivePaused = false;
+let flowSortColumn = null;
+let flowSortDirection = 'desc';
+let flowDisplayedEntries = []; // tracked for sorting
+
 function populateFlowFeed() {
   const feed = document.getElementById('flowFeed');
   if (!feed) return;
 
-  const tickers = ['NVDA', 'AAPL', 'TSLA', 'MSFT', 'META', 'AMZN', 'AMD', 'GOOGL', 'SPY', 'QQQ'];
-  const signals = ['sweep', 'block', 'unusual', '', '', ''];
+  // Seed the engine with historical data
+  FlowEngine.seedHistory(40);
+
+  // Populate ticker filter dropdown
+  const tickerSelect = document.getElementById('flowFilterTicker');
+  if (tickerSelect) {
+    FlowEngine.getTickerList().forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t;
+      opt.textContent = t;
+      tickerSelect.appendChild(opt);
+    });
+  }
+
+  // Render seeded history
+  const history = FlowEngine.flowHistory.slice(-30).reverse();
+  history.forEach(entry => {
+    const row = createFlowRow(entry);
+    feed.appendChild(row);
+    flowDisplayedEntries.push(entry);
+  });
+
+  // Initial dark pool render
+  renderDarkPoolFeed();
+
+  // Initial hottest contracts
+  renderHottestContracts();
+
+  // Initial stats
+  updateFlowSummaryStats();
+
+  // Initial net flow chart
+  drawNetFlowChart();
+
+  // Set up filter listeners
+  setupFlowFilters();
+
+  // Set up sort listeners
+  setupFlowSorting();
+
+  // Set up live toggle
+  setupLiveToggle();
+
+  // Set up tooltip close
+  document.getElementById('fdtClose')?.addEventListener('click', () => {
+    document.getElementById('flowDetailTooltip')?.classList.remove('active');
+  });
+  document.addEventListener('click', (e) => {
+    const tooltip = document.getElementById('flowDetailTooltip');
+    if (tooltip && tooltip.classList.contains('active') && !tooltip.contains(e.target) && !e.target.closest('.flow-row')) {
+      tooltip.classList.remove('active');
+    }
+  });
+}
+
+function createFlowRow(entry) {
+  const row = document.createElement('div');
+  row.className = 'flow-row';
+
+  const sideClass = entry.side === 'Ask' ? 'bullish' : entry.side === 'Bid' ? 'bearish' : '';
   const signalLabels = { sweep: 'SWEEP', block: 'BLOCK', unusual: 'UNUSUAL' };
+  const signalHtml = entry.signal ? `<span class="${entry.signal}">${signalLabels[entry.signal]}</span>` : '<span class="flow-signal-dash">-</span>';
 
-  for (let i = 0; i < 25; i++) {
-    const ticker = tickers[Math.floor(Math.random() * tickers.length)];
-    const isCall = Math.random() > 0.45;
-    const basePrice = { NVDA: 924, AAPL: 227, TSLA: 249, MSFT: 419, META: 513, AMZN: 186, AMD: 179, GOOGL: 167, SPY: 584, QQQ: 498 }[ticker];
-    const strike = Math.round(basePrice * (0.95 + Math.random() * 0.1) / 5) * 5;
-    const side = Math.random() > 0.5 ? 'Ask' : 'Bid';
-    const size = Math.floor(Math.random() * 5000 + 100);
-    const premium = (size * (Math.random() * 8 + 0.5) * 100);
-    const iv = (25 + Math.random() * 30).toFixed(1);
-    const signal = signals[Math.floor(Math.random() * signals.length)];
-    const hour = 9 + Math.floor(Math.random() * 6);
-    const min = Math.floor(Math.random() * 60).toString().padStart(2, '0');
-    const sec = Math.floor(Math.random() * 60).toString().padStart(2, '0');
+  row.innerHTML = `
+    <span>${entry.time}</span>
+    <span style="font-weight:600">${entry.ticker}</span>
+    <span style="color: ${entry.isCall ? 'var(--profit)' : 'var(--loss)'}">${entry.type}</span>
+    <span>$${entry.strike}</span>
+    <span>${entry.exp}</span>
+    <span class="${sideClass}">${entry.side}</span>
+    <span>${formatK(entry.size)}</span>
+    <span style="font-weight:500">$${formatPremium(entry.premium)}</span>
+    <span>$${entry.spot.toFixed(2)}</span>
+    <span>${entry.iv}%</span>
+    ${signalHtml}
+  `;
 
-    const exps = ['3/14', '3/21', '3/28', '4/4', '4/18'];
-    const exp = exps[Math.floor(Math.random() * exps.length)];
+  // Store entry data on the row for tooltip
+  row._flowEntry = entry;
+  row.addEventListener('click', (e) => showFlowDetailTooltip(entry, e));
 
+  // Pulse effect for sweep/unusual
+  if (entry.signal === 'sweep') {
+    row.classList.add('pulse-sweep');
+  } else if (entry.signal === 'unusual') {
+    row.classList.add('pulse-unusual');
+  }
+
+  return row;
+}
+
+function showFlowDetailTooltip(entry, event) {
+  const tooltip = document.getElementById('flowDetailTooltip');
+  if (!tooltip) return;
+
+  document.getElementById('fdtContract').textContent =
+    `${entry.ticker} $${entry.strike}${entry.isCall ? 'C' : 'P'} ${entry.exp}`;
+
+  const body = document.getElementById('fdtBody');
+  let html = `
+    <div class="fdt-row"><span class="fdt-label">Time</span><span class="fdt-val">${entry.time}</span></div>
+    <div class="fdt-row"><span class="fdt-label">Type</span><span class="fdt-val" style="color:${entry.isCall ? 'var(--profit)' : 'var(--loss)'}">${entry.type}</span></div>
+    <div class="fdt-row"><span class="fdt-label">Side</span><span class="fdt-val">${entry.side}</span></div>
+    <div class="fdt-row"><span class="fdt-label">Size</span><span class="fdt-val">${entry.size.toLocaleString()} contracts</span></div>
+    <div class="fdt-row"><span class="fdt-label">Fill Price</span><span class="fdt-val">$${entry.fillPrice.toFixed(2)}</span></div>
+    <div class="fdt-row"><span class="fdt-label">Bid / Ask</span><span class="fdt-val">$${entry.bid.toFixed(2)} / $${entry.ask.toFixed(2)}</span></div>
+    <div class="fdt-row"><span class="fdt-label">Premium</span><span class="fdt-val" style="font-weight:700">$${formatPremium(entry.premium)}</span></div>
+    <div class="fdt-row"><span class="fdt-label">Spot Price</span><span class="fdt-val">$${entry.spot.toFixed(2)}</span></div>
+    <div class="fdt-row"><span class="fdt-label">IV</span><span class="fdt-val">${entry.iv}%</span></div>
+    <div class="fdt-row"><span class="fdt-label">Delta</span><span class="fdt-val">${entry.delta.toFixed(3)}</span></div>
+    <div class="fdt-row"><span class="fdt-label">Days to Exp</span><span class="fdt-val">${entry.daysToExp}</span></div>
+    <div class="fdt-row"><span class="fdt-label">Signal</span><span class="fdt-val">${entry.signal ? entry.signal.toUpperCase() : 'NONE'}</span></div>
+  `;
+
+  if (entry.sweepExchanges) {
+    html += `<div class="fdt-sweep-title">Sweep Exchange Breakdown</div>`;
+    entry.sweepExchanges.forEach(ex => {
+      html += `<div class="fdt-sweep-row"><span>${ex.venue}</span><span>${ex.size.toLocaleString()} contracts</span></div>`;
+    });
+  }
+
+  body.innerHTML = html;
+
+  // Position tooltip near click
+  const x = Math.min(event.clientX + 10, window.innerWidth - 400);
+  const y = Math.min(event.clientY - 20, window.innerHeight - 400);
+  tooltip.style.left = x + 'px';
+  tooltip.style.top = y + 'px';
+  tooltip.classList.add('active');
+}
+
+function setupFlowFilters() {
+  const ids = ['flowFilterTicker', 'flowFilterType', 'flowFilterPremium', 'flowFilterSignal'];
+  ids.forEach(id => {
+    document.getElementById(id)?.addEventListener('change', applyFlowFilters);
+  });
+}
+
+function applyFlowFilters() {
+  const ticker = document.getElementById('flowFilterTicker')?.value || 'all';
+  const type = document.getElementById('flowFilterType')?.value || 'all';
+  const minPremium = parseFloat(document.getElementById('flowFilterPremium')?.value) || 0;
+  const signal = document.getElementById('flowFilterSignal')?.value || 'all';
+
+  const filtered = FlowEngine.filterFlow({ ticker, type, minPremium, signal });
+
+  const feed = document.getElementById('flowFeed');
+  if (!feed) return;
+
+  // Keep header
+  const rows = feed.querySelectorAll('.flow-row');
+  rows.forEach(r => r.remove());
+
+  flowDisplayedEntries = [];
+  const toShow = filtered.slice(-50).reverse();
+  toShow.forEach(entry => {
+    const row = createFlowRow(entry);
+    feed.appendChild(row);
+    flowDisplayedEntries.push(entry);
+  });
+}
+
+function setupFlowSorting() {
+  document.querySelectorAll('.flow-sortable').forEach(header => {
+    header.addEventListener('click', () => {
+      const col = header.dataset.sort;
+      if (flowSortColumn === col) {
+        flowSortDirection = flowSortDirection === 'asc' ? 'desc' : 'asc';
+      } else {
+        flowSortColumn = col;
+        flowSortDirection = 'desc';
+      }
+
+      // Update header visuals
+      document.querySelectorAll('.flow-sortable').forEach(h => h.classList.remove('sort-asc', 'sort-desc'));
+      header.classList.add(flowSortDirection === 'asc' ? 'sort-asc' : 'sort-desc');
+
+      sortFlowFeed();
+    });
+  });
+}
+
+function sortFlowFeed() {
+  if (!flowSortColumn || flowDisplayedEntries.length === 0) return;
+
+  const sortFn = {
+    time: (a, b) => a.time.localeCompare(b.time),
+    ticker: (a, b) => a.ticker.localeCompare(b.ticker),
+    type: (a, b) => a.type.localeCompare(b.type),
+    strike: (a, b) => a.strike - b.strike,
+    size: (a, b) => a.size - b.size,
+    premium: (a, b) => a.premium - b.premium,
+    iv: (a, b) => a.iv - b.iv,
+  };
+
+  const fn = sortFn[flowSortColumn];
+  if (!fn) return;
+
+  flowDisplayedEntries.sort((a, b) => {
+    const result = fn(a, b);
+    return flowSortDirection === 'asc' ? result : -result;
+  });
+
+  const feed = document.getElementById('flowFeed');
+  if (!feed) return;
+  feed.querySelectorAll('.flow-row').forEach(r => r.remove());
+  flowDisplayedEntries.forEach(entry => {
+    feed.appendChild(createFlowRow(entry));
+  });
+}
+
+function setupLiveToggle() {
+  const toggle = document.getElementById('flowLiveToggle');
+  const indicator = document.getElementById('flowLiveIndicator');
+  if (!toggle) return;
+
+  toggle.addEventListener('change', () => {
+    flowLivePaused = !toggle.checked;
+    if (indicator) {
+      if (flowLivePaused) {
+        indicator.classList.remove('live');
+        indicator.classList.add('paused');
+      } else {
+        indicator.classList.remove('paused');
+        indicator.classList.add('live');
+      }
+    }
+  });
+}
+
+function updateFlowSummaryStats() {
+  const summary = FlowEngine.getFlowSummary();
+  const fmt = FlowAnalytics.formatDollar;
+
+  const netEl = document.getElementById('flowStatNet');
+  if (netEl) {
+    const net = summary.netPremium;
+    netEl.textContent = (net >= 0 ? '+' : '') + fmt(Math.abs(net));
+    netEl.className = 'flow-stat-value ' + (net >= 0 ? 'profit' : 'loss');
+  }
+
+  const callEl = document.getElementById('flowStatCalls');
+  if (callEl) callEl.textContent = fmt(summary.callPremium);
+
+  const putEl = document.getElementById('flowStatPuts');
+  if (putEl) putEl.textContent = fmt(summary.putPremium);
+
+  const unusualEl = document.getElementById('flowStatUnusual');
+  if (unusualEl) unusualEl.textContent = summary.unusualCount;
+
+  const dpEl = document.getElementById('flowStatDP');
+  if (dpEl) dpEl.textContent = summary.darkPoolPct.toFixed(1) + '%';
+
+  const pcrEl = document.getElementById('flowStatPCR');
+  if (pcrEl) pcrEl.textContent = summary.pcRatio + ':1';
+}
+
+function renderHottestContracts() {
+  const container = document.getElementById('hotContracts');
+  if (!container) return;
+
+  const hot = FlowEngine.getHottestContracts(6);
+  container.innerHTML = '';
+
+  hot.forEach((item, i) => {
     const row = document.createElement('div');
-    row.className = 'flow-row';
-    const sideClass = side === 'Ask' ? 'bullish' : 'bearish';
-    const signalHtml = signal ? `<span class="${signal}">${signalLabels[signal]}</span>` : '<span>-</span>';
+    row.className = 'hc-row';
+    const sentimentClass = item.isCall ? 'bullish' : 'bearish';
+    const premClass = item.isCall ? 'profit' : 'loss';
+    row.innerHTML = `
+      <span class="hc-rank">${i + 1}</span>
+      <span class="hc-contract">${item.contract}</span>
+      <span class="hc-vol">${formatK(item.volume)}</span>
+      <span class="hc-premium ${premClass}">${FlowAnalytics.formatDollar(item.premium)}</span>
+      <span class="hc-sentiment ${sentimentClass}">${item.isCall ? 'Bullish' : 'Bearish'}</span>
+    `;
+    container.appendChild(row);
+  });
+}
+
+function renderDarkPoolFeed() {
+  const container = document.getElementById('darkPoolFeed');
+  if (!container) return;
+
+  // Keep the header row
+  const headerRow = container.querySelector('.dp-header-row');
+  container.innerHTML = '';
+  if (headerRow) container.appendChild(headerRow);
+
+  const prints = FlowEngine.getDarkPoolPrints(8);
+  prints.forEach(print => {
+    const row = document.createElement('div');
+    row.className = 'dp-row' + (print.sizeCategory === 'mega' ? ' mega' : print.sizeCategory === 'large' ? ' large' : '');
+
+    const sizeBadge = print.sizeCategory === 'mega'
+      ? '<span class="dp-size-badge mega">MEGA</span>'
+      : print.sizeCategory === 'large'
+        ? '<span class="dp-size-badge large">LARGE</span>'
+        : '';
+
+    const advClass = print.pctADV > 0.3 ? 'high' : '';
 
     row.innerHTML = `
-      <span>${hour}:${min}:${sec}</span>
-      <span style="font-weight:600">${ticker}</span>
-      <span style="color: ${isCall ? 'var(--profit)' : 'var(--loss)'}">${isCall ? 'Call' : 'Put'}</span>
-      <span>$${strike}</span>
-      <span>${exp}</span>
-      <span class="${sideClass}">${side}</span>
-      <span>${formatK(size)}</span>
-      <span style="font-weight:500">$${formatPremium(premium)}</span>
-      <span>$${basePrice.toFixed(2)}</span>
-      <span>${iv}%</span>
-      ${signalHtml}
+      <span class="dp-time">${print.time}</span>
+      <span class="dp-ticker">${print.ticker}</span>
+      <span class="dp-size">${print.size.toLocaleString()}${sizeBadge}</span>
+      <span class="dp-price">$${print.price.toFixed(2)}</span>
+      <span class="dp-value">${FlowAnalytics.formatDollar(print.value)}</span>
+      <span class="dp-adv ${advClass}">${print.pctADV.toFixed(2)}%</span>
+      <span class="dp-venue">${print.venue}</span>
     `;
-    feed.appendChild(row);
+    container.appendChild(row);
+  });
+}
+
+// ---- NET FLOW CHART ----
+function drawNetFlowChart() {
+  const canvas = document.getElementById('netFlowCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const container = canvas.parentElement;
+  canvas.width = container.offsetWidth;
+  canvas.height = container.offsetHeight;
+
+  const series = FlowEngine.getNetFlowTimeSeries();
+  if (series.length < 2) return;
+
+  const padding = { top: 15, right: 50, bottom: 10, left: 10 };
+  const w = canvas.width - padding.left - padding.right;
+  const h = canvas.height - padding.top - padding.bottom;
+
+  const values = series.map(s => s.cumNet);
+  let maxVal = Math.max(...values.map(Math.abs), 1);
+  maxVal *= 1.15;
+
+  const zeroY = padding.top + h / 2;
+
+  // Grid
+  ctx.strokeStyle = '#1A1A24';
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(padding.left, zeroY);
+  ctx.lineTo(canvas.width - padding.right, zeroY);
+  ctx.stroke();
+
+  // Zero label
+  ctx.fillStyle = '#5C5C6E';
+  ctx.font = '9px JetBrains Mono';
+  ctx.textAlign = 'left';
+  ctx.fillText('$0', canvas.width - padding.right + 4, zeroY + 3);
+
+  // Draw the area chart
+  if (series.length < 2) return;
+
+  // Draw positive (green) and negative (red) fills separately
+  ctx.beginPath();
+  for (let i = 0; i < series.length; i++) {
+    const x = padding.left + (i / (series.length - 1)) * w;
+    const normalized = series[i].cumNet / maxVal;
+    const y = zeroY - normalized * (h / 2);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+
+  // Stroke the line
+  ctx.strokeStyle = '#8B5CF6';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Fill above zero (green)
+  ctx.beginPath();
+  for (let i = 0; i < series.length; i++) {
+    const x = padding.left + (i / (series.length - 1)) * w;
+    const normalized = series[i].cumNet / maxVal;
+    const y = zeroY - normalized * (h / 2);
+    const clampedY = Math.min(y, zeroY);
+    if (i === 0) ctx.moveTo(x, clampedY); else ctx.lineTo(x, clampedY);
+  }
+  ctx.lineTo(padding.left + w, zeroY);
+  ctx.lineTo(padding.left, zeroY);
+  ctx.closePath();
+  const gradGreen = ctx.createLinearGradient(0, padding.top, 0, zeroY);
+  gradGreen.addColorStop(0, 'rgba(16, 185, 129, 0.25)');
+  gradGreen.addColorStop(1, 'rgba(16, 185, 129, 0.02)');
+  ctx.fillStyle = gradGreen;
+  ctx.fill();
+
+  // Fill below zero (red)
+  ctx.beginPath();
+  for (let i = 0; i < series.length; i++) {
+    const x = padding.left + (i / (series.length - 1)) * w;
+    const normalized = series[i].cumNet / maxVal;
+    const y = zeroY - normalized * (h / 2);
+    const clampedY = Math.max(y, zeroY);
+    if (i === 0) ctx.moveTo(x, clampedY); else ctx.lineTo(x, clampedY);
+  }
+  ctx.lineTo(padding.left + w, zeroY);
+  ctx.lineTo(padding.left, zeroY);
+  ctx.closePath();
+  const gradRed = ctx.createLinearGradient(0, zeroY, 0, padding.top + h);
+  gradRed.addColorStop(0, 'rgba(239, 68, 68, 0.02)');
+  gradRed.addColorStop(1, 'rgba(239, 68, 68, 0.25)');
+  ctx.fillStyle = gradRed;
+  ctx.fill();
+
+  // Current value label
+  const lastVal = series[series.length - 1].cumNet;
+  const lastY = zeroY - (lastVal / maxVal) * (h / 2);
+  ctx.fillStyle = lastVal >= 0 ? '#10B981' : '#EF4444';
+  ctx.font = 'bold 10px JetBrains Mono';
+  ctx.textAlign = 'left';
+  ctx.fillText(FlowAnalytics.formatDollar(Math.abs(lastVal)), canvas.width - padding.right + 4, lastY + 3);
+
+  // Update label
+  const label = document.getElementById('netFlowLabel');
+  if (label) {
+    label.textContent = lastVal >= 0 ? 'Net Bullish' : 'Net Bearish';
+    label.style.color = lastVal >= 0 ? 'var(--profit)' : 'var(--loss)';
   }
 }
 
@@ -779,63 +1163,80 @@ function sendGsChat() {
   body.scrollTop = body.scrollHeight;
 }
 
-// ---- LIVE FLOW SIMULATION ----
+// ---- LIVE FLOW SIMULATION (Engine-Powered) ----
 function simulateLiveFlow() {
+  if (flowLivePaused) return;
+
   const feed = document.getElementById('flowFeed');
-  if (!feed || document.querySelector('[data-view="flow"]:not(.active)')) return;
+  if (!feed) return;
 
-  const tickers = ['NVDA', 'AAPL', 'TSLA', 'MSFT', 'META', 'AMZN', 'AMD', 'SPY'];
-  const ticker = tickers[Math.floor(Math.random() * tickers.length)];
-  const isCall = Math.random() > 0.45;
-  const basePrice = { NVDA: 924, AAPL: 227, TSLA: 249, MSFT: 419, META: 513, AMZN: 186, AMD: 179, SPY: 584 }[ticker];
-  const strike = Math.round(basePrice * (0.95 + Math.random() * 0.1) / 5) * 5;
-  const now = new Date();
-  const time = now.toTimeString().slice(0, 8);
-  const side = Math.random() > 0.5 ? 'Ask' : 'Bid';
-  const size = Math.floor(Math.random() * 3000 + 100);
-  const premium = size * (Math.random() * 5 + 0.5) * 100;
-  const iv = (25 + Math.random() * 25).toFixed(1);
-  const signals = ['sweep', 'block', 'unusual', '', '', '', '', ''];
-  const signal = signals[Math.floor(Math.random() * signals.length)];
-  const signalLabels = { sweep: 'SWEEP', block: 'BLOCK', unusual: 'UNUSUAL' };
-  const exps = ['3/14', '3/21', '3/28', '4/4'];
-  const exp = exps[Math.floor(Math.random() * exps.length)];
+  // Check if filters would exclude this entry
+  const ticker = document.getElementById('flowFilterTicker')?.value || 'all';
+  const type = document.getElementById('flowFilterType')?.value || 'all';
+  const minPremium = parseFloat(document.getElementById('flowFilterPremium')?.value) || 0;
+  const signal = document.getElementById('flowFilterSignal')?.value || 'all';
 
-  const row = document.createElement('div');
-  row.className = 'flow-row';
-  row.style.opacity = '0';
-  row.style.transition = 'opacity 0.3s';
-  const sideClass = side === 'Ask' ? 'bullish' : 'bearish';
-  const signalHtml = signal ? `<span class="${signal}">${signalLabels[signal]}</span>` : '<span>-</span>';
+  // Generate new entry
+  const entry = FlowEngine.generateFlowEntry();
 
-  row.innerHTML = `
-    <span>${time}</span>
-    <span style="font-weight:600">${ticker}</span>
-    <span style="color: ${isCall ? 'var(--profit)' : 'var(--loss)'}">${isCall ? 'Call' : 'Put'}</span>
-    <span>$${strike}</span>
-    <span>${exp}</span>
-    <span class="${sideClass}">${side}</span>
-    <span>${formatK(size)}</span>
-    <span style="font-weight:500">$${formatPremium(premium)}</span>
-    <span>$${basePrice.toFixed(2)}</span>
-    <span>${iv}%</span>
-    ${signalHtml}
-  `;
+  // Run analytics on it
+  FlowAnalytics.analyzeEntry(entry);
 
-  const headerRow = feed.querySelector('.flow-header-row');
-  if (headerRow && headerRow.nextSibling) {
-    feed.insertBefore(row, headerRow.nextSibling);
-  } else {
-    feed.appendChild(row);
+  // Check if it passes current filters
+  const passesFilter =
+    (ticker === 'all' || entry.ticker === ticker) &&
+    (type === 'all' || (type === 'calls' && entry.isCall) || (type === 'puts' && !entry.isCall)) &&
+    (entry.premium >= minPremium) &&
+    (signal === 'all' || entry.signal === signal);
+
+  if (passesFilter && !flowSortColumn) {
+    const row = createFlowRow(entry);
+    row.style.opacity = '0';
+    row.style.transition = 'opacity 0.3s';
+
+    const headerRow = feed.querySelector('#flowHeaderRow');
+    if (headerRow && headerRow.nextSibling) {
+      feed.insertBefore(row, headerRow.nextSibling);
+    } else {
+      feed.appendChild(row);
+    }
+    requestAnimationFrame(() => { row.style.opacity = '1'; });
+
+    flowDisplayedEntries.unshift(entry);
+
+    // Remove old rows to prevent memory buildup
+    const rows = feed.querySelectorAll('.flow-row');
+    if (rows.length > 50) {
+      rows[rows.length - 1].remove();
+      flowDisplayedEntries.pop();
+    }
   }
-  requestAnimationFrame(() => { row.style.opacity = '1'; });
 
-  // Remove old rows to prevent memory buildup
-  const rows = feed.querySelectorAll('.flow-row');
-  if (rows.length > 50) rows[rows.length - 1].remove();
+  // Update summary stats
+  updateFlowSummaryStats();
+
+  // Periodically update hottest contracts
+  if (FlowEngine.flowHistory.length % 5 === 0) {
+    renderHottestContracts();
+  }
+
+  // Periodically update net flow chart
+  if (FlowEngine.flowHistory.length % 3 === 0) {
+    drawNetFlowChart();
+  }
 }
 
-setInterval(simulateLiveFlow, 2000);
+// Periodically generate dark pool prints
+function simulateDarkPool() {
+  if (flowLivePaused) return;
+  const print = FlowEngine.generateDarkPoolPrint();
+  FlowAnalytics.analyzeDarkPool(print);
+  renderDarkPoolFeed();
+  updateFlowSummaryStats();
+}
+
+setInterval(simulateLiveFlow, 1800);
+setInterval(simulateDarkPool, 6000);
 
 // ---- WATCHLIST HIGHLIGHTING ----
 document.querySelectorAll('.wl-row').forEach(row => {
@@ -897,6 +1298,7 @@ window.addEventListener('resize', () => {
     drawVolumeChart();
     drawPnLChart();
     drawAgentPerfChart();
+    drawNetFlowChart();
   }, 200);
 });
 

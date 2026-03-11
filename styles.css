@@ -966,19 +966,96 @@ input, select, button { font-family: inherit; }
 
 /* Dark Pool */
 .dark-pool-feed { padding: 8px 0; }
+.dp-header-row {
+  display: grid; grid-template-columns: 0.7fr 0.6fr 0.8fr 0.7fr 0.8fr 0.6fr 0.5fr;
+  padding: 8px 16px;
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
 .dp-row {
-  display: grid; grid-template-columns: 0.8fr 0.7fr 0.8fr 0.8fr 0.9fr 0.6fr;
+  display: grid; grid-template-columns: 0.7fr 0.6fr 0.8fr 0.7fr 0.8fr 0.6fr 0.5fr;
   padding: 8px 16px;
   font-size: 11px; font-family: var(--font-mono);
   border-bottom: 1px solid rgba(31,31,46,0.3);
   color: var(--text-secondary);
 }
 .dp-row.large { background: rgba(139,92,246,0.05); }
+.dp-row.mega { background: rgba(245,158,11,0.06); border-left: 2px solid var(--accent-gold); }
 .dp-row.large .dp-size { color: var(--accent-purple); font-weight: 600; }
 .dp-row.large .dp-value { color: var(--accent-purple); font-weight: 600; }
+.dp-row.mega .dp-size { color: var(--accent-gold); font-weight: 700; }
+.dp-row.mega .dp-value { color: var(--accent-gold); font-weight: 700; }
+.dp-row.mega .dp-ticker { color: var(--accent-gold); }
 .dp-time { color: var(--text-dim); }
 .dp-ticker { font-weight: 600; color: var(--text-primary); }
 .dp-venue { color: var(--text-dim); }
+.dp-adv { color: var(--text-muted); }
+.dp-adv.high { color: var(--accent-gold); font-weight: 600; }
+.dp-size-badge {
+  display: inline-block; font-size: 8px; font-weight: 700; padding: 1px 4px;
+  border-radius: 2px; margin-left: 4px; vertical-align: middle;
+}
+.dp-size-badge.mega { background: rgba(245,158,11,0.15); color: var(--accent-gold); }
+.dp-size-badge.large { background: rgba(139,92,246,0.15); color: var(--accent-purple); }
+
+/* Sortable headers */
+.flow-sortable { cursor: pointer; user-select: none; position: relative; }
+.flow-sortable:hover { color: var(--accent-gold); }
+.flow-sortable.sort-asc::after { content: ' \\25B2'; font-size: 8px; }
+.flow-sortable.sort-desc::after { content: ' \\25BC'; font-size: 8px; }
+
+/* Flow row pulse animation for sweep/unusual */
+@keyframes flowPulse {
+  0% { background: rgba(245,158,11,0.15); }
+  100% { background: transparent; }
+}
+@keyframes flowPulseUnusual {
+  0% { background: rgba(239,68,68,0.15); }
+  100% { background: transparent; }
+}
+.flow-row.pulse-sweep { animation: flowPulse 1.5s ease-out; }
+.flow-row.pulse-unusual { animation: flowPulseUnusual 1.5s ease-out; }
+
+/* Flow detail tooltip */
+.flow-detail-tooltip {
+  display: none; position: fixed; z-index: 9000;
+  background: var(--bg-elevated); border: 1px solid var(--border-light);
+  border-radius: var(--radius-md); box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  min-width: 300px; max-width: 380px; font-size: 12px;
+}
+.flow-detail-tooltip.active { display: block; }
+.fdt-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono); font-weight: 600; font-size: 13px;
+}
+.fdt-close { cursor: pointer; color: var(--text-muted); font-size: 18px; line-height: 1; }
+.fdt-close:hover { color: var(--text-primary); }
+.fdt-body { padding: 10px 14px; }
+.fdt-row {
+  display: flex; justify-content: space-between; padding: 3px 0;
+  color: var(--text-secondary); font-size: 11px;
+}
+.fdt-row .fdt-label { color: var(--text-muted); }
+.fdt-row .fdt-val { font-family: var(--font-mono); font-weight: 500; }
+.fdt-sweep-title {
+  font-size: 10px; color: var(--accent-gold); font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.5px; margin-top: 8px; margin-bottom: 4px;
+}
+.fdt-sweep-row {
+  display: flex; justify-content: space-between; padding: 2px 0;
+  font-size: 10px; font-family: var(--font-mono); color: var(--text-muted);
+}
+
+/* Net Flow Chart */
+.flow-chart-panel { margin-top: 12px; }
+.net-flow-chart-container { height: 160px; padding: 8px 16px 12px; }
+#netFlowCanvas { width: 100%; height: 100%; }
+
+/* Live toggle states */
+#flowLiveToggle:not(:checked) + .toggle-indicator { background: var(--loss); }
+.toggle-indicator.paused { background: var(--text-muted) !important; }
 
 /* ---- AGENTS VIEW ---- */
 .btn-primary {

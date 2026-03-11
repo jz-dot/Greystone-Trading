@@ -41,8 +41,9 @@ const MarketData = (function () {
         updateConnectionStatus(true);
         applyQuotesToDOM(quotes);
         startPolling();
-        // Load real chart data for the default symbol
-        await loadChartData('AAPL');
+        // Load real chart data for the current symbol
+        var chartSym = (typeof currentChartSymbol !== 'undefined') ? currentChartSymbol : 'AAPL';
+        await loadChartData(chartSym);
       } else {
         throw new Error('No quote data returned');
       }
@@ -412,9 +413,10 @@ const MarketData = (function () {
       }
     }, 15000);
 
-    // Poll chart data every 60 seconds
+    // Poll chart data every 60 seconds using the current chart symbol
     _chartPollInterval = setInterval(function () {
-      loadChartData('AAPL');
+      var sym = (typeof currentChartSymbol !== 'undefined') ? currentChartSymbol : 'AAPL';
+      loadChartData(sym);
     }, 60000);
 
     // Also update market status every minute (for open/close transitions)

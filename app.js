@@ -81,6 +81,7 @@
 })();
 
 // ---- NAVIGATION ----
+let optionsChainLoaded = false;
 document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
@@ -88,6 +89,12 @@ document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     const view = document.getElementById('view-' + btn.dataset.view);
     if (view) view.classList.add('active');
+
+    // Auto-load options chain when navigating to Options view
+    if (btn.dataset.view === 'options' && !optionsChainLoaded) {
+      optionsChainLoaded = true;
+      if (typeof populateOptionsChain === 'function') populateOptionsChain();
+    }
   });
 });
 
@@ -1446,9 +1453,13 @@ function setupLiveToggle() {
       if (flowLivePaused) {
         indicator.classList.remove('live');
         indicator.classList.add('paused');
+        // Actually stop the intervals when paused
+        stopFlowIntervals();
       } else {
         indicator.classList.remove('paused');
         indicator.classList.add('live');
+        // Restart intervals when un-paused
+        startFlowIntervals();
       }
     }
   });
@@ -1963,6 +1974,57 @@ async function typewriteHtml(container, html, scrollParent) {
   });
 }
 
+// ---- GS QUICK ACTION BUTTONS ----
+// Wire up quick-action buttons in the GS chat to send pre-built queries
+document.querySelectorAll('.gs-quick-action').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const query = btn.dataset.query;
+    if (query) {
+      const input = document.getElementById('gsChatInput');
+      if (input) {
+        input.value = query;
+        sendGsChat();
+      }
+    }
+  });
+});
+
+// Wire up alert action buttons in the Grey Sankore view to send queries to chat
+document.querySelectorAll('.alert-action-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const alertEl = btn.closest('.gs-alert');
+    if (!alertEl) return;
+    const tickerEl = alertEl.querySelector('.alert-ticker');
+    const ticker = tickerEl ? tickerEl.textContent.trim() : '';
+    const action = btn.textContent.trim();
+    let query = '';
+
+    if (action === 'Analyze Position') {
+      query = `Analyze ${ticker} - what's the best position to take?`;
+    } else if (action === 'View Flow') {
+      query = `Analyze the flow for ${ticker}`;
+    } else if (action === 'View Skew Chart') {
+      query = `Analyze the volatility skew for ${ticker}`;
+    } else if (action === 'Deep Dive') {
+      query = `Deep dive analysis on ${ticker}`;
+    } else if (action === 'Set Alert') {
+      return; // Set Alert is a different action - not a chat query
+    }
+
+    if (query) {
+      // Navigate to chat input area if not already there
+      const input = document.getElementById('gsChatInput');
+      if (input) {
+        input.value = query;
+        // Scroll to chat panel
+        const chatPanel = document.querySelector('.gs-chat-panel');
+        if (chatPanel) chatPanel.scrollIntoView({ behavior: 'smooth' });
+        sendGsChat();
+      }
+    }
+  });
+});
+
 // ---- DASHBOARD INSIGHT CARDS (AI-powered) ----
 async function refreshInsightCards() {
   if (typeof GreySankore === 'undefined') return;
@@ -2101,6 +2163,10 @@ function updateApiStatus(statusEl, indicatorEl, validation) {
 }
 
 // ---- LIVE FLOW SIMULATION (Engine-Powered) ----
+let flowIntervalId = null;
+let darkPoolIntervalId = null;
+let smartMoneyIntervalId = null;
+
 function simulateLiveFlow() {
   if (flowLivePaused) return;
 
@@ -2128,8 +2194,7 @@ function simulateLiveFlow() {
 
   if (passesFilter && !flowSortColumn) {
     const row = createFlowRow(entry);
-    row.style.opacity = '0';
-    row.style.transition = 'opacity 0.3s';
+    row.classList.add('flow-row-enter');
 
     const headerRow = feed.querySelector('#flowHeaderRow');
     if (headerRow && headerRow.nextSibling) {
@@ -2137,7 +2202,12 @@ function simulateLiveFlow() {
     } else {
       feed.appendChild(row);
     }
-    requestAnimationFrame(() => { row.style.opacity = '1'; });
+    // Trigger slide-in animation
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => { row.classList.add('flow-row-enter-active'); });
+    });
+    // Clean up animation class after transition
+    setTimeout(() => { row.classList.remove('flow-row-enter', 'flow-row-enter-active'); }, 600);
 
     flowDisplayedEntries.unshift(entry);
 
@@ -2161,6 +2231,11 @@ function simulateLiveFlow() {
   if (FlowEngine.flowHistory.length % 3 === 0) {
     drawNetFlowChart();
   }
+
+  // Periodically update smart money alerts
+  if (FlowEngine.flowHistory.length % 4 === 0) {
+    renderSmartMoneyAlerts();
+  }
 }
 
 // Periodically generate dark pool prints
@@ -2170,29 +2245,674 @@ function simulateDarkPool() {
   FlowAnalytics.analyzeDarkPool(print);
   renderDarkPoolFeed();
   updateFlowSummaryStats();
+  renderSmartMoneyAlerts();
 }
 
-setInterval(simulateLiveFlow, 1800);
-setInterval(simulateDarkPool, 6000);
+// Render smart money alerts panel
+function renderSmartMoneyAlerts() {
+  const container = document.getElementById('smartMoneyAlerts');
+  if (!container) return;
+  if (typeof FlowAnalytics === 'undefined' || typeof FlowAnalytics.getSmartMoneyAlerts !== 'function') return;
 
-// ---- WATCHLIST HIGHLIGHTING ----
-document.querySelectorAll('.wl-row').forEach(row => {
-  row.addEventListener('click', () => {
-    document.querySelectorAll('.wl-row').forEach(r => r.style.background = '');
-    row.style.background = 'var(--bg-tertiary)';
+  const alerts = FlowAnalytics.getSmartMoneyAlerts(5);
+  if (alerts.length === 0) {
+    container.innerHTML = '<div class="sma-empty">No alerts yet. Monitoring flow...</div>';
+    return;
+  }
+
+  container.innerHTML = '';
+  alerts.forEach(alert => {
+    const div = document.createElement('div');
+    div.className = 'sma-alert sma-' + (alert.severity || 'low');
+    const time = alert.timestamp ? new Date(alert.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '';
+    div.innerHTML = `
+      <div class="sma-header">
+        <span class="sma-ticker">${alert.ticker || ''}</span>
+        <span class="sma-severity ${alert.severity || 'low'}">${(alert.severity || 'LOW').toUpperCase()}</span>
+        <span class="sma-time">${time}</span>
+      </div>
+      <div class="sma-message">${alert.message || ''}</div>
+    `;
+    container.appendChild(div);
   });
-});
+}
+
+// Start/stop flow intervals
+function startFlowIntervals() {
+  if (flowIntervalId) clearInterval(flowIntervalId);
+  if (darkPoolIntervalId) clearInterval(darkPoolIntervalId);
+  flowIntervalId = setInterval(simulateLiveFlow, 1800);
+  darkPoolIntervalId = setInterval(simulateDarkPool, 6000);
+}
+
+function stopFlowIntervals() {
+  if (flowIntervalId) { clearInterval(flowIntervalId); flowIntervalId = null; }
+  if (darkPoolIntervalId) { clearInterval(darkPoolIntervalId); darkPoolIntervalId = null; }
+}
+
+// Start intervals on load
+startFlowIntervals();
+
+// ---- DASHBOARD STATE ----
+let currentChartSymbol = 'AAPL';
+let currentChartType = 'candlestick'; // 'candlestick' | 'line' | 'area'
+let currentTimeframe = '15m';
+let currentTimeframeRange = '1d';
+let currentChartCandles = null; // cached candle data for redraws
+let currentCapSize = 'large';
+let currentWatchlistTab = 'favorites';
+
+const CAP_SIZE_TICKERS = {
+  large: ['AAPL','NVDA','MSFT','AMZN','GOOGL','META','TSLA','JPM','BRK-B','UNH','V','JNJ'],
+  mid: ['COIN','PLTR','SNAP','ROKU','DKNG','HOOD','RBLX','ABNB','DASH','PINS','NET','CRWD'],
+  small: ['SOFI','IONQ','RIVN','LCID','MARA','DNA','PATH','AI','JOBY','OPEN','VLD','STEM'],
+  micro: ['BBAI','MYPS','SOUN','ASTS','GSAT','LUNR','RKLB','RDW','MNTS','BKSY','ASTR','SPIR'],
+};
+
+const WATCHLIST_TAB_TICKERS = {
+  favorites: null, // uses current cap-size list
+  tech: ['AAPL','NVDA','MSFT','AMD','GOOGL','META','AVGO','TSM','INTC','CRM','ORCL','ADBE'],
+  earnings: ['NKE','FDX','MU','LEN','ACN','GIS','WBA','RAD','BB','KMX','STZ','CTAS'],
+};
+
+const TIMEFRAME_MAP = {
+  '1m':  { interval: '1m',  range: '1d' },
+  '5m':  { interval: '5m',  range: '1d' },
+  '15m': { interval: '15m', range: '1d' },
+  '1H':  { interval: '60m', range: '5d' },
+  '4H':  { interval: '60m', range: '1mo' },
+  '1D':  { interval: '1d',  range: '6mo' },
+  '1W':  { interval: '1wk', range: '2y' },
+};
+
+// ---- CHART DATA FETCHING ----
+
+async function fetchAndDrawChart(symbol, interval, range) {
+  symbol = symbol || currentChartSymbol;
+  interval = interval || currentTimeframe;
+  const tfEntry = TIMEFRAME_MAP[interval] || { interval: interval, range: range || '1d' };
+  const actualInterval = tfEntry.interval;
+  const actualRange = range || tfEntry.range;
+
+  try {
+    const resp = await fetch(`/api/chart/${encodeURIComponent(symbol)}?interval=${actualInterval}&range=${actualRange}`);
+    if (!resp.ok) throw new Error('API returned ' + resp.status);
+    const data = await resp.json();
+    if (data && data.candles && data.candles.length > 0) {
+      currentChartCandles = data.candles;
+      drawChartWithType(data.candles, currentChartType);
+      drawVolumeChartFromCandles(data.candles);
+      updateChartOverlay(data.candles);
+      updateChartTitle(symbol, data.candles);
+      return;
+    }
+  } catch (err) {
+    console.warn('[Chart] Failed to fetch chart data for ' + symbol + ':', err.message);
+  }
+  // Fallback to generated data
+  const candles = generateCandleData(80, 224, 228);
+  currentChartCandles = candles;
+  drawChartWithType(candles, currentChartType);
+  drawVolumeChart();
+}
+
+function updateChartOverlay(candles) {
+  if (!candles || candles.length === 0) return;
+  const last = candles[candles.length - 1];
+  const overlayItems = document.querySelectorAll('.chart-overlay-data .overlay-item');
+  if (overlayItems.length >= 5) {
+    overlayItems[0].textContent = 'O: ' + last.open.toFixed(2);
+    overlayItems[1].textContent = 'H: ' + last.high.toFixed(2);
+    overlayItems[2].textContent = 'L: ' + last.low.toFixed(2);
+    overlayItems[3].textContent = 'C: ' + last.close.toFixed(2);
+    const vol = last.volume || 0;
+    overlayItems[4].textContent = 'V: ' + (vol >= 1e6 ? (vol/1e6).toFixed(1) + 'M' : vol >= 1e3 ? (vol/1e3).toFixed(1) + 'K' : vol.toString());
+  }
+}
+
+function updateChartTitle(symbol, candles) {
+  const titleEl = document.querySelector('.chart-panel .panel-title');
+  const priceEl = document.querySelector('.chart-panel .panel-price');
+  if (titleEl) titleEl.textContent = symbol;
+  if (priceEl && candles && candles.length > 0) {
+    const last = candles[candles.length - 1];
+    const first = candles[0];
+    const change = last.close - first.open;
+    const changePct = (change / first.open) * 100;
+    const isUp = change >= 0;
+    priceEl.className = 'panel-price ' + (isUp ? 'profit' : 'loss');
+    priceEl.innerHTML = `$${last.close.toFixed(2)} <small>${isUp ? '+' : ''}${change.toFixed(2)} (${isUp ? '+' : ''}${changePct.toFixed(2)}%)</small>`;
+  }
+}
+
+// ---- MULTI-TYPE CHART DRAWING ----
+
+function drawChartWithType(candles, chartType) {
+  if (!candles || candles.length === 0) return;
+  const canvas = document.getElementById('chartCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width;
+  canvas.height = rect.height;
+
+  const padding = { top: 50, right: 60, bottom: 10, left: 10 };
+  const chartW = canvas.width - padding.left - padding.right;
+  const chartH = canvas.height - padding.top - padding.bottom;
+
+  let min = Infinity, max = -Infinity;
+  candles.forEach(c => { min = Math.min(min, c.low); max = Math.max(max, c.high); });
+  const range = max - min;
+  min -= range * 0.05;
+  max += range * 0.05;
+
+  const barWidth = chartW / candles.length;
+
+  // Grid lines
+  ctx.strokeStyle = '#1A1A24';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 5; i++) {
+    const y = padding.top + (chartH / 5) * i;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(canvas.width - padding.right, y);
+    ctx.stroke();
+    const price = max - ((max - min) / 5) * i;
+    ctx.fillStyle = '#5C5C6E';
+    ctx.font = '10px JetBrains Mono';
+    ctx.textAlign = 'left';
+    ctx.fillText(price.toFixed(2), canvas.width - padding.right + 5, y + 3);
+  }
+
+  // SMA line
+  ctx.strokeStyle = 'rgba(59, 130, 246, 0.5)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  const smaData = [];
+  for (let i = 0; i < candles.length; i++) {
+    const start = Math.max(0, i - 19);
+    const slice = candles.slice(start, i + 1);
+    const avg = slice.reduce((s, c) => s + c.close, 0) / slice.length;
+    smaData.push(avg);
+    const x = padding.left + i * barWidth + barWidth / 2;
+    const y = padding.top + ((max - avg) / (max - min)) * chartH;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Bollinger Bands
+  ctx.strokeStyle = 'rgba(139, 92, 246, 0.2)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 0; i < candles.length; i++) {
+    const x = padding.left + i * barWidth + barWidth / 2;
+    const y = padding.top + ((max - (smaData[i] + range * 0.15)) / (max - min)) * chartH;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.beginPath();
+  for (let i = 0; i < candles.length; i++) {
+    const x = padding.left + i * barWidth + barWidth / 2;
+    const y = padding.top + ((max - (smaData[i] - range * 0.15)) / (max - min)) * chartH;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  if (chartType === 'candlestick') {
+    // Draw candles
+    candles.forEach((c, i) => {
+      const x = padding.left + i * barWidth;
+      const bullish = c.close >= c.open;
+      const color = bullish ? '#10B981' : '#EF4444';
+
+      const bodyTop = padding.top + ((max - Math.max(c.open, c.close)) / (max - min)) * chartH;
+      const bodyBottom = padding.top + ((max - Math.min(c.open, c.close)) / (max - min)) * chartH;
+      const wickTop = padding.top + ((max - c.high) / (max - min)) * chartH;
+      const wickBottom = padding.top + ((max - c.low) / (max - min)) * chartH;
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x + barWidth / 2, wickTop);
+      ctx.lineTo(x + barWidth / 2, wickBottom);
+      ctx.stroke();
+
+      ctx.fillStyle = bullish ? 'rgba(16, 185, 129, 0.8)' : 'rgba(239, 68, 68, 0.8)';
+      const bodyH = Math.max(1, bodyBottom - bodyTop);
+      ctx.fillRect(x + 2, bodyTop, barWidth - 4, bodyH);
+    });
+  } else if (chartType === 'line') {
+    // Line chart - close prices
+    ctx.beginPath();
+    candles.forEach((c, i) => {
+      const x = padding.left + i * barWidth + barWidth / 2;
+      const y = padding.top + ((max - c.close) / (max - min)) * chartH;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = '#3B82F6';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  } else if (chartType === 'area') {
+    // Area chart - close prices with gradient fill
+    const points = [];
+    candles.forEach((c, i) => {
+      const x = padding.left + i * barWidth + barWidth / 2;
+      const y = padding.top + ((max - c.close) / (max - min)) * chartH;
+      points.push({ x, y });
+    });
+
+    // Fill
+    ctx.beginPath();
+    points.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
+    ctx.lineTo(points[points.length - 1].x, padding.top + chartH);
+    ctx.lineTo(points[0].x, padding.top + chartH);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, padding.top, 0, padding.top + chartH);
+    const isUp = candles[candles.length - 1].close >= candles[0].open;
+    if (isUp) {
+      grad.addColorStop(0, 'rgba(16, 185, 129, 0.25)');
+      grad.addColorStop(1, 'rgba(16, 185, 129, 0.02)');
+    } else {
+      grad.addColorStop(0, 'rgba(239, 68, 68, 0.25)');
+      grad.addColorStop(1, 'rgba(239, 68, 68, 0.02)');
+    }
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Line
+    ctx.beginPath();
+    points.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
+    ctx.strokeStyle = isUp ? '#10B981' : '#EF4444';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  // Current price line
+  const lastClose = candles[candles.length - 1].close;
+  const priceY = padding.top + ((max - lastClose) / (max - min)) * chartH;
+  ctx.strokeStyle = lastClose >= candles[0].open ? '#10B981' : '#EF4444';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(padding.left, priceY);
+  ctx.lineTo(canvas.width - padding.right, priceY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Price label
+  ctx.fillStyle = lastClose >= candles[0].open ? '#10B981' : '#EF4444';
+  ctx.fillRect(canvas.width - padding.right, priceY - 9, 56, 18);
+  ctx.fillStyle = '#0D0D12';
+  ctx.font = 'bold 10px JetBrains Mono';
+  ctx.textAlign = 'left';
+  ctx.fillText(lastClose.toFixed(2), canvas.width - padding.right + 4, priceY + 3);
+}
+
+function drawVolumeChartFromCandles(candles) {
+  const canvas = document.getElementById('volumeCanvas');
+  if (!canvas || !candles || candles.length === 0) return;
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width;
+  canvas.height = rect.height;
+
+  let maxVol = 0;
+  candles.forEach(c => { maxVol = Math.max(maxVol, c.volume || 0); });
+  if (maxVol === 0) return;
+
+  const barWidth = canvas.width / candles.length;
+  candles.forEach((c, i) => {
+    const bullish = c.close >= c.open;
+    ctx.fillStyle = bullish ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)';
+    const h = ((c.volume || 0) / maxVol) * canvas.height;
+    ctx.fillRect(i * barWidth + 1, canvas.height - h, barWidth - 2, h);
+  });
+}
+
+// ---- TIMEFRAME BUTTONS ----
+function setupTimeframeButtons() {
+  document.querySelectorAll('.tf-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const tf = btn.textContent.trim();
+      currentTimeframe = tf;
+      const mapping = TIMEFRAME_MAP[tf];
+      if (mapping) {
+        currentTimeframeRange = mapping.range;
+      }
+      fetchAndDrawChart(currentChartSymbol, tf);
+    });
+  });
+}
+
+// ---- CHART TYPE BUTTONS ----
+function setupChartTypeButtons() {
+  document.querySelectorAll('.ct-btn').forEach((btn, idx) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.ct-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const types = ['candlestick', 'line', 'area'];
+      currentChartType = types[idx] || 'candlestick';
+      if (currentChartCandles) {
+        drawChartWithType(currentChartCandles, currentChartType);
+      } else {
+        fetchAndDrawChart(currentChartSymbol, currentTimeframe);
+      }
+    });
+  });
+}
+
+// ---- WATCHLIST CLICK-TO-CHART ----
+function setupWatchlistClickToChart() {
+  document.querySelectorAll('.wl-row[data-ticker]').forEach(row => {
+    row.addEventListener('click', () => {
+      const ticker = row.dataset.ticker;
+      if (!ticker) return;
+
+      // Highlight active row
+      document.querySelectorAll('.wl-row').forEach(r => {
+        r.style.background = '';
+        r.classList.remove('wl-active');
+      });
+      row.style.background = 'var(--bg-tertiary)';
+      row.classList.add('wl-active');
+
+      // Update chart
+      currentChartSymbol = ticker;
+      fetchAndDrawChart(ticker, currentTimeframe);
+    });
+  });
+}
+
+// ---- CAP SIZE TOGGLE ----
+function setupCapSizeToggle() {
+  document.querySelectorAll('.cap-toggle .cap-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const cap = btn.dataset.cap;
+      if (!cap) return;
+      currentCapSize = cap;
+
+      // Update active state (handled by existing code, but we also do logic here)
+      const tickers = getActiveWatchlistTickers();
+      updateWatchlistWithTickers(tickers);
+    });
+  });
+}
+
+function getActiveWatchlistTickers() {
+  if (currentWatchlistTab === 'favorites' || !WATCHLIST_TAB_TICKERS[currentWatchlistTab]) {
+    return CAP_SIZE_TICKERS[currentCapSize] || CAP_SIZE_TICKERS.large;
+  }
+  return WATCHLIST_TAB_TICKERS[currentWatchlistTab];
+}
+
+async function updateWatchlistWithTickers(tickers) {
+  const tableEl = document.querySelector('.watchlist-table');
+  if (!tableEl) return;
+
+  // Keep header row
+  const headerRow = tableEl.querySelector('.wl-header-row');
+  const existingRows = tableEl.querySelectorAll('.wl-row');
+  existingRows.forEach(r => r.remove());
+
+  // Create placeholder rows for each ticker
+  tickers.forEach(ticker => {
+    const row = document.createElement('div');
+    row.className = 'wl-row';
+    row.setAttribute('data-ticker', ticker);
+    row.innerHTML = `
+      <span class="wl-ticker">${ticker}</span>
+      <span class="wl-price">--</span>
+      <span class="wl-change">--</span>
+      <span class="wl-vol">--</span>
+    `;
+    tableEl.appendChild(row);
+  });
+
+  // Re-attach click handlers
+  setupWatchlistClickToChart();
+
+  // Fetch real quotes
+  try {
+    const resp = await fetch('/api/quotes?symbols=' + encodeURIComponent(tickers.join(',')));
+    if (!resp.ok) throw new Error('Quote fetch failed');
+    const quotes = await resp.json();
+    tickers.forEach(ticker => {
+      const q = quotes[ticker];
+      if (!q) return;
+      const row = tableEl.querySelector(`.wl-row[data-ticker="${ticker}"]`);
+      if (!row) return;
+
+      const priceEl = row.querySelector('.wl-price');
+      const changeEl = row.querySelector('.wl-change');
+      const volEl = row.querySelector('.wl-vol');
+
+      if (priceEl) priceEl.textContent = q.price.toFixed(2);
+      if (changeEl) {
+        const isUp = q.changePct >= 0;
+        changeEl.textContent = (isUp ? '+' : '') + q.changePct.toFixed(2) + '%';
+        changeEl.className = 'wl-change ' + (isUp ? 'profit' : 'loss');
+      }
+      if (volEl && q.volume) {
+        volEl.textContent = q.volume >= 1e6 ? (q.volume/1e6).toFixed(1) + 'M' : q.volume >= 1e3 ? (q.volume/1e3).toFixed(1) + 'K' : q.volume.toString();
+      }
+      row.classList.remove('profit', 'loss');
+      row.classList.add(q.changePct >= 0 ? 'profit' : 'loss');
+    });
+  } catch (err) {
+    console.warn('[Watchlist] Failed to fetch quotes:', err.message);
+  }
+}
+
+// ---- WATCHLIST TABS ----
+function setupWatchlistTabs() {
+  document.querySelectorAll('.wl-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.wl-tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const tabName = btn.textContent.trim().toLowerCase();
+      currentWatchlistTab = tabName;
+      const tickers = getActiveWatchlistTickers();
+      updateWatchlistWithTickers(tickers);
+    });
+  });
+}
+
+// ---- SECTOR HEATMAP PERIOD BUTTONS ----
+function setupHeatmapPeriodButtons() {
+  document.querySelectorAll('.hp-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.hp-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+}
+
+// ---- TICKER SEARCH ----
+function setupTickerSearch() {
+  const input = document.getElementById('tickerSearch');
+  if (!input) return;
+
+  input.addEventListener('keydown', async (e) => {
+    if (e.key === 'Enter') {
+      const ticker = input.value.trim().toUpperCase();
+      if (!ticker || ticker.length > 5) return;
+
+      // Check if ticker already in watchlist
+      let existingRow = document.querySelector(`.wl-row[data-ticker="${ticker}"]`);
+      if (!existingRow) {
+        // Add to watchlist
+        const tableEl = document.querySelector('.watchlist-table');
+        if (tableEl) {
+          const row = document.createElement('div');
+          row.className = 'wl-row';
+          row.setAttribute('data-ticker', ticker);
+          row.innerHTML = `
+            <span class="wl-ticker">${ticker}</span>
+            <span class="wl-price">--</span>
+            <span class="wl-change">--</span>
+            <span class="wl-vol">--</span>
+          `;
+          tableEl.appendChild(row);
+          setupWatchlistClickToChart(); // re-attach handlers
+
+          // Fetch quote for new ticker
+          try {
+            const resp = await fetch('/api/quotes?symbols=' + encodeURIComponent(ticker));
+            if (resp.ok) {
+              const quotes = await resp.json();
+              const q = quotes[ticker];
+              if (q) {
+                const priceEl = row.querySelector('.wl-price');
+                const changeEl = row.querySelector('.wl-change');
+                if (priceEl) priceEl.textContent = q.price.toFixed(2);
+                if (changeEl) {
+                  const isUp = q.changePct >= 0;
+                  changeEl.textContent = (isUp ? '+' : '') + q.changePct.toFixed(2) + '%';
+                  changeEl.className = 'wl-change ' + (isUp ? 'profit' : 'loss');
+                }
+                row.classList.add(q.changePct >= 0 ? 'profit' : 'loss');
+              }
+            }
+          } catch (err) { /* ignore */ }
+
+          existingRow = row;
+        }
+      }
+
+      // Select the ticker and load chart
+      if (existingRow) {
+        document.querySelectorAll('.wl-row').forEach(r => {
+          r.style.background = '';
+          r.classList.remove('wl-active');
+        });
+        existingRow.style.background = 'var(--bg-tertiary)';
+        existingRow.classList.add('wl-active');
+      }
+      currentChartSymbol = ticker;
+      fetchAndDrawChart(ticker, currentTimeframe);
+      input.value = '';
+    }
+  });
+
+  // Basic filter on typing
+  input.addEventListener('input', () => {
+    const query = input.value.trim().toUpperCase();
+    document.querySelectorAll('.wl-row[data-ticker]').forEach(row => {
+      const ticker = row.dataset.ticker;
+      if (!query || ticker.includes(query)) {
+        row.style.display = '';
+      } else {
+        row.style.display = 'none';
+      }
+    });
+    // If empty, show all
+    if (!query) {
+      document.querySelectorAll('.wl-row[data-ticker]').forEach(row => {
+        row.style.display = '';
+      });
+    }
+  });
+}
+
+// ---- SPARKLINES (REAL DATA) ----
+async function drawSparklinesReal() {
+  const sparkConfig = {
+    'spark-sp500': { symbol: 'SPY', fallbackTrend: 'up', upColor: '#10B981', downColor: '#EF4444' },
+    'spark-nasdaq': { symbol: 'QQQ', fallbackTrend: 'up', upColor: '#10B981', downColor: '#EF4444' },
+    'spark-dow': { symbol: 'DIA', fallbackTrend: 'down', upColor: '#10B981', downColor: '#EF4444' },
+    'spark-vix': { symbol: '^VIX', fallbackTrend: 'up', upColor: '#EF4444', downColor: '#10B981' },
+    'spark-yield': { symbol: 'TLT', fallbackTrend: 'flat', upColor: '#F59E0B', downColor: '#F59E0B' },
+  };
+
+  for (const [id, config] of Object.entries(sparkConfig)) {
+    const container = document.getElementById(id);
+    if (!container) continue;
+    container.innerHTML = ''; // clear old sparkline
+
+    let data = null;
+    try {
+      const resp = await fetch(`/api/chart/${encodeURIComponent(config.symbol)}?interval=5m&range=1d`);
+      if (resp.ok) {
+        const chartData = await resp.json();
+        if (chartData && chartData.candles && chartData.candles.length > 0) {
+          data = chartData.candles.map(c => c.close);
+        }
+      }
+    } catch (err) { /* fallback to generated */ }
+
+    if (!data || data.length < 2) {
+      // Generate fallback data
+      data = [];
+      let val = 50;
+      const trendBias = config.fallbackTrend === 'up' ? 0.6 : config.fallbackTrend === 'down' ? -0.6 : 0;
+      for (let i = 0; i < 30; i++) {
+        val += (Math.random() - 0.5 + trendBias * 0.1) * 8;
+        val = Math.max(10, Math.min(90, val));
+        data.push(val);
+      }
+    }
+
+    const isUp = data[data.length - 1] >= data[0];
+    const color = isUp ? config.upColor : config.downColor;
+
+    const canvas = document.createElement('canvas');
+    container.appendChild(canvas);
+    canvas.width = container.offsetWidth || 160;
+    canvas.height = 32;
+    const ctx = canvas.getContext('2d');
+
+    const min = Math.min(...data);
+    const max = Math.max(...data);
+    const range = max - min || 1;
+
+    // Gradient fill
+    ctx.beginPath();
+    data.forEach((v, i) => {
+      const x = (i / (data.length - 1)) * canvas.width;
+      const y = ((max - v) / range) * (canvas.height - 4) + 2;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.lineTo(canvas.width, canvas.height);
+    ctx.lineTo(0, canvas.height);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    grad.addColorStop(0, color + '20');
+    grad.addColorStop(1, color + '00');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Line
+    ctx.beginPath();
+    data.forEach((v, i) => {
+      const x = (i / (data.length - 1)) * canvas.width;
+      const y = ((max - v) / range) * (canvas.height - 4) + 2;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+}
+
+// ---- WATCHLIST HIGHLIGHTING (updated) ----
+// Initial click handlers are set up by setupWatchlistClickToChart()
 
 // ---- SIMULATED LIVE PRICE UPDATES ----
 function simulatePriceUpdate() {
+  // Only run simulated updates if MarketData is not connected
+  if (typeof MarketData !== 'undefined' && MarketData.isConnected()) return;
+
   const rows = document.querySelectorAll('.wl-row');
   if (!rows.length) return;
   const row = rows[Math.floor(Math.random() * rows.length)];
   const priceEl = row.querySelector('.wl-price');
   const changeEl = row.querySelector('.wl-change');
-  if (!priceEl) return;
+  if (!priceEl || priceEl.textContent === '--') return;
 
   const oldPrice = parseFloat(priceEl.textContent);
+  if (isNaN(oldPrice)) return;
   const delta = (Math.random() - 0.48) * oldPrice * 0.002;
   const newPrice = oldPrice + delta;
   priceEl.textContent = newPrice.toFixed(2);
@@ -2212,20 +2932,44 @@ function simulatePriceUpdate() {
     row.classList.add('flash-down', 'loss');
   }
   setTimeout(() => row.classList.remove('flash-up', 'flash-down'), 600);
+
+  // If the updated ticker matches the chart, update chart overlay price
+  const ticker = row.dataset.ticker;
+  if (ticker === currentChartSymbol && currentChartCandles && currentChartCandles.length > 0) {
+    const last = currentChartCandles[currentChartCandles.length - 1];
+    last.close = newPrice;
+    updateChartOverlay(currentChartCandles);
+  }
 }
 setInterval(simulatePriceUpdate, 1500);
 
 // ---- INIT ----
 function init() {
-  drawCandlestickChart();
-  drawVolumeChart();
-  drawSparklines();
+  // Set up all dashboard interactivity
+  setupTimeframeButtons();
+  setupChartTypeButtons();
+  setupWatchlistClickToChart();
+  setupCapSizeToggle();
+  setupWatchlistTabs();
+  setupHeatmapPeriodButtons();
+  setupTickerSearch();
+
+  // Draw charts with real data (fallback to generated)
+  fetchAndDrawChart(currentChartSymbol, currentTimeframe);
+  drawSparklinesReal();
+
+  // Options, flow, agents
   populateOptionsChain();
   populateFlowFeed();
   drawAgentPerfChart();
   initSettingsApiKey();
   setupOptionsControls();
   setupStrategyBuilder();
+
+  // Initialize MarketData service for live quotes
+  if (typeof MarketData !== 'undefined') {
+    MarketData.init();
+  }
 
   // Refresh AI insight cards on load (async, non-blocking)
   setTimeout(() => refreshInsightCards(), 1500);
@@ -2236,8 +2980,13 @@ let resizeTimer;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    drawCandlestickChart();
-    drawVolumeChart();
+    if (currentChartCandles) {
+      drawChartWithType(currentChartCandles, currentChartType);
+      drawVolumeChartFromCandles(currentChartCandles);
+    } else {
+      drawCandlestickChart();
+      drawVolumeChart();
+    }
     drawAgentPerfChart();
     drawNetFlowChart();
     // Redraw P&L if we have an active selection
@@ -2831,6 +3580,383 @@ function initAgentSystem() {
     agent.on('guardrailTriggered', () => renderAgentCards());
   });
 }
+
+/* ============================================
+   RISK ANALYTICS ENGINE
+   Populates Risk View with simulated portfolio data
+   ============================================ */
+
+function getRiskPortfolioData() {
+  const watchlistPrices = {};
+  document.querySelectorAll('.wl-row').forEach(row => {
+    const sym = row.querySelector('.wl-sym')?.textContent;
+    const price = parseFloat(row.querySelector('.wl-price')?.textContent);
+    if (sym && !isNaN(price)) watchlistPrices[sym] = price;
+  });
+
+  const positions = [
+    { symbol: 'NVDA', qty: 50, avgCost: 875.00, beta: 1.72 },
+    { symbol: 'AAPL', qty: 120, avgCost: 218.50, beta: 1.18 },
+    { symbol: 'MSFT', qty: 80, avgCost: 425.00, beta: 1.05 },
+    { symbol: 'AMZN', qty: 65, avgCost: 178.20, beta: 1.28 },
+    { symbol: 'TSLA', qty: 40, avgCost: 262.30, beta: 1.95 },
+    { symbol: 'META', qty: 35, avgCost: 495.00, beta: 1.32 },
+    { symbol: 'GOOGL', qty: 90, avgCost: 162.10, beta: 1.08 },
+    { symbol: 'JPM', qty: 55, avgCost: 205.00, beta: 0.87 },
+    { symbol: 'AMD', qty: 70, avgCost: 165.00, beta: 1.65 },
+    { symbol: 'COIN', qty: 25, avgCost: 245.00, beta: 2.40 },
+    { symbol: 'DIS', qty: 60, avgCost: 118.00, beta: 0.95 },
+    { symbol: 'PLTR', qty: 200, avgCost: 21.50, beta: 1.85 },
+  ];
+
+  let totalValue = 0;
+  positions.forEach(p => {
+    p.current = watchlistPrices[p.symbol] || p.avgCost * (1 + (Math.random() * 0.1 - 0.03));
+    p.marketValue = p.qty * p.current;
+    p.costBasis = p.qty * p.avgCost;
+    p.pnl = p.marketValue - p.costBasis;
+    p.pnlPct = ((p.current - p.avgCost) / p.avgCost) * 100;
+    totalValue += p.marketValue;
+  });
+
+  positions.forEach(p => {
+    p.weight = (p.marketValue / totalValue) * 100;
+    p.deltaContrib = p.marketValue * p.beta;
+  });
+
+  const weightedBeta = positions.reduce((s, p) => s + (p.weight / 100) * p.beta, 0);
+  const netDelta = positions.reduce((s, p) => s + p.marketValue, 0);
+  const betaWeightedDelta = positions.reduce((s, p) => s + p.deltaContrib, 0);
+  const dailyVol = 0.015;
+  const var95 = totalValue * dailyVol * 1.645;
+  const maxDrawdown = -8.4;
+  const netGamma = totalValue * 0.0003;
+
+  return { positions, totalValue, weightedBeta, netDelta, netGamma, betaWeightedDelta, var95, maxDrawdown };
+}
+
+function riskFormatCurrency(val, decimals) {
+  var d = decimals !== undefined ? decimals : 0;
+  var abs = Math.abs(val);
+  var formatted = abs >= 1000000 ? '$' + (abs / 1000000).toFixed(2) + 'M'
+    : abs >= 1000 ? '$' + abs.toLocaleString('en-US', { maximumFractionDigits: d })
+    : '$' + abs.toFixed(d);
+  return val < 0 ? '-' + formatted : formatted;
+}
+
+function populateRiskSummary(data) {
+  var el = function(id, val) { var e = document.getElementById(id); if (e) e.textContent = val; };
+  el('riskTotalExposure', riskFormatCurrency(data.totalValue));
+  el('riskNetDelta', riskFormatCurrency(data.netDelta));
+  el('riskNetGamma', riskFormatCurrency(data.netGamma));
+  el('riskBetaDelta', riskFormatCurrency(data.betaWeightedDelta));
+  el('riskVaR', '-' + riskFormatCurrency(data.var95));
+  el('riskMaxDD', data.maxDrawdown.toFixed(1) + '%');
+}
+
+function populatePositionTable(data) {
+  var tbody = document.getElementById('riskPositionBody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  data.positions.forEach(function(p) {
+    var tr = document.createElement('tr');
+    tr.className = p.pnl >= 0 ? 'row-profit' : 'row-loss';
+    tr.innerHTML =
+      '<td>' + p.symbol + '</td>' +
+      '<td>' + p.qty + '</td>' +
+      '<td>$' + p.avgCost.toFixed(2) + '</td>' +
+      '<td>$' + p.current.toFixed(2) + '</td>' +
+      '<td>' + (p.pnl >= 0 ? '+' : '') + riskFormatCurrency(p.pnl) + '</td>' +
+      '<td>' + (p.pnlPct >= 0 ? '+' : '') + p.pnlPct.toFixed(2) + '%</td>' +
+      '<td>' + p.weight.toFixed(1) + '%</td>' +
+      '<td>' + p.beta.toFixed(2) + '</td>' +
+      '<td>' + riskFormatCurrency(p.deltaContrib) + '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+function populateVaRGauge(data) {
+  var pct = (data.var95 / data.totalValue) * 100;
+  var fillEl = document.getElementById('varGaugeFill');
+  var markerEl = document.getElementById('varGaugeMarker');
+  var labelEl = document.getElementById('varGaugeLabel');
+  var pctEl = document.getElementById('varGaugePct');
+  var portValEl = document.getElementById('varGaugePortVal');
+
+  var fillWidth = Math.min((pct / 5) * 100, 100);
+  if (fillEl) fillEl.style.width = fillWidth + '%';
+  if (markerEl) markerEl.style.left = fillWidth + '%';
+  if (labelEl) labelEl.textContent = '-' + riskFormatCurrency(data.var95);
+  if (pctEl) pctEl.textContent = pct.toFixed(2) + '%';
+  if (portValEl) portValEl.textContent = riskFormatCurrency(data.totalValue);
+}
+
+function populateConcentrationChart(data) {
+  var container = document.getElementById('concentrationChart');
+  if (!container) return;
+  container.innerHTML = '';
+
+  var colors = ['var(--accent-blue)', 'var(--profit)', 'var(--accent-purple)', 'var(--accent-gold)', 'var(--loss)', 'var(--accent-teal)', 'var(--text-muted)'];
+  var sorted = data.positions.slice().sort(function(a, b) { return b.weight - a.weight; });
+  var top5 = sorted.slice(0, 5);
+  var otherWeight = sorted.slice(5).reduce(function(s, p) { return s + p.weight; }, 0);
+
+  top5.forEach(function(p, i) {
+    var group = document.createElement('div');
+    group.className = 'conc-bar-group';
+    group.innerHTML =
+      '<span class="conc-label">' + p.symbol + '</span>' +
+      '<div class="conc-bar-track">' +
+        '<div class="conc-bar" style="width: ' + p.weight + '%; background: ' + colors[i] + ';">' + p.weight.toFixed(1) + '%</div>' +
+      '</div>';
+    container.appendChild(group);
+  });
+
+  if (otherWeight > 0) {
+    var group = document.createElement('div');
+    group.className = 'conc-bar-group';
+    group.innerHTML =
+      '<span class="conc-label">Other</span>' +
+      '<div class="conc-bar-track">' +
+        '<div class="conc-bar" style="width: ' + otherWeight + '%; background: var(--text-muted);">' + otherWeight.toFixed(1) + '%</div>' +
+      '</div>';
+    container.appendChild(group);
+  }
+}
+
+function populateCorrelationHeatmap(data) {
+  var table = document.getElementById('corrHeatmap');
+  if (!table) return;
+
+  var top5 = data.positions.slice().sort(function(a, b) { return b.weight - a.weight; }).slice(0, 5).map(function(p) { return p.symbol; });
+
+  var corrData = {
+    'NVDA-AAPL': 0.62, 'NVDA-MSFT': 0.71, 'NVDA-AMZN': 0.58, 'NVDA-META': 0.65,
+    'AAPL-MSFT': 0.78, 'AAPL-AMZN': 0.65, 'AAPL-META': 0.60,
+    'MSFT-AMZN': 0.72, 'MSFT-META': 0.68, 'AMZN-META': 0.55,
+    'NVDA-TSLA': 0.48, 'NVDA-GOOGL': 0.67, 'NVDA-JPM': 0.22, 'NVDA-AMD': 0.82, 'NVDA-COIN': 0.35, 'NVDA-DIS': 0.31, 'NVDA-PLTR': 0.52,
+    'AAPL-TSLA': 0.41, 'AAPL-GOOGL': 0.75, 'AAPL-JPM': 0.35, 'AAPL-AMD': 0.58, 'AAPL-COIN': 0.25, 'AAPL-DIS': 0.42, 'AAPL-PLTR': 0.38,
+    'MSFT-TSLA': 0.38, 'MSFT-GOOGL': 0.80, 'MSFT-JPM': 0.40, 'MSFT-AMD': 0.65, 'MSFT-COIN': 0.20, 'MSFT-DIS': 0.45, 'MSFT-PLTR': 0.42,
+    'AMZN-TSLA': 0.45, 'AMZN-GOOGL': 0.70, 'AMZN-JPM': 0.30, 'AMZN-AMD': 0.50, 'AMZN-COIN': 0.28, 'AMZN-DIS': 0.48, 'AMZN-PLTR': 0.35,
+    'META-TSLA': 0.36, 'META-GOOGL': 0.72, 'META-JPM': 0.28, 'META-AMD': 0.55, 'META-COIN': 0.22, 'META-DIS': 0.40, 'META-PLTR': 0.33,
+    'TSLA-GOOGL': 0.32, 'TSLA-JPM': 0.15, 'TSLA-AMD': 0.45, 'TSLA-COIN': 0.50, 'TSLA-DIS': 0.20, 'TSLA-PLTR': 0.40,
+    'GOOGL-JPM': 0.38, 'GOOGL-AMD': 0.60, 'GOOGL-COIN': 0.18, 'GOOGL-DIS': 0.50, 'GOOGL-PLTR': 0.42,
+    'JPM-AMD': 0.25, 'JPM-COIN': 0.12, 'JPM-DIS': 0.55, 'JPM-PLTR': 0.18,
+    'AMD-COIN': 0.38, 'AMD-DIS': 0.28, 'AMD-PLTR': 0.55, 'COIN-DIS': 0.10, 'COIN-PLTR': 0.42, 'DIS-PLTR': 0.22
+  };
+
+  function getCorr(a, b) {
+    if (a === b) return 1.00;
+    return corrData[a + '-' + b] || corrData[b + '-' + a] || 0.40;
+  }
+  function corrClass(val) {
+    if (val >= 0.99) return 'corr-self';
+    if (val >= 0.7) return 'corr-high';
+    if (val >= 0.5) return 'corr-med-high';
+    if (val >= 0.3) return 'corr-med';
+    return 'corr-low';
+  }
+
+  var html = '<thead><tr><th></th>';
+  top5.forEach(function(s) { html += '<th>' + s + '</th>'; });
+  html += '</tr></thead><tbody>';
+  top5.forEach(function(row) {
+    html += '<tr><th>' + row + '</th>';
+    top5.forEach(function(col) {
+      var val = getCorr(row, col);
+      html += '<td class="' + corrClass(val) + '">' + val.toFixed(2) + '</td>';
+    });
+    html += '</tr>';
+  });
+  html += '</tbody>';
+  table.innerHTML = html;
+}
+
+function populateStressTests(data) {
+  var grid = document.getElementById('stressTestGrid');
+  if (!grid) return;
+
+  var techSymbols = ['NVDA', 'AAPL', 'MSFT', 'AMZN', 'META', 'GOOGL', 'AMD', 'PLTR'];
+  var techWeight = data.positions
+    .filter(function(p) { return techSymbols.indexOf(p.symbol) !== -1; })
+    .reduce(function(sum, p) { return sum + p.weight; }, 0) / 100;
+
+  var scenarios = [
+    { icon: '&#x1F4C9;', title: 'Market Crash -10%', factor: -0.10, detail: 'Broad equity selloff', useBeta: true },
+    { icon: '&#x1F4C8;', title: 'Rate Hike +200bp', factor: -0.045, detail: 'Fed tightening shock', useBeta: false },
+    { icon: '&#x26A1;', title: 'VIX Spike to 40', factor: -0.065, detail: 'Volatility regime change', useBeta: true },
+    { icon: '&#x1F4BB;', title: 'Tech Sector -15%', factor: -0.15, detail: 'Sector rotation / crash', useTech: true },
+    { icon: '&#x1F4B5;', title: 'Dollar +5%', factor: -0.025, detail: 'DXY appreciation', useBeta: false }
+  ];
+
+  grid.innerHTML = '';
+  scenarios.forEach(function(s) {
+    var impact;
+    if (s.useTech) {
+      impact = data.totalValue * s.factor * techWeight;
+    } else if (s.useBeta) {
+      impact = data.totalValue * s.factor * data.weightedBeta;
+    } else {
+      impact = data.totalValue * s.factor;
+    }
+
+    var isLoss = impact < 0;
+    var card = document.createElement('div');
+    card.className = 'stress-card';
+    card.innerHTML =
+      '<div class="stress-card-icon">' + s.icon + '</div>' +
+      '<div class="stress-card-title">' + s.title + '</div>' +
+      '<div class="stress-card-impact ' + (isLoss ? 'loss' : 'profit') + '">' + (impact >= 0 ? '+' : '') + riskFormatCurrency(impact) + '</div>' +
+      '<div class="stress-card-detail">' + s.detail + '</div>';
+    grid.appendChild(card);
+  });
+}
+
+function loadRiskView() {
+  var data = getRiskPortfolioData();
+  populateRiskSummary(data);
+  populatePositionTable(data);
+  populateVaRGauge(data);
+  populateConcentrationChart(data);
+  populateCorrelationHeatmap(data);
+  populateStressTests(data);
+}
+
+/* ============================================
+   TOAST NOTIFICATION SYSTEM
+   ============================================ */
+
+function showToast(message, type) {
+  type = type || 'info';
+  var container = document.getElementById('toastContainer');
+  if (!container) return;
+  var toast = document.createElement('div');
+  toast.className = 'toast ' + type;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(function() { if (toast.parentNode) toast.remove(); }, 3100);
+}
+
+/* ============================================
+   SETTINGS ENHANCEMENTS
+   ============================================ */
+
+(function enhanceSettingsSaveFeedback() {
+  var origSaveAlpaca = document.getElementById('saveAlpacaBtn');
+  if (origSaveAlpaca) {
+    origSaveAlpaca.addEventListener('click', function() {
+      setTimeout(function() { showToast('Alpaca settings saved', 'success'); }, 200);
+    });
+  }
+  var origSaveApi = document.getElementById('saveApiKeyBtn');
+  if (origSaveApi) {
+    origSaveApi.addEventListener('click', function() {
+      setTimeout(function() {
+        var statusEl = document.getElementById('apiKeyStatus');
+        if (statusEl && statusEl.style.color !== 'var(--loss)') {
+          showToast('API key saved successfully', 'success');
+        }
+      }, 500);
+    });
+  }
+})();
+
+(function initDataPreferences() {
+  var refreshEl = document.getElementById('settingRefreshInterval');
+  var tfEl = document.getElementById('settingDefaultTimeframe');
+  var savedRefresh = localStorage.getItem('gs_refresh_interval');
+  var savedTf = localStorage.getItem('gs_default_timeframe');
+  if (savedRefresh && refreshEl) refreshEl.value = savedRefresh;
+  if (savedTf && tfEl) tfEl.value = savedTf;
+
+  if (refreshEl) {
+    refreshEl.addEventListener('change', function() {
+      localStorage.setItem('gs_refresh_interval', refreshEl.value);
+      showToast('Refresh interval updated to ' + (parseInt(refreshEl.value) / 1000) + 's', 'success');
+    });
+  }
+  if (tfEl) {
+    tfEl.addEventListener('change', function() {
+      localStorage.setItem('gs_default_timeframe', tfEl.value);
+      showToast('Default timeframe set to ' + tfEl.value, 'success');
+    });
+  }
+})();
+
+document.querySelectorAll('.accent-swatch').forEach(function(swatch) {
+  swatch.addEventListener('click', function() {
+    document.querySelectorAll('.accent-swatch').forEach(function(s) { s.classList.remove('active'); });
+    swatch.classList.add('active');
+    showToast('Accent color updated', 'info');
+  });
+});
+
+/* ============================================
+   RISK VIEW NAV HOOK + REFRESH
+   ============================================ */
+
+document.getElementById('riskRefreshBtn')?.addEventListener('click', function() {
+  loadRiskView();
+  showToast('Risk analytics refreshed', 'success');
+});
+
+// Hook into nav to load risk view when selected
+(function hookRiskNav() {
+  document.querySelectorAll('.nav-btn[data-view]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      if (btn.dataset.view === 'risk') {
+        setTimeout(loadRiskView, 50);
+      }
+    });
+  });
+})();
+
+/* ============================================
+   GREY SANKORE INSIGHT ACTION BUTTONS
+   ============================================ */
+
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest('.insight-action-btn');
+  if (!btn) return;
+
+  var action = btn.dataset.action;
+  var ticker = btn.dataset.ticker;
+
+  if (action === 'analyze') {
+    var gsBtn = document.querySelector('[data-view="greysankore"]');
+    if (gsBtn) gsBtn.click();
+    setTimeout(function() {
+      var gsInput = document.getElementById('gsInput') || document.querySelector('.gs-input input');
+      if (gsInput) {
+        gsInput.value = 'Analyze ' + ticker + ' - full technical and fundamental breakdown';
+        gsInput.focus();
+      }
+    }, 100);
+  } else if (action === 'alert') {
+    showToast('Alert set for ' + ticker + ' - you will be notified of significant moves', 'success');
+  }
+});
+
+// Patch refreshInsightCards to inject action buttons on dynamic cards
+(function patchInsightCards() {
+  if (typeof refreshInsightCards !== 'function') return;
+  var origFn = refreshInsightCards;
+  refreshInsightCards = async function() {
+    await origFn.call(this);
+    document.querySelectorAll('.gs-insight-card').forEach(function(card) {
+      if (card.querySelector('.insight-actions')) return;
+      var tickerEl = card.querySelector('.insight-content strong');
+      var ticker = tickerEl ? tickerEl.textContent : '';
+      if (!ticker) return;
+      var actionsDiv = document.createElement('div');
+      actionsDiv.className = 'insight-actions';
+      actionsDiv.innerHTML =
+        '<button class="insight-action-btn" data-action="analyze" data-ticker="' + ticker + '">View Analysis</button>' +
+        '<button class="insight-action-btn" data-action="alert" data-ticker="' + ticker + '">Set Alert</button>';
+      card.appendChild(actionsDiv);
+    });
+  };
+})();
 
 // Load settings from localStorage for risk guardrails
 function loadRiskSettings() {

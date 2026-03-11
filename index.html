@@ -454,6 +454,10 @@
                 <span class="insight-time">2 min ago</span>
                 <span class="insight-confidence high">High Conviction</span>
               </div>
+              <div class="insight-actions">
+                <button class="insight-action-btn" data-action="analyze" data-ticker="NVDA">View Analysis</button>
+                <button class="insight-action-btn" data-action="alert" data-ticker="NVDA">Set Alert</button>
+              </div>
             </div>
             <div class="gs-insight-card value">
               <div class="insight-type">
@@ -467,6 +471,10 @@
                 <span class="insight-time">8 min ago</span>
                 <span class="insight-confidence medium">Medium Conviction</span>
               </div>
+              <div class="insight-actions">
+                <button class="insight-action-btn" data-action="analyze" data-ticker="DIS">View Analysis</button>
+                <button class="insight-action-btn" data-action="alert" data-ticker="DIS">Set Alert</button>
+              </div>
             </div>
             <div class="gs-insight-card momentum">
               <div class="insight-type">
@@ -479,6 +487,10 @@
               <div class="insight-meta">
                 <span class="insight-time">15 min ago</span>
                 <span class="insight-confidence high">High Conviction</span>
+              </div>
+              <div class="insight-actions">
+                <button class="insight-action-btn" data-action="analyze" data-ticker="PLTR">View Analysis</button>
+                <button class="insight-action-btn" data-action="alert" data-ticker="PLTR">Set Alert</button>
               </div>
             </div>
           </div>
@@ -979,6 +991,14 @@
             </div>
           </div>
         </div>
+        <div class="gs-quick-actions">
+          <button class="gs-quick-action" data-query="Market outlook?">Market Outlook</button>
+          <button class="gs-quick-action" data-query="What do you think about NVDA?">NVDA Analysis</button>
+          <button class="gs-quick-action" data-query="Best options play?">Best Options Play</button>
+          <button class="gs-quick-action" data-query="Analyze the flow">Flow Analysis</button>
+          <button class="gs-quick-action" data-query="Portfolio hedging strategy?">Hedge Ideas</button>
+          <button class="gs-quick-action" data-query="Volatility regime analysis">Vol Analysis</button>
+        </div>
         <div class="gs-chat-input-area">
           <input type="text" class="gs-chat-input" placeholder="Ask about any ticker, strategy, or market thesis..." id="gsChatInput">
           <button class="gs-chat-send" id="gsChatSend">
@@ -1136,6 +1156,17 @@
             </div>
             <!-- Populated by JS -->
           </div>
+        </div>
+      </div>
+
+      <!-- Smart Money Alerts -->
+      <div class="panel smart-money-panel">
+        <div class="panel-header">
+          <h3 class="panel-title">Smart Money Alerts</h3>
+          <span class="panel-badge live">Live</span>
+        </div>
+        <div class="smart-money-alerts" id="smartMoneyAlerts">
+          <div class="sma-empty">No alerts yet. Monitoring flow...</div>
         </div>
       </div>
 
@@ -1395,139 +1426,129 @@
           <h1>Risk Analytics</h1>
           <span class="view-subtitle">Portfolio risk management and scenario analysis</span>
         </div>
+        <div class="view-actions">
+          <button class="btn-primary" id="riskRefreshBtn" style="font-size:12px; padding:6px 14px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px; margin-right:4px;"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+            Refresh
+          </button>
+        </div>
       </div>
 
-      <!-- Risk Overview Cards -->
-      <div class="risk-overview">
+      <!-- Portfolio Risk Summary Cards -->
+      <div class="risk-overview" id="riskSummaryCards">
         <div class="risk-card">
-          <div class="risk-card-header">Portfolio Beta</div>
-          <div class="risk-card-value">1.24</div>
-          <div class="risk-card-context">vs S&P 500</div>
+          <div class="risk-card-header">Total Exposure</div>
+          <div class="risk-card-value" id="riskTotalExposure">--</div>
+          <div class="risk-card-context">Long + Short notional</div>
         </div>
         <div class="risk-card">
-          <div class="risk-card-header">Value at Risk (95%)</div>
-          <div class="risk-card-value loss">-$12,847</div>
-          <div class="risk-card-context">Daily, parametric</div>
+          <div class="risk-card-header">Net Delta</div>
+          <div class="risk-card-value" id="riskNetDelta">--</div>
+          <div class="risk-card-context">Dollar delta</div>
         </div>
         <div class="risk-card">
-          <div class="risk-card-header">Sharpe Ratio</div>
-          <div class="risk-card-value">1.67</div>
-          <div class="risk-card-context">30-day rolling</div>
+          <div class="risk-card-header">Net Gamma</div>
+          <div class="risk-card-value" id="riskNetGamma">--</div>
+          <div class="risk-card-context">1% move P&L change</div>
+        </div>
+        <div class="risk-card">
+          <div class="risk-card-header">Beta-Weighted Delta</div>
+          <div class="risk-card-value" id="riskBetaDelta">--</div>
+          <div class="risk-card-context">SPY-equivalent</div>
+        </div>
+        <div class="risk-card">
+          <div class="risk-card-header">Portfolio VaR (95%)</div>
+          <div class="risk-card-value loss" id="riskVaR">--</div>
+          <div class="risk-card-context">1-day parametric</div>
         </div>
         <div class="risk-card">
           <div class="risk-card-header">Max Drawdown</div>
-          <div class="risk-card-value loss">-8.4%</div>
-          <div class="risk-card-context">YTD</div>
-        </div>
-        <div class="risk-card">
-          <div class="risk-card-header">Net Delta Exposure</div>
-          <div class="risk-card-value">$48,230</div>
-          <div class="risk-card-context">All positions</div>
-        </div>
-        <div class="risk-card">
-          <div class="risk-card-header">Portfolio Theta</div>
-          <div class="risk-card-value loss">-$342/day</div>
-          <div class="risk-card-context">Time decay</div>
+          <div class="risk-card-value loss" id="riskMaxDD">--</div>
+          <div class="risk-card-context">YTD peak-to-trough</div>
         </div>
       </div>
 
-      <!-- Scenario Analysis -->
-      <div class="risk-grid">
-        <div class="panel">
+      <!-- Position Risk Table -->
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="panel-header">
+          <h3 class="panel-title">Position Risk Breakdown</h3>
+        </div>
+        <div class="risk-position-table-wrap">
+          <table class="risk-position-table" id="riskPositionTable">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Qty</th>
+                <th>Avg Cost</th>
+                <th>Current</th>
+                <th>P&L</th>
+                <th>P&L%</th>
+                <th>Weight%</th>
+                <th>Beta</th>
+                <th>Delta Contrib</th>
+              </tr>
+            </thead>
+            <tbody id="riskPositionBody">
+              <!-- Populated by JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Risk Gauges Row -->
+      <div class="risk-gauges-row">
+        <!-- VaR Gauge -->
+        <div class="panel risk-gauge-panel">
           <div class="panel-header">
-            <h3 class="panel-title">Scenario Analysis</h3>
+            <h3 class="panel-title">Value at Risk Gauge</h3>
           </div>
-          <div class="scenario-table">
-            <div class="scenario-header">
-              <span></span>
-              <span>SPY -10%</span>
-              <span>SPY -5%</span>
-              <span>SPY -2%</span>
-              <span>SPY +2%</span>
-              <span>SPY +5%</span>
-              <span>SPY +10%</span>
+          <div class="var-gauge-wrap" id="varGaugeWrap">
+            <div class="var-gauge-labels">
+              <span>0%</span>
+              <span class="var-gauge-current" id="varGaugeLabel">--</span>
+              <span>5%</span>
             </div>
-            <div class="scenario-row">
-              <span class="scenario-label">IV Flat</span>
-              <span class="loss">-$18,420</span>
-              <span class="loss">-$8,912</span>
-              <span class="loss">-$3,241</span>
-              <span class="profit">+$3,872</span>
-              <span class="profit">+$9,143</span>
-              <span class="profit">+$19,871</span>
+            <div class="var-gauge-track">
+              <div class="var-gauge-fill" id="varGaugeFill" style="width:0%"></div>
+              <div class="var-gauge-marker" id="varGaugeMarker" style="left:0%"></div>
             </div>
-            <div class="scenario-row">
-              <span class="scenario-label">IV +5pts</span>
-              <span class="loss">-$14,230</span>
-              <span class="loss">-$5,812</span>
-              <span class="loss">-$1,041</span>
-              <span class="profit">+$5,672</span>
-              <span class="profit">+$11,943</span>
-              <span class="profit">+$22,871</span>
-            </div>
-            <div class="scenario-row">
-              <span class="scenario-label">IV +10pts</span>
-              <span class="loss">-$10,130</span>
-              <span class="loss">-$2,512</span>
-              <span class="profit">+$1,259</span>
-              <span class="profit">+$7,972</span>
-              <span class="profit">+$14,543</span>
-              <span class="profit">+$25,871</span>
-            </div>
-            <div class="scenario-row">
-              <span class="scenario-label">IV -5pts</span>
-              <span class="loss">-$22,620</span>
-              <span class="loss">-$12,012</span>
-              <span class="loss">-$5,441</span>
-              <span class="profit">+$2,072</span>
-              <span class="profit">+$6,343</span>
-              <span class="profit">+$16,871</span>
+            <div class="var-gauge-meta">
+              <span>VaR as % of portfolio: <strong id="varGaugePct">--</strong></span>
+              <span>Portfolio Value: <strong id="varGaugePortVal">--</strong></span>
             </div>
           </div>
         </div>
 
-        <div class="panel">
+        <!-- Concentration Risk -->
+        <div class="panel risk-gauge-panel">
           <div class="panel-header">
-            <h3 class="panel-title">Position Concentration</h3>
+            <h3 class="panel-title">Concentration Risk</h3>
           </div>
           <div class="concentration-chart" id="concentrationChart">
-            <div class="conc-bar-group">
-              <span class="conc-label">NVDA</span>
-              <div class="conc-bar-track">
-                <div class="conc-bar" style="width: 28%; background: var(--accent-blue);">28%</div>
-              </div>
-            </div>
-            <div class="conc-bar-group">
-              <span class="conc-label">AAPL</span>
-              <div class="conc-bar-track">
-                <div class="conc-bar" style="width: 22%; background: var(--profit);">22%</div>
-              </div>
-            </div>
-            <div class="conc-bar-group">
-              <span class="conc-label">MSFT</span>
-              <div class="conc-bar-track">
-                <div class="conc-bar" style="width: 18%; background: var(--accent-purple);">18%</div>
-              </div>
-            </div>
-            <div class="conc-bar-group">
-              <span class="conc-label">AMZN</span>
-              <div class="conc-bar-track">
-                <div class="conc-bar" style="width: 12%; background: var(--accent-gold);">12%</div>
-              </div>
-            </div>
-            <div class="conc-bar-group">
-              <span class="conc-label">PLTR</span>
-              <div class="conc-bar-track">
-                <div class="conc-bar" style="width: 8%; background: var(--loss);">8%</div>
-              </div>
-            </div>
-            <div class="conc-bar-group">
-              <span class="conc-label">Other</span>
-              <div class="conc-bar-track">
-                <div class="conc-bar" style="width: 12%; background: var(--text-muted);">12%</div>
-              </div>
-            </div>
+            <!-- Populated by JS -->
           </div>
+        </div>
+
+        <!-- Correlation Heatmap -->
+        <div class="panel risk-gauge-panel">
+          <div class="panel-header">
+            <h3 class="panel-title">Correlation Matrix (Top 5)</h3>
+          </div>
+          <div class="corr-heatmap-wrap">
+            <table class="corr-heatmap" id="corrHeatmap">
+              <!-- Populated by JS: 5x5 grid -->
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stress Test Scenarios -->
+      <div class="panel" style="margin-top:12px;">
+        <div class="panel-header">
+          <h3 class="panel-title">Stress Test Scenarios</h3>
+        </div>
+        <div class="stress-test-grid" id="stressTestGrid">
+          <!-- Populated by JS -->
         </div>
       </div>
     </div>
@@ -1667,8 +1688,68 @@
             <input type="text" class="setting-input" id="settingMaxOrderQty" value="500">
           </div>
         </div>
+        <div class="panel settings-panel">
+          <h3 class="settings-section-title">Theme</h3>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Appearance</span>
+              <span class="setting-desc">Visual theme for the platform</span>
+            </div>
+            <div class="theme-option-group">
+              <button class="theme-option active" id="themeDark" data-theme="dark">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+                Dark Terminal
+              </button>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Accent Color</span>
+              <span class="setting-desc">Primary accent used across the UI</span>
+            </div>
+            <div class="accent-swatches">
+              <span class="accent-swatch active" data-color="gold" style="background:#F59E0B;" title="Gold"></span>
+              <span class="accent-swatch" data-color="blue" style="background:#3B82F6;" title="Blue"></span>
+              <span class="accent-swatch" data-color="teal" style="background:#14B8A6;" title="Teal"></span>
+              <span class="accent-swatch" data-color="purple" style="background:#8B5CF6;" title="Purple"></span>
+            </div>
+          </div>
+        </div>
+        <div class="panel settings-panel">
+          <h3 class="settings-section-title">Data Preferences</h3>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Refresh Interval</span>
+              <span class="setting-desc">How often market data auto-refreshes</span>
+            </div>
+            <select class="setting-select" id="settingRefreshInterval">
+              <option value="5000">5 seconds</option>
+              <option value="10000" selected>10 seconds</option>
+              <option value="15000">15 seconds</option>
+              <option value="30000">30 seconds</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Default Chart Timeframe</span>
+              <span class="setting-desc">Initial timeframe when opening a chart</span>
+            </div>
+            <select class="setting-select" id="settingDefaultTimeframe">
+              <option value="1m">1 Minute</option>
+              <option value="5m">5 Minutes</option>
+              <option value="15m" selected>15 Minutes</option>
+              <option value="1H">1 Hour</option>
+              <option value="4H">4 Hours</option>
+              <option value="1D">1 Day</option>
+              <option value="1W">1 Week</option>
+            </select>
+          </div>
+        </div>
       </div>
     </div>
+
+    <!-- Toast Notification -->
+    <div class="toast-container" id="toastContainer"></div>
 
   </main>
 </div>

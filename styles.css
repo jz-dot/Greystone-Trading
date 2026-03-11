@@ -1233,6 +1233,98 @@ kbd {
   box-shadow: 0 0 20px rgba(16,185,129,0.06);
 }
 
+/* ---- GS CHAT THINKING DOTS ---- */
+.gs-thinking-dots {
+  display: flex;
+  gap: 6px;
+  padding: 8px 4px;
+  align-items: center;
+}
+.gs-thinking-dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  animation: gsDotPulse 1.4s ease-in-out infinite;
+}
+.gs-thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.gs-thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes gsDotPulse {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+/* ---- GS STREAM CURSOR ---- */
+.gs-stream-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--accent-gold);
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: gsCursorBlink 0.8s ease-in-out infinite;
+}
+@keyframes gsCursorBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* ---- GS CHAT INPUT DISABLED STATE ---- */
+.gs-chat-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.gs-chat-send:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* ---- SETTINGS API KEY ---- */
+.setting-api-key-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 280px;
+}
+.setting-api-btn {
+  padding: 8px 16px;
+  background: var(--accent-gold);
+  color: var(--bg-deep);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: var(--transition);
+  white-space: nowrap;
+}
+.setting-api-btn:hover {
+  background: #D97706;
+}
+.setting-api-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.api-status-indicator {
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+.api-status-indicator.connected {
+  background: var(--profit-bg);
+  color: var(--profit);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+.api-status-indicator.disconnected {
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--warning);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
 /* ---- RESPONSIVE ---- */
 @media (max-width: 1400px) {
   .dashboard-grid { grid-template-columns: 1fr 280px; }

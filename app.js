@@ -846,7 +846,13 @@ document.querySelectorAll('.wl-row').forEach(row => {
 });
 
 // ---- SIMULATED LIVE PRICE UPDATES ----
+// Only runs when live market data is unavailable (graceful degradation)
+let _simulatedPriceInterval = null;
+
 function simulatePriceUpdate() {
+  // Skip simulated updates if live data is active
+  if (typeof MarketData !== 'undefined' && MarketData.isConnected()) return;
+
   const rows = document.querySelectorAll('.wl-row');
   if (!rows.length) return;
   const row = rows[Math.floor(Math.random() * rows.length)];
@@ -875,7 +881,7 @@ function simulatePriceUpdate() {
   }
   setTimeout(() => row.classList.remove('flash-up', 'flash-down'), 600);
 }
-setInterval(simulatePriceUpdate, 1500);
+_simulatedPriceInterval = setInterval(simulatePriceUpdate, 1500);
 
 // ---- INIT ----
 function init() {
@@ -886,6 +892,11 @@ function init() {
   drawPnLChart();
   populateFlowFeed();
   drawAgentPerfChart();
+
+  // Initialize live market data (falls back to simulated data if server unavailable)
+  if (typeof MarketData !== 'undefined') {
+    MarketData.init();
+  }
 }
 
 // Redraw on resize

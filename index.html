@@ -10,6 +10,78 @@
 </head>
 <body>
 
+<!-- LANDING / SPLASH SCREEN -->
+<div class="landing" id="landing">
+  <div class="landing-grid-bg"></div>
+  <div class="landing-particles" id="landingParticles"></div>
+  <div class="landing-content">
+    <div class="landing-logo">
+      <div class="landing-logo-icon">
+        <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+          <path d="M24 4L8 14v20l16 10 16-10V14L24 4z" fill="url(#goldGrad)" opacity="0.15"/>
+          <path d="M24 4L8 14v20l16 10 16-10V14L24 4z" stroke="url(#goldGrad)" stroke-width="1.5" fill="none"/>
+          <path d="M24 14v20M14 19l10 5 10-5M14 29l10 5 10-5" stroke="url(#goldGrad)" stroke-width="1" opacity="0.6"/>
+          <defs>
+            <linearGradient id="goldGrad" x1="8" y1="4" x2="40" y2="44">
+              <stop offset="0%" stop-color="#F59E0B"/>
+              <stop offset="100%" stop-color="#D97706"/>
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+      <div class="landing-logo-text">
+        <span class="landing-brand">GREYSTONE</span>
+        <span class="landing-brand-sub">TRADING PLATFORM</span>
+      </div>
+    </div>
+    <h1 class="landing-headline">Institutional-Grade<br><span class="landing-accent">Intelligence.</span></h1>
+    <p class="landing-tagline">AI-powered analysis. Real-time flow. Autonomous agents.<br>Built for the informed investor.</p>
+    <div class="landing-stats">
+      <div class="landing-stat">
+        <span class="ls-value" id="lsMarkets">0</span>
+        <span class="ls-label">Global Markets</span>
+      </div>
+      <div class="landing-stat-divider"></div>
+      <div class="landing-stat">
+        <span class="ls-value" id="lsAssets">0</span>
+        <span class="ls-label">Assets Tracked</span>
+      </div>
+      <div class="landing-stat-divider"></div>
+      <div class="landing-stat">
+        <span class="ls-value" id="lsLatency">&lt;0ms</span>
+        <span class="ls-label">Feed Latency</span>
+      </div>
+      <div class="landing-stat-divider"></div>
+      <div class="landing-stat">
+        <span class="ls-value">24/7</span>
+        <span class="ls-label">AI Monitoring</span>
+      </div>
+    </div>
+    <button class="landing-cta" id="enterPlatform">
+      <span>Enter Platform</span>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+    </button>
+    <div class="landing-footer">
+      <span class="lf-item">AES-256 Encrypted</span>
+      <span class="lf-dot"></span>
+      <span class="lf-item">SOC 2 Compliant</span>
+      <span class="lf-dot"></span>
+      <span class="lf-item">v2.0.1</span>
+    </div>
+  </div>
+  <div class="landing-glow"></div>
+</div>
+
+<!-- LOADING TRANSITION -->
+<div class="loading-screen" id="loadingScreen">
+  <div class="loading-bar">
+    <div class="loading-bar-fill" id="loadingBarFill"></div>
+  </div>
+  <div class="loading-text">
+    <span id="loadingStatus">Connecting to market feeds...</span>
+  </div>
+</div>
+
 <!-- TOP BAR -->
 <header class="topbar">
   <div class="topbar-left">

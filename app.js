@@ -2,6 +2,84 @@
    GREYSTONE TRADING PLATFORM - Core Engine
    ============================================ */
 
+// ---- LANDING PAGE ----
+(function initLanding() {
+  const landing = document.getElementById('landing');
+  const loadingScreen = document.getElementById('loadingScreen');
+  const enterBtn = document.getElementById('enterPlatform');
+  if (!landing || !enterBtn) return;
+
+  // Spawn floating particles
+  const particleContainer = document.getElementById('landingParticles');
+  if (particleContainer) {
+    for (let i = 0; i < 30; i++) {
+      const p = document.createElement('div');
+      p.className = 'landing-particle';
+      p.style.left = Math.random() * 100 + '%';
+      p.style.animationDelay = Math.random() * 8 + 's';
+      p.style.animationDuration = (6 + Math.random() * 6) + 's';
+      particleContainer.appendChild(p);
+    }
+  }
+
+  // Counter animation for landing stats
+  function animateCounter(id, target, suffix, duration) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const start = 0;
+    const startTime = performance.now();
+    function step(now) {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const current = Math.floor(start + (target - start) * eased);
+      el.textContent = current.toLocaleString() + (suffix || '');
+      if (progress < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+  setTimeout(() => animateCounter('lsMarkets', 142, '', 2000), 300);
+  setTimeout(() => animateCounter('lsAssets', 48200, '+', 2000), 500);
+  setTimeout(() => {
+    const el = document.getElementById('lsLatency');
+    if (el) el.textContent = '<12ms';
+  }, 800);
+
+  enterBtn.addEventListener('click', () => {
+    landing.classList.add('hidden');
+    if (loadingScreen) {
+      loadingScreen.classList.add('active');
+      const fill = document.getElementById('loadingBarFill');
+      const status = document.getElementById('loadingStatus');
+      const steps = [
+        { pct: 15, text: 'Connecting to market feeds...' },
+        { pct: 35, text: 'Loading options chain data...' },
+        { pct: 55, text: 'Initializing Grey Sankore AI...' },
+        { pct: 75, text: 'Calibrating trading agents...' },
+        { pct: 90, text: 'Syncing portfolio positions...' },
+        { pct: 100, text: 'Ready.' },
+      ];
+      let i = 0;
+      function nextStep() {
+        if (i >= steps.length) {
+          setTimeout(() => {
+            loadingScreen.style.transition = 'opacity 0.4s ease';
+            loadingScreen.style.opacity = '0';
+            setTimeout(() => loadingScreen.remove(), 400);
+          }, 300);
+          return;
+        }
+        if (fill) fill.style.width = steps[i].pct + '%';
+        if (status) status.textContent = steps[i].text;
+        i++;
+        setTimeout(nextStep, 350 + Math.random() * 200);
+      }
+      setTimeout(nextStep, 200);
+    }
+    setTimeout(() => landing.remove(), 700);
+  });
+})();
+
 // ---- NAVIGATION ----
 document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -64,12 +142,17 @@ const tickerData = [
 ];
 
 const tickerEl = document.getElementById('marketTicker');
-tickerData.forEach(t => {
+// Create scrolling wrapper with duplicate for seamless loop
+const tickerInner = document.createElement('div');
+tickerInner.className = 'topbar-ticker-inner';
+const allTickers = [...tickerData, ...tickerData]; // duplicate for seamless scroll
+allTickers.forEach(t => {
   const item = document.createElement('div');
   item.className = 'ticker-item';
   item.innerHTML = `<span class="ticker-sym">${t.sym}</span><span class="ticker-price">${t.price}</span><span class="ticker-chg ${t.dir}">${t.chg}</span>`;
-  tickerEl.appendChild(item);
+  tickerInner.appendChild(item);
 });
+tickerEl.appendChild(tickerInner);
 
 // ---- CAP SIZE TOGGLE ----
 document.querySelectorAll('.cap-toggle').forEach(group => {
@@ -761,6 +844,38 @@ document.querySelectorAll('.wl-row').forEach(row => {
     row.style.background = 'var(--bg-tertiary)';
   });
 });
+
+// ---- SIMULATED LIVE PRICE UPDATES ----
+function simulatePriceUpdate() {
+  const rows = document.querySelectorAll('.wl-row');
+  if (!rows.length) return;
+  const row = rows[Math.floor(Math.random() * rows.length)];
+  const priceEl = row.querySelector('.wl-price');
+  const changeEl = row.querySelector('.wl-change');
+  if (!priceEl) return;
+
+  const oldPrice = parseFloat(priceEl.textContent);
+  const delta = (Math.random() - 0.48) * oldPrice * 0.002;
+  const newPrice = oldPrice + delta;
+  priceEl.textContent = newPrice.toFixed(2);
+
+  const pctChange = (delta / oldPrice) * 100;
+  const totalChange = parseFloat(changeEl.textContent) + pctChange;
+
+  if (delta > 0) {
+    changeEl.textContent = '+' + Math.abs(totalChange).toFixed(2) + '%';
+    changeEl.className = 'wl-change profit';
+    row.classList.remove('flash-down', 'loss', 'profit');
+    row.classList.add('flash-up', 'profit');
+  } else {
+    changeEl.textContent = '-' + Math.abs(totalChange).toFixed(2) + '%';
+    changeEl.className = 'wl-change loss';
+    row.classList.remove('flash-up', 'loss', 'profit');
+    row.classList.add('flash-down', 'loss');
+  }
+  setTimeout(() => row.classList.remove('flash-up', 'flash-down'), 600);
+}
+setInterval(simulatePriceUpdate, 1500);
 
 // ---- INIT ----
 function init() {

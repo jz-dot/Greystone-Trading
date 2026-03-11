@@ -1,13 +1,17 @@
 /* ============================================
    GREYSTONE TRADING PLATFORM - Backend Server
    - Yahoo Finance proxy for market data (CORS)
+   - BigData.com premium data proxy
    - Anthropic API proxy for Grey Sankore AI
    - Response caching for rate limit protection
+   - Supabase auth + user data persistence
    ============================================ */
 
 const express = require('express');
 const https = require('https');
 const path = require('path');
+const { createClient } = require('@supabase/supabase-js');
+const { createBigDataService } = require('./services/bigdata-client');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -16,6 +20,10 @@ const PORT = process.env.PORT || 3000;
 const ALPACA_API_KEY = process.env.ALPACA_API_KEY || '';
 const ALPACA_API_SECRET = process.env.ALPACA_API_SECRET || '';
 const ALPACA_PAPER_MODE = process.env.ALPACA_PAPER_MODE !== 'false'; // default true
+
+// --- BigData.com Config ---
+let bigdataApiKey = process.env.BIGDATA_API_KEY || '';
+const bigdata = createBigDataService(function () { return bigdataApiKey; });
 
 const ALPACA_PAPER_BASE = 'https://paper-api.alpaca.markets';
 const ALPACA_LIVE_BASE = 'https://api.alpaca.markets';
@@ -32,7 +40,76 @@ function getAlpacaHeaders() {
   };
 }
 
+// --- Supabase Config ---
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+
+let supabaseAdmin = null;
+if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+  supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false }
+  });
+}
+
 app.use(express.json({ limit: '1mb' }));
+
+// ============================================
+// AUTH MIDDLEWARE
+// ============================================
+
+async function requireAuth(req, res, next) {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Auth not configured on server' });
+  }
+
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Missing or invalid Authorization header' });
+  }
+
+  const token = authHeader.replace('Bearer ', '');
+
+  try {
+    const { data, error } = await supabaseAdmin.auth.getUser(token);
+    if (error || !data.user) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+    req.user = data.user;
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: 'Token validation failed' });
+  }
+}
+
+// Optional auth: attaches user if token present, does not block
+async function optionalAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ') || !supabaseAdmin) {
+    req.user = null;
+    return next();
+  }
+
+  const token = authHeader.replace('Bearer ', '');
+  try {
+    const { data, error } = await supabaseAdmin.auth.getUser(token);
+    req.user = (!error && data.user) ? data.user : null;
+  } catch (err) {
+    req.user = null;
+  }
+  next();
+}
+
+// ============================================
+// PUBLIC CONFIG ENDPOINT
+// ============================================
+
+app.get('/api/config', (req, res) => {
+  res.json({
+    supabaseUrl: SUPABASE_URL || null,
+    supabaseAnonKey: SUPABASE_ANON_KEY || null
+  });
+});
 
 // ---- Response Cache (15-second TTL) ----
 const cache = new Map();
@@ -422,6 +499,21 @@ app.post('/api/ai/chat', async (req, res) => {
     if (context.capSize) parts.push(`Active Universe: ${context.capSize} Cap`);
     if (context.marketData) parts.push(`Market Context: ${JSON.stringify(context.marketData)}`);
     if (context.recentPrices) parts.push(`Recent Prices: ${JSON.stringify(context.recentPrices)}`);
+
+    // BigData.com premium data enrichment
+    if (context.bigdataAvailable) {
+      parts.push(`[BigData.com Premium Data Available]`);
+      if (context.bigdataSentiment) {
+        parts.push(`Sentiment Data: ${JSON.stringify(context.bigdataSentiment)}`);
+      }
+      if (context.bigdataInsider) {
+        parts.push(`Insider Trading Activity: ${JSON.stringify(context.bigdataInsider)}`);
+      }
+      if (context.bigdataInstitutional) {
+        parts.push(`Institutional Ownership Changes: ${JSON.stringify(context.bigdataInstitutional)}`);
+      }
+    }
+
     if (parts.length > 0) {
       contextStr = '\n\n[Current Market Context]\n' + parts.join('\n');
     }
@@ -661,6 +753,7 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     paperMode: ALPACA_PAPER_MODE,
     alpacaConfigured: ALPACA_API_KEY.length > 0 && ALPACA_API_SECRET.length > 0,
+    supabaseConfigured: !!SUPABASE_URL && !!SUPABASE_ANON_KEY,
     timestamp: new Date().toISOString(),
   });
 });
@@ -699,8 +792,8 @@ app.get('/api/alpaca/positions', async (req, res) => {
   }
 });
 
-// --- Alpaca proxy: Place Order ---
-app.post('/api/alpaca/order', async (req, res) => {
+// --- Alpaca proxy: Place Order --- (requires auth when Supabase configured)
+app.post('/api/alpaca/order', optionalAuth, async (req, res) => {
   if (!ALPACA_API_KEY) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Alpaca API keys not set on server.' });
   }
@@ -741,8 +834,8 @@ app.post('/api/alpaca/order', async (req, res) => {
   }
 });
 
-// --- Alpaca proxy: Cancel Order ---
-app.delete('/api/alpaca/order/:id', async (req, res) => {
+// --- Alpaca proxy: Cancel Order --- (requires auth when Supabase configured)
+app.delete('/api/alpaca/order/:id', optionalAuth, async (req, res) => {
   if (!ALPACA_API_KEY) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Alpaca API keys not set on server.' });
   }
@@ -777,8 +870,8 @@ app.get('/api/alpaca/orders', async (req, res) => {
   }
 });
 
-// --- Alpaca proxy: Generic proxy for any endpoint ---
-app.post('/api/alpaca/proxy', async (req, res) => {
+// --- Alpaca proxy: Generic proxy for any endpoint --- (requires auth when Supabase configured)
+app.post('/api/alpaca/proxy', optionalAuth, async (req, res) => {
   if (!ALPACA_API_KEY) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Alpaca API keys not set on server.' });
   }
@@ -795,6 +888,368 @@ app.post('/api/alpaca/proxy', async (req, res) => {
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: 'NETWORK', message: err.message });
+  }
+});
+
+// ============================================
+// BIGDATA.COM PREMIUM DATA API
+// ============================================
+
+// GET /api/bigdata/status - Check if BigData API is configured and working
+app.get('/api/bigdata/status', async (req, res) => {
+  const configured = bigdata.isConfigured();
+  if (!configured) {
+    return res.json({ configured: false, connected: false, message: 'No API key configured' });
+  }
+  try {
+    const test = await bigdata.testConnection();
+    res.json({
+      configured: true,
+      connected: test.success,
+      message: test.message,
+      keyPrefix: bigdataApiKey ? bigdataApiKey.slice(0, 8) + '...' : null
+    });
+  } catch (err) {
+    res.json({ configured: true, connected: false, message: err.message });
+  }
+});
+
+// POST /api/bigdata/key - Save BigData API key
+app.post('/api/bigdata/key', (req, res) => {
+  const { apiKey } = req.body;
+  if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 10) {
+    return res.status(400).json({ error: 'Invalid API key format' });
+  }
+  bigdataApiKey = apiKey.trim();
+  res.json({ status: 'ok', message: 'BigData API key saved' });
+});
+
+// GET /api/bigdata/flow/:symbol - Options flow data
+app.get('/api/bigdata/flow/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const data = await bigdata.getOptionsFlow(symbol);
+    if (!data) {
+      return res.status(503).json({ error: 'BigData unavailable', fallback: true });
+    }
+    res.json(data);
+  } catch (err) {
+    console.error('[BigData] Flow endpoint error:', err.message);
+    res.status(502).json({ error: 'Failed to fetch flow data', fallback: true });
+  }
+});
+
+// GET /api/bigdata/darkpool/:symbol - Dark pool prints
+app.get('/api/bigdata/darkpool/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const data = await bigdata.getDarkPool(symbol);
+    if (!data) {
+      return res.status(503).json({ error: 'BigData unavailable', fallback: true });
+    }
+    res.json(data);
+  } catch (err) {
+    console.error('[BigData] Dark pool endpoint error:', err.message);
+    res.status(502).json({ error: 'Failed to fetch dark pool data', fallback: true });
+  }
+});
+
+// GET /api/bigdata/sentiment/:symbol - Sentiment analysis
+app.get('/api/bigdata/sentiment/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const data = await bigdata.getSentiment(symbol);
+    if (!data) {
+      return res.status(503).json({ error: 'BigData unavailable', fallback: true });
+    }
+    res.json(data);
+  } catch (err) {
+    console.error('[BigData] Sentiment endpoint error:', err.message);
+    res.status(502).json({ error: 'Failed to fetch sentiment data', fallback: true });
+  }
+});
+
+// GET /api/bigdata/insider/:symbol - Insider trades
+app.get('/api/bigdata/insider/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const data = await bigdata.getInsider(symbol);
+    if (!data) {
+      return res.status(503).json({ error: 'BigData unavailable', fallback: true });
+    }
+    res.json(data);
+  } catch (err) {
+    console.error('[BigData] Insider endpoint error:', err.message);
+    res.status(502).json({ error: 'Failed to fetch insider data', fallback: true });
+  }
+});
+
+// GET /api/bigdata/institutional/:symbol - Institutional ownership
+app.get('/api/bigdata/institutional/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const data = await bigdata.getInstitutional(symbol);
+    if (!data) {
+      return res.status(503).json({ error: 'BigData unavailable', fallback: true });
+    }
+    res.json(data);
+  } catch (err) {
+    console.error('[BigData] Institutional endpoint error:', err.message);
+    res.status(502).json({ error: 'Failed to fetch institutional data', fallback: true });
+  }
+});
+
+// GET /api/bigdata/movers - Market movers
+app.get('/api/bigdata/movers', async (req, res) => {
+  try {
+    const data = await bigdata.getMarketMovers();
+    if (!data) {
+      return res.status(503).json({ error: 'BigData unavailable', fallback: true });
+    }
+    res.json(data);
+  } catch (err) {
+    console.error('[BigData] Movers endpoint error:', err.message);
+    res.status(502).json({ error: 'Failed to fetch market movers', fallback: true });
+  }
+});
+
+// GET /api/bigdata/sectors - Sector performance
+app.get('/api/bigdata/sectors', async (req, res) => {
+  const period = req.query.period || '1D';
+  try {
+    const data = await bigdata.getSectorPerformance(period);
+    if (!data) {
+      return res.status(503).json({ error: 'BigData unavailable', fallback: true });
+    }
+    res.json(data);
+  } catch (err) {
+    console.error('[BigData] Sectors endpoint error:', err.message);
+    res.status(502).json({ error: 'Failed to fetch sector data', fallback: true });
+  }
+});
+
+// ============================================
+// USER DATA PERSISTENCE (Supabase)
+// ============================================
+
+// --- Auth Profile ---
+app.get('/api/auth/profile', requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('user_profiles')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        const meta = req.user.user_metadata || {};
+        const { data: newProfile, error: insertErr } = await supabaseAdmin
+          .from('user_profiles')
+          .insert({
+            user_id: req.user.id,
+            display_name: meta.display_name || meta.name || req.user.email.split('@')[0]
+          })
+          .select()
+          .single();
+
+        if (insertErr) return res.status(500).json({ error: insertErr.message });
+        return res.json(newProfile);
+      }
+      return res.status(500).json({ error: error.message });
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/profile', requireAuth, async (req, res) => {
+  const { display_name, avatar_url, timezone } = req.body;
+  const updates = {};
+  if (display_name !== undefined) updates.display_name = display_name;
+  if (avatar_url !== undefined) updates.avatar_url = avatar_url;
+  if (timezone !== undefined) updates.timezone = timezone;
+  updates.updated_at = new Date().toISOString();
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('user_profiles')
+      .upsert({ user_id: req.user.id, ...updates })
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Watchlists ---
+app.get('/api/user/watchlists', requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('watchlists')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .order('created_at', { ascending: true });
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/user/watchlists', requireAuth, async (req, res) => {
+  const { id, name, tickers, is_default } = req.body;
+
+  try {
+    if (id) {
+      const { data, error } = await supabaseAdmin
+        .from('watchlists')
+        .update({
+          name: name,
+          tickers: tickers,
+          is_default: is_default || false,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', id)
+        .eq('user_id', req.user.id)
+        .select()
+        .single();
+
+      if (error) return res.status(500).json({ error: error.message });
+      return res.json(data);
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('watchlists')
+      .insert({
+        user_id: req.user.id,
+        name: name || 'Watchlist',
+        tickers: tickers || [],
+        is_default: is_default || false
+      })
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/user/watchlists/:id', requireAuth, async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin
+      .from('watchlists')
+      .delete()
+      .eq('id', req.params.id)
+      .eq('user_id', req.user.id);
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ status: 'deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- User Settings ---
+app.get('/api/user/settings', requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('user_settings')
+      .select('settings')
+      .eq('user_id', req.user.id)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') return res.json({});
+      return res.status(500).json({ error: error.message });
+    }
+    res.json(data ? data.settings : {});
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/user/settings', requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('user_settings')
+      .upsert({
+        user_id: req.user.id,
+        settings: req.body,
+        updated_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data ? data.settings : req.body);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- API Credentials ---
+app.get('/api/user/api-keys', requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('api_credentials')
+      .select('id, credential_type, metadata, created_at, updated_at')
+      .eq('user_id', req.user.id);
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/user/api-keys', requireAuth, async (req, res) => {
+  const { credential_type, encrypted_key, encrypted_secret, metadata } = req.body;
+
+  if (!credential_type || !encrypted_key) {
+    return res.status(400).json({ error: 'credential_type and encrypted_key are required' });
+  }
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('api_credentials')
+      .upsert({
+        user_id: req.user.id,
+        credential_type: credential_type,
+        encrypted_key: encrypted_key,
+        encrypted_secret: encrypted_secret || null,
+        metadata: metadata || {},
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'user_id,credential_type' })
+      .select('id, credential_type, metadata, created_at, updated_at')
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/user/api-keys/:id', requireAuth, async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin
+      .from('api_credentials')
+      .delete()
+      .eq('id', req.params.id)
+      .eq('user_id', req.user.id);
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ status: 'deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -834,6 +1289,23 @@ app.listen(PORT, function () {
     console.log('  No AI API key. Set via Settings or ANTHROPIC_API_KEY env var.');
   }
   console.log('');
+  console.log('  BigData.com Premium Data:');
+  if (bigdataApiKey) {
+    console.log('    API key loaded (' + bigdataApiKey.slice(0, 8) + '...)');
+  } else {
+    console.log('    No API key. Set via Settings or BIGDATA_API_KEY env var.');
+    console.log('    Platform will use Yahoo Finance + simulated data as fallback.');
+  }
+  console.log('    GET  /api/bigdata/status');
+  console.log('    GET  /api/bigdata/flow/:symbol');
+  console.log('    GET  /api/bigdata/darkpool/:symbol');
+  console.log('    GET  /api/bigdata/sentiment/:symbol');
+  console.log('    GET  /api/bigdata/insider/:symbol');
+  console.log('    GET  /api/bigdata/institutional/:symbol');
+  console.log('    GET  /api/bigdata/movers');
+  console.log('    GET  /api/bigdata/sectors');
+  console.log('    POST /api/bigdata/key');
+  console.log('');
   console.log('  Alpaca Trading:');
   console.log('    Mode: ' + (ALPACA_PAPER_MODE ? 'PAPER' : 'LIVE'));
   console.log('    Configured: ' + (ALPACA_API_KEY ? 'Yes' : 'No (simulation only)'));
@@ -842,5 +1314,17 @@ app.listen(PORT, function () {
   console.log('    POST /api/alpaca/order');
   console.log('    GET  /api/alpaca/orders');
   console.log('    GET  /api/health');
+  console.log('');
+  console.log('  Supabase Auth:');
+  console.log('    Configured: ' + (SUPABASE_URL ? 'Yes' : 'No (guest mode only)'));
+  console.log('    GET  /api/config');
+  console.log('    GET  /api/auth/profile');
+  console.log('    POST /api/auth/profile');
+  console.log('    GET  /api/user/watchlists');
+  console.log('    POST /api/user/watchlists');
+  console.log('    GET  /api/user/settings');
+  console.log('    POST /api/user/settings');
+  console.log('    GET  /api/user/api-keys');
+  console.log('    POST /api/user/api-keys');
   console.log('');
 });

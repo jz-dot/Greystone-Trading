@@ -1227,43 +1227,50 @@ let flowSortColumn = null;
 let flowSortDirection = 'desc';
 let flowDisplayedEntries = []; // tracked for sorting
 
+// Track whether BigData is powering the flow view
+let flowUsingBigData = false;
+let bigdataFlowPollId = null;
+
 function populateFlowFeed() {
   const feed = document.getElementById('flowFeed');
   if (!feed) return;
 
-  // Seed the engine with historical data
-  FlowEngine.seedHistory(40);
+  // Check BigData availability and decide data source
+  initFlowDataSource().then(function () {
+    if (!flowUsingBigData) {
+      // Fall back to simulated data
+      FlowEngine.seedHistory(40);
 
-  // Populate ticker filter dropdown
-  const tickerSelect = document.getElementById('flowFilterTicker');
-  if (tickerSelect) {
-    FlowEngine.getTickerList().forEach(t => {
-      const opt = document.createElement('option');
-      opt.value = t;
-      opt.textContent = t;
-      tickerSelect.appendChild(opt);
-    });
-  }
+      const tickerSelect = document.getElementById('flowFilterTicker');
+      if (tickerSelect) {
+        FlowEngine.getTickerList().forEach(t => {
+          const opt = document.createElement('option');
+          opt.value = t;
+          opt.textContent = t;
+          tickerSelect.appendChild(opt);
+        });
+      }
 
-  // Render seeded history
-  const history = FlowEngine.flowHistory.slice(-30).reverse();
-  history.forEach(entry => {
-    const row = createFlowRow(entry);
-    feed.appendChild(row);
-    flowDisplayedEntries.push(entry);
+      const history = FlowEngine.flowHistory.slice(-30).reverse();
+      history.forEach(entry => {
+        const row = createFlowRow(entry);
+        feed.appendChild(row);
+        flowDisplayedEntries.push(entry);
+      });
+    }
+
+    // Initial dark pool render
+    renderDarkPoolFeed();
+
+    // Initial hottest contracts
+    renderHottestContracts();
+
+    // Initial stats
+    updateFlowSummaryStats();
+
+    // Initial net flow chart
+    drawNetFlowChart();
   });
-
-  // Initial dark pool render
-  renderDarkPoolFeed();
-
-  // Initial hottest contracts
-  renderHottestContracts();
-
-  // Initial stats
-  updateFlowSummaryStats();
-
-  // Initial net flow chart
-  drawNetFlowChart();
 
   // Set up filter listeners
   setupFlowFilters();
@@ -1284,6 +1291,173 @@ function populateFlowFeed() {
       tooltip.classList.remove('active');
     }
   });
+}
+
+async function initFlowDataSource() {
+  const badge = document.getElementById('flowDataBadge');
+
+  if (typeof BigDataService !== 'undefined') {
+    const available = await BigDataService.checkAvailability();
+    if (available) {
+      flowUsingBigData = true;
+      if (badge) {
+        badge.textContent = 'LIVE';
+        badge.classList.add('live');
+        badge.classList.remove('simulated');
+      }
+      // Load initial BigData flow for all tickers
+      await loadBigDataFlow();
+      // Show sentiment widget
+      loadFlowSentiment();
+      return;
+    }
+  }
+
+  // Simulated mode
+  flowUsingBigData = false;
+  if (badge) {
+    badge.textContent = 'SIMULATED';
+    badge.classList.add('simulated');
+    badge.classList.remove('live');
+  }
+}
+
+async function loadBigDataFlow() {
+  if (typeof BigDataService === 'undefined' || !BigDataService.isAvailable()) return;
+
+  const feed = document.getElementById('flowFeed');
+  if (!feed) return;
+
+  // Fetch flow for a default set of tickers
+  const tickers = ['SPY', 'QQQ', 'AAPL', 'NVDA', 'TSLA', 'MSFT', 'META', 'AMD', 'AMZN', 'GOOGL'];
+
+  try {
+    const results = await Promise.all(
+      tickers.map(function (t) { return BigDataService.getOptionsFlow(t).catch(function () { return null; }); })
+    );
+
+    const allEntries = [];
+    results.forEach(function (data) {
+      if (data && data.trades && Array.isArray(data.trades)) {
+        data.trades.forEach(function (trade) {
+          allEntries.push(BigDataService.normalizeFlowEntry(trade));
+        });
+      } else if (data && Array.isArray(data)) {
+        data.forEach(function (trade) {
+          allEntries.push(BigDataService.normalizeFlowEntry(trade));
+        });
+      }
+    });
+
+    // Sort by time descending and take latest 30
+    allEntries.sort(function (a, b) { return b.time.localeCompare(a.time); });
+    const toShow = allEntries.slice(0, 30);
+
+    toShow.forEach(function (entry) {
+      const row = createFlowRow(entry);
+      feed.appendChild(row);
+      flowDisplayedEntries.push(entry);
+    });
+
+    // Populate ticker filter from real data
+    const tickerSelect = document.getElementById('flowFilterTicker');
+    if (tickerSelect) {
+      const uniqueTickers = [...new Set(allEntries.map(function (e) { return e.ticker; }))].sort();
+      uniqueTickers.forEach(function (t) {
+        const opt = document.createElement('option');
+        opt.value = t;
+        opt.textContent = t;
+        tickerSelect.appendChild(opt);
+      });
+    }
+  } catch (err) {
+    console.error('[BigData] Flow load error:', err);
+  }
+}
+
+async function loadFlowSentiment() {
+  if (typeof BigDataService === 'undefined' || !BigDataService.isAvailable()) return;
+
+  const widget = document.getElementById('flowSentimentWidget');
+  if (!widget) return;
+
+  try {
+    const data = await BigDataService.getSentiment('SPY');
+    if (data && (data.score !== undefined || data.overall !== undefined)) {
+      const score = data.score !== undefined ? data.score : data.overall;
+      const pct = typeof score === 'number' ? Math.round(score * 100) : parseInt(score);
+
+      const scoreEl = document.getElementById('flowSentimentScore');
+      const barEl = document.getElementById('flowSentimentBar');
+
+      if (scoreEl) {
+        scoreEl.textContent = pct + '/100';
+        if (pct >= 60) scoreEl.style.color = 'var(--profit)';
+        else if (pct <= 40) scoreEl.style.color = 'var(--loss)';
+        else scoreEl.style.color = 'var(--warning)';
+      }
+      if (barEl) {
+        barEl.style.width = pct + '%';
+        if (pct >= 60) barEl.style.background = 'var(--profit)';
+        else if (pct <= 40) barEl.style.background = 'var(--loss)';
+        else barEl.style.background = 'var(--warning)';
+      }
+      widget.style.display = 'flex';
+    }
+  } catch (err) {
+    // Silently fail - sentiment is supplementary
+  }
+}
+
+async function pollBigDataFlow() {
+  if (!flowUsingBigData || flowLivePaused) return;
+  if (typeof BigDataService === 'undefined' || !BigDataService.isAvailable()) return;
+
+  const feed = document.getElementById('flowFeed');
+  if (!feed) return;
+
+  // Poll a few active tickers
+  const pollTickers = ['SPY', 'QQQ', 'NVDA', 'AAPL', 'TSLA'];
+  const randomTicker = pollTickers[Math.floor(Math.random() * pollTickers.length)];
+
+  try {
+    const data = await BigDataService.getOptionsFlow(randomTicker);
+    if (!data) return;
+
+    const trades = data.trades || data;
+    if (!Array.isArray(trades) || trades.length === 0) return;
+
+    // Take the most recent trade
+    const latest = trades[0];
+    const entry = BigDataService.normalizeFlowEntry(latest);
+
+    const row = createFlowRow(entry);
+    row.classList.add('flow-row-enter');
+
+    const headerRow = feed.querySelector('#flowHeaderRow');
+    if (headerRow && headerRow.nextSibling) {
+      feed.insertBefore(row, headerRow.nextSibling);
+    } else {
+      feed.appendChild(row);
+    }
+
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () { row.classList.add('flow-row-enter-active'); });
+    });
+    setTimeout(function () { row.classList.remove('flow-row-enter', 'flow-row-enter-active'); }, 600);
+
+    flowDisplayedEntries.unshift(entry);
+
+    const rows = feed.querySelectorAll('.flow-row');
+    if (rows.length > 50) {
+      rows[rows.length - 1].remove();
+      flowDisplayedEntries.pop();
+    }
+
+    updateFlowSummaryStats();
+  } catch (err) {
+    // Silently fail on poll
+  }
 }
 
 function createFlowRow(entry) {
@@ -1862,7 +2036,15 @@ async function sendGsChat() {
   if (sendBtn) sendBtn.disabled = true;
 
   try {
-    const context = typeof GreySankore !== 'undefined' ? GreySankore.gatherContext() : {};
+    // Use enriched context (with BigData sentiment/insider/institutional) when available
+    let context = {};
+    if (typeof GreySankore !== 'undefined') {
+      if (typeof GreySankore.gatherEnrichedContext === 'function') {
+        context = await GreySankore.gatherEnrichedContext();
+      } else {
+        context = GreySankore.gatherContext();
+      }
+    }
     const result = await GreySankore.chat(msg, context);
 
     // Remove thinking indicator
@@ -2279,15 +2461,26 @@ function renderSmartMoneyAlerts() {
 
 // Start/stop flow intervals
 function startFlowIntervals() {
-  if (flowIntervalId) clearInterval(flowIntervalId);
-  if (darkPoolIntervalId) clearInterval(darkPoolIntervalId);
-  flowIntervalId = setInterval(simulateLiveFlow, 1800);
-  darkPoolIntervalId = setInterval(simulateDarkPool, 6000);
+  if (flowUsingBigData) {
+    // Use BigData polling instead of simulation
+    if (bigdataFlowPollId) clearInterval(bigdataFlowPollId);
+    bigdataFlowPollId = setInterval(pollBigDataFlow, 5000);
+    // Still run dark pool from BigData or simulation
+    if (darkPoolIntervalId) clearInterval(darkPoolIntervalId);
+    darkPoolIntervalId = setInterval(simulateDarkPool, 6000);
+  } else {
+    // Simulated mode
+    if (flowIntervalId) clearInterval(flowIntervalId);
+    if (darkPoolIntervalId) clearInterval(darkPoolIntervalId);
+    flowIntervalId = setInterval(simulateLiveFlow, 1800);
+    darkPoolIntervalId = setInterval(simulateDarkPool, 6000);
+  }
 }
 
 function stopFlowIntervals() {
   if (flowIntervalId) { clearInterval(flowIntervalId); flowIntervalId = null; }
   if (darkPoolIntervalId) { clearInterval(darkPoolIntervalId); darkPoolIntervalId = null; }
+  if (bigdataFlowPollId) { clearInterval(bigdataFlowPollId); bigdataFlowPollId = null; }
 }
 
 // Start intervals on load
@@ -2548,6 +2741,190 @@ function drawChartWithType(candles, chartType) {
   ctx.fillText(lastClose.toFixed(2), canvas.width - padding.right + 4, priceY + 3);
 }
 
+// ---- CROSSHAIR OVERLAY ----
+let crosshairCanvas = null;
+let crosshairTooltip = null;
+let crosshairInitialized = false;
+
+function setupCrosshair() {
+  const chartArea = document.getElementById('mainChart');
+  const mainCanvas = document.getElementById('chartCanvas');
+  if (!chartArea || !mainCanvas) return;
+
+  // Create overlay canvas if it doesn't exist
+  if (!crosshairCanvas) {
+    crosshairCanvas = document.createElement('canvas');
+    crosshairCanvas.id = 'chartCrosshairCanvas';
+    chartArea.appendChild(crosshairCanvas);
+  }
+
+  // Create tooltip if it doesn't exist
+  if (!crosshairTooltip) {
+    crosshairTooltip = document.createElement('div');
+    crosshairTooltip.className = 'crosshair-tooltip';
+    chartArea.appendChild(crosshairTooltip);
+  }
+
+  if (crosshairInitialized) return;
+  crosshairInitialized = true;
+
+  // Mouse events go on the chart area (since overlay canvas has pointer-events: none)
+  chartArea.addEventListener('mousemove', onCrosshairMove);
+  chartArea.addEventListener('mouseleave', onCrosshairLeave);
+}
+
+function syncCrosshairCanvasSize() {
+  if (!crosshairCanvas) return;
+  const mainCanvas = document.getElementById('chartCanvas');
+  if (!mainCanvas) return;
+  crosshairCanvas.width = mainCanvas.width;
+  crosshairCanvas.height = mainCanvas.height;
+}
+
+function onCrosshairMove(e) {
+  if (!currentChartCandles || currentChartCandles.length === 0) return;
+  if (!crosshairCanvas) return;
+
+  const mainCanvas = document.getElementById('chartCanvas');
+  if (!mainCanvas) return;
+
+  syncCrosshairCanvasSize();
+
+  const rect = mainCanvas.getBoundingClientRect();
+  // Scale mouse position to canvas coordinates
+  const scaleX = mainCanvas.width / rect.width;
+  const scaleY = mainCanvas.height / rect.height;
+  const mouseX = (e.clientX - rect.left) * scaleX;
+  const mouseY = (e.clientY - rect.top) * scaleY;
+
+  const padding = { top: 50, right: 60, bottom: 10, left: 10 };
+  const chartW = mainCanvas.width - padding.left - padding.right;
+  const chartH = mainCanvas.height - padding.top - padding.bottom;
+
+  // Only show crosshair within chart area
+  if (mouseX < padding.left || mouseX > mainCanvas.width - padding.right ||
+      mouseY < padding.top || mouseY > padding.top + chartH) {
+    clearCrosshair();
+    return;
+  }
+
+  const candles = currentChartCandles;
+  const barWidth = chartW / candles.length;
+
+  // Find nearest candle by X
+  const candleIdx = Math.floor((mouseX - padding.left) / barWidth);
+  const clampedIdx = Math.max(0, Math.min(candles.length - 1, candleIdx));
+  const candle = candles[clampedIdx];
+
+  // Compute price range (same logic as drawChartWithType)
+  let min = Infinity, max = -Infinity;
+  candles.forEach(c => { min = Math.min(min, c.low); max = Math.max(max, c.high); });
+  const range = max - min;
+  min -= range * 0.05;
+  max += range * 0.05;
+
+  // Price at mouse Y
+  const priceAtMouse = max - ((mouseY - padding.top) / chartH) * (max - min);
+
+  // Draw crosshair on overlay canvas
+  const ctx = crosshairCanvas.getContext('2d');
+  ctx.clearRect(0, 0, crosshairCanvas.width, crosshairCanvas.height);
+
+  ctx.strokeStyle = '#5C5C6E';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 3]);
+
+  // Vertical line
+  const candleCenterX = padding.left + clampedIdx * barWidth + barWidth / 2;
+  ctx.beginPath();
+  ctx.moveTo(candleCenterX, padding.top);
+  ctx.lineTo(candleCenterX, padding.top + chartH);
+  ctx.stroke();
+
+  // Horizontal line
+  ctx.beginPath();
+  ctx.moveTo(padding.left, mouseY);
+  ctx.lineTo(mainCanvas.width - padding.right, mouseY);
+  ctx.stroke();
+
+  ctx.setLineDash([]);
+
+  // Price label on Y-axis (right edge)
+  ctx.fillStyle = '#2A2A38';
+  ctx.fillRect(mainCanvas.width - padding.right, mouseY - 9, 56, 18);
+  ctx.fillStyle = '#A0A0B8';
+  ctx.font = '10px JetBrains Mono';
+  ctx.textAlign = 'left';
+  ctx.fillText(priceAtMouse.toFixed(2), mainCanvas.width - padding.right + 4, mouseY + 3);
+
+  // Time/index label on X-axis (bottom)
+  let timeLabel = '' + (clampedIdx + 1);
+  if (candle.time) {
+    const d = new Date(candle.time * 1000);
+    const hours = d.getHours().toString().padStart(2, '0');
+    const mins = d.getMinutes().toString().padStart(2, '0');
+    timeLabel = hours + ':' + mins;
+    // If daily+ timeframe, show date instead
+    if (currentTimeframe === '1D' || currentTimeframe === '1W') {
+      const mon = (d.getMonth() + 1).toString().padStart(2, '0');
+      const day = d.getDate().toString().padStart(2, '0');
+      timeLabel = mon + '/' + day;
+    }
+  }
+  const timeLabelWidth = ctx.measureText(timeLabel).width + 8;
+  ctx.fillStyle = '#2A2A38';
+  ctx.fillRect(candleCenterX - timeLabelWidth / 2, padding.top + chartH, timeLabelWidth, 16);
+  ctx.fillStyle = '#A0A0B8';
+  ctx.textAlign = 'center';
+  ctx.fillText(timeLabel, candleCenterX, padding.top + chartH + 11);
+
+  // Update the overlay data to show hovered candle
+  updateChartOverlay([candle]);
+
+  // Position and show tooltip
+  if (crosshairTooltip) {
+    const vol = candle.volume || 0;
+    const volStr = vol >= 1e6 ? (vol / 1e6).toFixed(1) + 'M' : vol >= 1e3 ? (vol / 1e3).toFixed(1) + 'K' : vol.toString();
+
+    crosshairTooltip.innerHTML =
+      '<div class="ct-row"><span><span class="ct-label">O:</span> <span class="ct-val">' + candle.open.toFixed(2) + '</span></span>' +
+      '<span><span class="ct-label">H:</span> <span class="ct-val">' + candle.high.toFixed(2) + '</span></span></div>' +
+      '<div class="ct-row"><span><span class="ct-label">L:</span> <span class="ct-val">' + candle.low.toFixed(2) + '</span></span>' +
+      '<span><span class="ct-label">C:</span> <span class="ct-val">' + candle.close.toFixed(2) + '</span></span></div>' +
+      '<div class="ct-row ct-vol"><span><span class="ct-label">V:</span> <span class="ct-val">' + volStr + '</span></span></div>';
+
+    // Position tooltip: 15px right and 15px above cursor, in CSS pixels (not canvas coords)
+    const tooltipX = (e.clientX - rect.left) + 15;
+    const tooltipY = (e.clientY - rect.top) - 15;
+
+    // Clamp to stay within the chart area
+    const maxX = rect.width - crosshairTooltip.offsetWidth - 5;
+    const minY = 5;
+
+    crosshairTooltip.style.left = Math.min(tooltipX, maxX) + 'px';
+    crosshairTooltip.style.top = Math.max(tooltipY - crosshairTooltip.offsetHeight, minY) + 'px';
+    crosshairTooltip.style.display = 'block';
+  }
+}
+
+function onCrosshairLeave() {
+  clearCrosshair();
+  // Revert overlay to last candle
+  if (currentChartCandles && currentChartCandles.length > 0) {
+    updateChartOverlay(currentChartCandles);
+  }
+}
+
+function clearCrosshair() {
+  if (crosshairCanvas) {
+    const ctx = crosshairCanvas.getContext('2d');
+    ctx.clearRect(0, 0, crosshairCanvas.width, crosshairCanvas.height);
+  }
+  if (crosshairTooltip) {
+    crosshairTooltip.style.display = 'none';
+  }
+}
+
 function drawVolumeChartFromCandles(candles) {
   const canvas = document.getElementById('volumeCanvas');
   if (!canvas || !candles || candles.length === 0) return;
@@ -2725,7 +3102,63 @@ function setupHeatmapPeriodButtons() {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.hp-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+
+      // If BigData is available, fetch real sector data for the selected period
+      const period = btn.textContent.trim() || btn.dataset.period || '1D';
+      fetchBigDataSectors(period);
     });
+  });
+}
+
+async function fetchBigDataSectors(period) {
+  if (typeof BigDataService === 'undefined' || !BigDataService.isAvailable()) return;
+
+  try {
+    const data = await BigDataService.getSectors(period);
+    if (!data) return;
+
+    const sectors = BigDataService.normalizeSectorData(data);
+    if (!sectors || sectors.length === 0) return;
+
+    updateHeatmapWithRealData(sectors);
+  } catch (err) {
+    console.error('[BigData] Sector heatmap error:', err);
+  }
+}
+
+function updateHeatmapWithRealData(sectors) {
+  // Find all heatmap cells and update them
+  const heatmapCells = document.querySelectorAll('.hm-cell');
+  if (!heatmapCells || heatmapCells.length === 0) return;
+
+  // Map sector names to cells
+  const sectorMap = {};
+  sectors.forEach(function (s) { sectorMap[s.name.toUpperCase()] = s; });
+
+  heatmapCells.forEach(function (cell) {
+    const nameEl = cell.querySelector('.hm-name');
+    const changeEl = cell.querySelector('.hm-change');
+    if (!nameEl || !changeEl) return;
+
+    const cellName = nameEl.textContent.trim().toUpperCase();
+    // Try to match sector
+    const match = sectorMap[cellName] ||
+      Object.values(sectorMap).find(function (s) {
+        return cellName.includes(s.name.toUpperCase()) || s.name.toUpperCase().includes(cellName);
+      });
+
+    if (match) {
+      const change = match.change;
+      const isUp = change >= 0;
+      changeEl.textContent = (isUp ? '+' : '') + change.toFixed(2) + '%';
+
+      // Update cell color based on performance
+      cell.classList.remove('profit', 'loss');
+      cell.classList.add(isUp ? 'profit' : 'loss');
+      cell.style.background = isUp
+        ? 'rgba(16, 185, 129, ' + Math.min(0.3, Math.abs(change) * 0.05) + ')'
+        : 'rgba(239, 68, 68, ' + Math.min(0.3, Math.abs(change) * 0.05) + ')';
+    }
   });
 }
 
@@ -2954,6 +3387,9 @@ function init() {
   setupHeatmapPeriodButtons();
   setupTickerSearch();
 
+  // Set up crosshair overlay
+  setupCrosshair();
+
   // Draw charts with real data (fallback to generated)
   fetchAndDrawChart(currentChartSymbol, currentTimeframe);
   drawSparklinesReal();
@@ -2970,6 +3406,10 @@ function init() {
   if (typeof MarketData !== 'undefined') {
     MarketData.init();
   }
+
+  // Initialize BigData.com service
+  initBigDataService();
+  initBigDataSettings();
 
   // Refresh AI insight cards on load (async, non-blocking)
   setTimeout(() => refreshInsightCards(), 1500);
@@ -3890,6 +4330,139 @@ document.querySelectorAll('.accent-swatch').forEach(function(swatch) {
     showToast('Accent color updated', 'info');
   });
 });
+
+// ---- BIGDATA.COM SERVICE INITIALIZATION ----
+
+async function initBigDataService() {
+  if (typeof BigDataService === 'undefined') return;
+
+  try {
+    const available = await BigDataService.init();
+    if (available) {
+      console.log('[BigData] Premium data service connected');
+      // If flow view already loaded, switch to live data
+      if (flowUsingBigData) {
+        stopFlowIntervals();
+        startFlowIntervals();
+      }
+      // Load real sector data for heatmap
+      fetchBigDataSectors('1D');
+    } else {
+      console.log('[BigData] Not configured - using simulated data');
+    }
+  } catch (err) {
+    console.log('[BigData] Init error:', err.message);
+  }
+}
+
+function initBigDataSettings() {
+  var input = document.getElementById('bigdataApiKeyInput');
+  var saveBtn = document.getElementById('saveBigdataKeyBtn');
+  var statusEl = document.getElementById('bigdataKeyStatus');
+  var indicatorEl = document.getElementById('bigdataKeyStatusIndicator');
+
+  if (!input || !saveBtn) return;
+
+  // Load saved key display
+  var savedKey = localStorage.getItem('gs_bigdata_key');
+  if (savedKey) {
+    input.placeholder = savedKey.slice(0, 10) + '...' + savedKey.slice(-4);
+  }
+
+  // Save button handler
+  saveBtn.addEventListener('click', async function () {
+    var key = input.value.trim();
+    if (!key) return;
+
+    saveBtn.textContent = 'Saving...';
+    saveBtn.disabled = true;
+
+    if (typeof BigDataService !== 'undefined') {
+      var result = await BigDataService.saveApiKey(key);
+
+      if (result.success) {
+        input.value = '';
+        input.placeholder = key.slice(0, 10) + '...' + key.slice(-4);
+        saveBtn.textContent = 'Saved';
+        showToast('BigData.com API key saved', 'success');
+
+        // Test connection and update status
+        var test = await BigDataService.testConnection();
+        updateBigDataStatus(statusEl, indicatorEl, test);
+
+        // Re-initialize flow with live data
+        await initBigDataService();
+        if (BigDataService.isAvailable()) {
+          // Reinit flow view with live data
+          stopFlowIntervals();
+          await initFlowDataSource();
+          startFlowIntervals();
+        }
+      } else {
+        saveBtn.textContent = 'Error';
+        if (statusEl) {
+          statusEl.textContent = result.error || 'Failed to save key';
+          statusEl.style.color = 'var(--loss)';
+        }
+      }
+    } else {
+      saveBtn.textContent = 'Error';
+      if (statusEl) {
+        statusEl.textContent = 'BigData service not loaded';
+        statusEl.style.color = 'var(--loss)';
+      }
+    }
+
+    setTimeout(function () {
+      saveBtn.textContent = 'Save';
+      saveBtn.disabled = false;
+    }, 2000);
+  });
+
+  // Check initial status
+  checkBigDataStatus(statusEl, indicatorEl);
+}
+
+async function checkBigDataStatus(statusEl, indicatorEl) {
+  if (typeof BigDataService === 'undefined') {
+    updateBigDataStatus(statusEl, indicatorEl, { configured: false, connected: false, message: 'Service not loaded' });
+    return;
+  }
+
+  try {
+    var test = await BigDataService.testConnection();
+    updateBigDataStatus(statusEl, indicatorEl, test);
+  } catch (e) {
+    updateBigDataStatus(statusEl, indicatorEl, { configured: false, connected: false, message: e.message });
+  }
+}
+
+function updateBigDataStatus(statusEl, indicatorEl, status) {
+  if (!statusEl) return;
+
+  if (status.connected) {
+    statusEl.textContent = 'Connected - ' + (status.message || 'BigData.com API active');
+    statusEl.style.color = 'var(--profit)';
+    if (indicatorEl) {
+      indicatorEl.className = 'api-status-indicator connected';
+      indicatorEl.textContent = 'LIVE';
+    }
+  } else if (status.configured) {
+    statusEl.textContent = status.message || 'Configured but not connected';
+    statusEl.style.color = 'var(--warning)';
+    if (indicatorEl) {
+      indicatorEl.className = 'api-status-indicator disconnected';
+      indicatorEl.textContent = 'ERROR';
+    }
+  } else {
+    statusEl.textContent = status.message || 'No API key configured. Platform uses simulated data.';
+    statusEl.style.color = 'var(--text-tertiary)';
+    if (indicatorEl) {
+      indicatorEl.className = 'api-status-indicator disconnected';
+      indicatorEl.textContent = 'OFF';
+    }
+  }
+}
 
 /* ============================================
    RISK VIEW NAV HOOK + REFRESH

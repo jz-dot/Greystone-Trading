@@ -102,6 +102,7 @@ const GreySankore = (function () {
   };
 
   // ---- Gather current market context from the DOM ----
+  // Returns a promise when BigData enrichment is available, plain object otherwise
   function gatherContext() {
     const context = {};
 
@@ -115,6 +116,13 @@ const GreySankore = (function () {
     const tickerSearch = document.getElementById('tickerSearch');
     if (tickerSearch && tickerSearch.value.trim()) {
       context.selectedTicker = tickerSearch.value.trim().toUpperCase();
+    }
+
+    // Active watchlist ticker
+    const activeWl = document.querySelector('.wl-row.wl-active');
+    if (activeWl && !context.selectedTicker) {
+      const tickerEl = activeWl.querySelector('.wl-ticker');
+      if (tickerEl) context.selectedTicker = tickerEl.textContent.trim().toUpperCase();
     }
 
     // Watchlist prices
@@ -139,6 +147,32 @@ const GreySankore = (function () {
       SPY: '584.23', QQQ: '497.81', VIX: '18.73',
       DIA: '421.56', IWM: '207.43', GLD: '214.87'
     };
+
+    return context;
+  }
+
+  // ---- Async context enrichment with BigData ----
+  async function gatherEnrichedContext() {
+    const context = gatherContext();
+
+    // Enrich with BigData sentiment, insider, and institutional data
+    if (typeof BigDataService !== 'undefined' && BigDataService.isAvailable() && context.selectedTicker) {
+      try {
+        const enrichment = await BigDataService.gatherEnrichmentContext(context.selectedTicker);
+        if (enrichment.sentiment) {
+          context.bigdataSentiment = enrichment.sentiment;
+        }
+        if (enrichment.insiderActivity) {
+          context.bigdataInsider = enrichment.insiderActivity;
+        }
+        if (enrichment.institutionalOwnership) {
+          context.bigdataInstitutional = enrichment.institutionalOwnership;
+        }
+        context.bigdataAvailable = true;
+      } catch (e) {
+        // Enrichment is optional - continue without it
+      }
+    }
 
     return context;
   }
@@ -473,6 +507,7 @@ Respond in valid JSON array format only, no markdown:
     validateApiKey,
     restoreApiKey,
     gatherContext,
+    gatherEnrichedContext,
     checkApiStatus,
     clearHistory,
     getHistory,

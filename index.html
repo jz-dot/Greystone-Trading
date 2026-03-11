@@ -962,27 +962,32 @@
           <span class="view-subtitle">Real-time institutional activity</span>
         </div>
         <div class="flow-filters">
-          <select class="flow-select">
-            <option>All Tickers</option>
-            <option>Watchlist Only</option>
-            <option>S&P 500</option>
+          <select class="flow-select" id="flowFilterTicker">
+            <option value="all">All Tickers</option>
           </select>
-          <select class="flow-select">
-            <option>All Types</option>
-            <option>Calls Only</option>
-            <option>Puts Only</option>
-            <option>Spreads</option>
+          <select class="flow-select" id="flowFilterType">
+            <option value="all">All Types</option>
+            <option value="calls">Calls Only</option>
+            <option value="puts">Puts Only</option>
           </select>
-          <select class="flow-select">
-            <option>Min $100K</option>
-            <option>Min $250K</option>
-            <option>Min $500K</option>
-            <option>Min $1M</option>
+          <select class="flow-select" id="flowFilterPremium">
+            <option value="0">No Minimum</option>
+            <option value="50000">Min $50K</option>
+            <option value="100000">Min $100K</option>
+            <option value="250000">Min $250K</option>
+            <option value="500000">Min $500K</option>
+            <option value="1000000">Min $1M</option>
+          </select>
+          <select class="flow-select" id="flowFilterSignal">
+            <option value="all">All Signals</option>
+            <option value="sweep">Sweeps</option>
+            <option value="block">Blocks</option>
+            <option value="unusual">Unusual</option>
           </select>
           <div class="flow-toggle">
             <label class="toggle-label">
-              <input type="checkbox" checked> Live Feed
-              <span class="toggle-indicator live"></span>
+              <input type="checkbox" id="flowLiveToggle" checked> Live Feed
+              <span class="toggle-indicator live" id="flowLiveIndicator"></span>
             </label>
           </div>
         </div>
@@ -992,40 +997,44 @@
       <div class="flow-summary-row">
         <div class="flow-stat">
           <span class="flow-stat-label">Net Premium</span>
-          <span class="flow-stat-value profit">+$842M</span>
+          <span class="flow-stat-value profit" id="flowStatNet">+$0</span>
         </div>
         <div class="flow-stat">
           <span class="flow-stat-label">Call Premium</span>
-          <span class="flow-stat-value">$1.24B</span>
+          <span class="flow-stat-value" id="flowStatCalls">$0</span>
         </div>
         <div class="flow-stat">
           <span class="flow-stat-label">Put Premium</span>
-          <span class="flow-stat-value">$398M</span>
+          <span class="flow-stat-value" id="flowStatPuts">$0</span>
         </div>
         <div class="flow-stat">
           <span class="flow-stat-label">Unusual Trades</span>
-          <span class="flow-stat-value highlight">247</span>
+          <span class="flow-stat-value highlight" id="flowStatUnusual">0</span>
         </div>
         <div class="flow-stat">
           <span class="flow-stat-label">Dark Pool %</span>
-          <span class="flow-stat-value">38.4%</span>
+          <span class="flow-stat-value" id="flowStatDP">0%</span>
+        </div>
+        <div class="flow-stat">
+          <span class="flow-stat-label">C/P Ratio</span>
+          <span class="flow-stat-value" id="flowStatPCR">-</span>
         </div>
       </div>
 
       <!-- Flow Feed -->
       <div class="panel flow-feed-panel">
         <div class="flow-feed" id="flowFeed">
-          <div class="flow-header-row">
-            <span>Time</span>
-            <span>Ticker</span>
-            <span>Type</span>
-            <span>Strike</span>
+          <div class="flow-header-row" id="flowHeaderRow">
+            <span class="flow-sortable" data-sort="time">Time</span>
+            <span class="flow-sortable" data-sort="ticker">Ticker</span>
+            <span class="flow-sortable" data-sort="type">Type</span>
+            <span class="flow-sortable" data-sort="strike">Strike</span>
             <span>Exp</span>
             <span>Side</span>
-            <span>Size</span>
-            <span>Premium</span>
+            <span class="flow-sortable" data-sort="size">Size</span>
+            <span class="flow-sortable" data-sort="premium">Premium</span>
             <span>Spot</span>
-            <span>IV</span>
+            <span class="flow-sortable" data-sort="iv">IV</span>
             <span>Signal</span>
           </div>
           <!-- Populated by JS -->
@@ -1082,47 +1091,28 @@
             <span class="panel-badge">Delayed 15s</span>
           </div>
           <div class="dark-pool-feed" id="darkPoolFeed">
-            <div class="dp-row large">
-              <span class="dp-time">14:32:18</span>
-              <span class="dp-ticker">NVDA</span>
-              <span class="dp-size">180,000</span>
-              <span class="dp-price">$928.50</span>
-              <span class="dp-value">$167.1M</span>
-              <span class="dp-venue">FADF</span>
+            <div class="dp-header-row">
+              <span>Time</span>
+              <span>Ticker</span>
+              <span>Size</span>
+              <span>Price</span>
+              <span>Value</span>
+              <span>% ADV</span>
+              <span>Venue</span>
             </div>
-            <div class="dp-row">
-              <span class="dp-time">14:31:42</span>
-              <span class="dp-ticker">AAPL</span>
-              <span class="dp-size">45,000</span>
-              <span class="dp-price">$227.12</span>
-              <span class="dp-value">$10.2M</span>
-              <span class="dp-venue">UBSS</span>
-            </div>
-            <div class="dp-row large">
-              <span class="dp-time">14:30:55</span>
-              <span class="dp-ticker">MSFT</span>
-              <span class="dp-size">92,000</span>
-              <span class="dp-price">$418.90</span>
-              <span class="dp-value">$38.5M</span>
-              <span class="dp-venue">CODA</span>
-            </div>
-            <div class="dp-row">
-              <span class="dp-time">14:29:31</span>
-              <span class="dp-ticker">META</span>
-              <span class="dp-size">28,000</span>
-              <span class="dp-price">$512.34</span>
-              <span class="dp-value">$14.3M</span>
-              <span class="dp-venue">JNST</span>
-            </div>
-            <div class="dp-row">
-              <span class="dp-time">14:28:17</span>
-              <span class="dp-ticker">AMZN</span>
-              <span class="dp-size">62,000</span>
-              <span class="dp-price">$186.21</span>
-              <span class="dp-value">$11.5M</span>
-              <span class="dp-venue">FADF</span>
-            </div>
+            <!-- Populated by JS -->
           </div>
+        </div>
+      </div>
+
+      <!-- Net Premium Flow Chart -->
+      <div class="panel flow-chart-panel">
+        <div class="panel-header">
+          <h3 class="panel-title">Net Premium Flow</h3>
+          <span class="panel-badge" id="netFlowLabel">Cumulative</span>
+        </div>
+        <div class="net-flow-chart-container">
+          <canvas id="netFlowCanvas"></canvas>
         </div>
       </div>
     </div>
@@ -1611,7 +1601,18 @@
   </div>
 </div>
 
+<!-- Flow Detail Tooltip -->
+<div class="flow-detail-tooltip" id="flowDetailTooltip">
+  <div class="fdt-header">
+    <span class="fdt-contract" id="fdtContract">-</span>
+    <span class="fdt-close" id="fdtClose">&times;</span>
+  </div>
+  <div class="fdt-body" id="fdtBody"></div>
+</div>
+
 <script src="services/grey-sankore.js"></script>
+<script src="services/flow-engine.js"></script>
+<script src="services/flow-analytics.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

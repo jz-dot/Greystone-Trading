@@ -550,25 +550,19 @@
       <div class="view-header">
         <div class="view-title">
           <h1>Options Chain</h1>
-          <span class="view-subtitle">AAPL - Apple Inc.</span>
+          <span class="view-subtitle" id="optionsSubtitle">AAPL - Apple Inc.</span>
         </div>
         <div class="options-controls">
           <div class="option-ticker-select">
-            <input type="text" value="AAPL" class="opt-ticker-input" placeholder="Ticker">
+            <input type="text" value="AAPL" class="opt-ticker-input" id="optTickerInput" placeholder="Ticker">
           </div>
-          <select class="opt-expiry-select">
-            <option>Mar 14, 2026 (4d)</option>
-            <option>Mar 21, 2026 (11d)</option>
-            <option selected>Mar 28, 2026 (18d)</option>
-            <option>Apr 4, 2026 (25d)</option>
-            <option>Apr 18, 2026 (39d)</option>
-            <option>May 16, 2026 (67d)</option>
-            <option>Jun 20, 2026 (102d)</option>
+          <select class="opt-expiry-select" id="optExpirySelect">
+            <!-- Populated dynamically -->
           </select>
           <div class="opt-view-toggle">
-            <button class="ovt-btn active">Chain</button>
-            <button class="ovt-btn">Strategy</button>
-            <button class="ovt-btn">Vol Surface</button>
+            <button class="ovt-btn active" data-optview="chain">Chain</button>
+            <button class="ovt-btn" data-optview="strategy">Strategy</button>
+            <button class="ovt-btn" data-optview="volsurface">Vol Surface</button>
           </div>
         </div>
       </div>
@@ -577,31 +571,31 @@
       <div class="options-stats-row">
         <div class="opt-stat">
           <span class="opt-stat-label">IV Rank</span>
-          <span class="opt-stat-value">42.3%</span>
+          <span class="opt-stat-value" id="statIVRank">42.3%</span>
         </div>
         <div class="opt-stat">
           <span class="opt-stat-label">IV Percentile</span>
-          <span class="opt-stat-value">38.7%</span>
+          <span class="opt-stat-value" id="statIVPctile">38.7%</span>
         </div>
         <div class="opt-stat">
           <span class="opt-stat-label">Put/Call Ratio</span>
-          <span class="opt-stat-value">0.84</span>
+          <span class="opt-stat-value" id="statPCRatio">0.84</span>
         </div>
         <div class="opt-stat">
           <span class="opt-stat-label">Expected Move</span>
-          <span class="opt-stat-value">+/- $8.42</span>
+          <span class="opt-stat-value" id="statExpMove">+/- $8.42</span>
         </div>
         <div class="opt-stat">
           <span class="opt-stat-label">Total OI</span>
-          <span class="opt-stat-value">1.24M</span>
+          <span class="opt-stat-value" id="statTotalOI">1.24M</span>
         </div>
         <div class="opt-stat">
           <span class="opt-stat-label">Today's Volume</span>
-          <span class="opt-stat-value">892K</span>
+          <span class="opt-stat-value" id="statTotalVol">892K</span>
         </div>
         <div class="opt-stat">
           <span class="opt-stat-label">Sizzle Index</span>
-          <span class="opt-stat-value highlight">2.4x</span>
+          <span class="opt-stat-value highlight" id="statSizzle">2.4x</span>
         </div>
       </div>
 
@@ -664,14 +658,54 @@
         </div>
       </div>
 
+      <!-- Strategy Builder (hidden by default, shown when Strategy tab active) -->
+      <div class="strategy-builder-panel" id="strategyBuilder" style="display: none;">
+        <div class="panel">
+          <div class="panel-header">
+            <h3 class="panel-title">Strategy Builder</h3>
+            <div class="strategy-presets">
+              <select id="strategyPreset" class="opt-expiry-select" style="min-width: 160px;">
+                <option value="custom">Custom</option>
+                <option value="longCall">Long Call</option>
+                <option value="longPut">Long Put</option>
+                <option value="shortCall">Short Call (Covered)</option>
+                <option value="shortPut">Short Put (Cash Secured)</option>
+                <option value="bullCallSpread">Bull Call Spread</option>
+                <option value="bearPutSpread">Bear Put Spread</option>
+                <option value="straddle">Straddle</option>
+                <option value="strangle">Strangle</option>
+                <option value="ironCondor">Iron Condor</option>
+                <option value="butterfly">Butterfly</option>
+              </select>
+              <button class="ovt-btn" id="clearStrategy" style="margin-left: 8px;">Clear All</button>
+            </div>
+          </div>
+          <div class="strategy-legs" id="strategyLegs">
+            <div class="strategy-legs-header">
+              <span>Side</span><span>Type</span><span>Strike</span><span>Premium</span><span>Qty</span><span></span>
+            </div>
+            <!-- Legs added dynamically -->
+          </div>
+          <div style="padding: 8px 12px;">
+            <button class="ovt-btn active" id="addLegBtn" style="width: 100%;">+ Add Leg</button>
+          </div>
+          <div class="strategy-summary" id="strategySummary">
+            <div class="pnl-stat"><span class="pnl-stat-label">Net Debit/Credit</span><span class="pnl-stat-value" id="stratNetCost">--</span></div>
+            <div class="pnl-stat"><span class="pnl-stat-label">Max Risk</span><span class="pnl-stat-value" id="stratMaxRisk">--</span></div>
+            <div class="pnl-stat"><span class="pnl-stat-label">Max Reward</span><span class="pnl-stat-value" id="stratMaxReward">--</span></div>
+            <div class="pnl-stat"><span class="pnl-stat-label">Breakevens</span><span class="pnl-stat-value" id="stratBreakevens">--</span></div>
+          </div>
+        </div>
+      </div>
+
       <!-- P&L Diagram -->
       <div class="options-bottom-row">
         <div class="panel pnl-panel">
           <div class="panel-header">
             <h3 class="panel-title">P&L at Expiration</h3>
             <div class="pnl-strategy-info">
-              <span class="pnl-strat-name">Long Call $230</span>
-              <span class="pnl-strat-cost">Debit: $4.85</span>
+              <span class="pnl-strat-name" id="pnlStratName">Long Call $230</span>
+              <span class="pnl-strat-cost" id="pnlStratCost">Debit: $4.85</span>
             </div>
           </div>
           <div class="pnl-chart" id="pnlChart">
@@ -680,23 +714,23 @@
           <div class="pnl-stats">
             <div class="pnl-stat">
               <span class="pnl-stat-label">Max Profit</span>
-              <span class="pnl-stat-value profit">Unlimited</span>
+              <span class="pnl-stat-value profit" id="pnlMaxProfit">Unlimited</span>
             </div>
             <div class="pnl-stat">
               <span class="pnl-stat-label">Max Loss</span>
-              <span class="pnl-stat-value loss">-$485.00</span>
+              <span class="pnl-stat-value loss" id="pnlMaxLoss">-$485.00</span>
             </div>
             <div class="pnl-stat">
               <span class="pnl-stat-label">Break Even</span>
-              <span class="pnl-stat-value">$234.85</span>
+              <span class="pnl-stat-value" id="pnlBreakeven">$234.85</span>
             </div>
             <div class="pnl-stat">
               <span class="pnl-stat-label">Prob. Profit</span>
-              <span class="pnl-stat-value">34.2%</span>
+              <span class="pnl-stat-value" id="pnlProbProfit">34.2%</span>
             </div>
             <div class="pnl-stat">
               <span class="pnl-stat-label">Days to Exp.</span>
-              <span class="pnl-stat-value">18</span>
+              <span class="pnl-stat-value" id="pnlDTE">18</span>
             </div>
           </div>
         </div>
@@ -706,37 +740,37 @@
           <div class="panel-header">
             <h3 class="panel-title">Position Greeks</h3>
           </div>
-          <div class="greeks-grid">
+          <div class="greeks-grid" id="greeksGrid">
             <div class="greek-card">
               <div class="greek-name">Delta</div>
-              <div class="greek-value">0.42</div>
+              <div class="greek-value" id="greekDelta">0.42</div>
               <div class="greek-gauge">
-                <div class="gauge-fill" style="width: 42%; background: var(--accent-blue);"></div>
+                <div class="gauge-fill" id="greekDeltaGauge" style="width: 42%; background: var(--accent-blue);"></div>
               </div>
               <div class="greek-desc">Price sensitivity per $1 move</div>
             </div>
             <div class="greek-card">
               <div class="greek-name">Gamma</div>
-              <div class="greek-value">0.028</div>
-              <div class="gauge-fill" style="width: 56%; background: var(--accent-purple);"></div>
+              <div class="greek-value" id="greekGamma">0.028</div>
+              <div class="gauge-fill" id="greekGammaGauge" style="width: 56%; background: var(--accent-purple);"></div>
               <div class="greek-desc">Delta change rate</div>
             </div>
             <div class="greek-card">
               <div class="greek-name">Theta</div>
-              <div class="greek-value loss">-0.18</div>
-              <div class="gauge-fill" style="width: 36%; background: var(--loss);"></div>
+              <div class="greek-value loss" id="greekTheta">-0.18</div>
+              <div class="gauge-fill" id="greekThetaGauge" style="width: 36%; background: var(--loss);"></div>
               <div class="greek-desc">Daily time decay</div>
             </div>
             <div class="greek-card">
               <div class="greek-name">Vega</div>
-              <div class="greek-value">0.31</div>
-              <div class="gauge-fill" style="width: 62%; background: var(--accent-gold);"></div>
+              <div class="greek-value" id="greekVega">0.31</div>
+              <div class="gauge-fill" id="greekVegaGauge" style="width: 62%; background: var(--accent-gold);"></div>
               <div class="greek-desc">IV sensitivity per 1% change</div>
             </div>
             <div class="greek-card">
               <div class="greek-name">Rho</div>
-              <div class="greek-value">0.08</div>
-              <div class="gauge-fill" style="width: 16%; background: var(--text-muted);"></div>
+              <div class="greek-value" id="greekRho">0.08</div>
+              <div class="gauge-fill" id="greekRhoGauge" style="width: 16%; background: var(--text-muted);"></div>
               <div class="greek-desc">Interest rate sensitivity</div>
             </div>
           </div>
@@ -1130,9 +1164,13 @@
         </button>
       </div>
 
-      <!-- Agent Cards -->
-      <div class="agents-grid">
+      <!-- Agent Cards (dynamically rendered) -->
+      <div class="agents-grid" id="agentsGrid">
+        <!-- Agent cards injected by app.js -->
+      </div>
 
+      <!-- Static agent cards removed - now rendered dynamically -->
+      <div style="display:none" class="agents-grid-static-removed">
         <div class="agent-card active">
           <div class="agent-header">
             <div class="agent-status-dot running"></div>
@@ -1331,6 +1369,7 @@
           </div>
         </div>
       </div>
+      </div><!-- end hidden static agents -->
 
       <!-- Agent Performance Chart -->
       <div class="panel agent-perf-panel">
@@ -1503,6 +1542,46 @@
       </div>
       <div class="settings-grid">
         <div class="panel settings-panel">
+          <h3 class="settings-section-title">Alpaca Trading</h3>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Trading Mode</span>
+              <span class="setting-desc">Paper trading uses simulated money. ALWAYS start with paper.</span>
+            </div>
+            <select class="setting-select" id="settingAlpacaMode">
+              <option value="paper" selected>Paper Trading (Simulated)</option>
+              <option value="live">Live Trading (Real Money)</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Alpaca API Key</span>
+              <span class="setting-desc">From your Alpaca dashboard (paper or live)</span>
+            </div>
+            <input type="password" class="setting-input" id="settingAlpacaKey" placeholder="PK...">
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Alpaca API Secret</span>
+              <span class="setting-desc">Keep this private. Stored in browser localStorage.</span>
+            </div>
+            <input type="password" class="setting-input" id="settingAlpacaSecret" placeholder="Secret key...">
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Connection Status</span>
+              <span class="setting-desc" id="alpacaStatusDesc">Not connected</span>
+            </div>
+            <button class="agent-btn start" id="testAlpacaBtn" style="min-width:120px">Test Connection</button>
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name"></span>
+            </div>
+            <button class="btn-primary" id="saveAlpacaBtn" style="min-width:160px">Save Alpaca Settings</button>
+          </div>
+        </div>
+        <div class="panel settings-panel">
           <h3 class="settings-section-title">API Connections</h3>
           <div class="setting-row">
             <div class="setting-info">
@@ -1558,27 +1637,34 @@
           </div>
         </div>
         <div class="panel settings-panel">
-          <h3 class="settings-section-title">Risk Parameters</h3>
+          <h3 class="settings-section-title">Risk Guardrails</h3>
           <div class="setting-row">
             <div class="setting-info">
               <span class="setting-name">Max Position Size</span>
               <span class="setting-desc">Maximum allocation per single position</span>
             </div>
-            <input type="text" class="setting-input" value="$50,000">
+            <input type="text" class="setting-input" id="settingMaxPosition" value="$50,000">
           </div>
           <div class="setting-row">
             <div class="setting-info">
               <span class="setting-name">Daily Loss Limit</span>
-              <span class="setting-desc">Auto-pause agents when reached</span>
+              <span class="setting-desc">Auto-pause all agents when reached</span>
             </div>
-            <input type="text" class="setting-input" value="$5,000">
+            <input type="text" class="setting-input" id="settingDailyLoss" value="$5,000">
           </div>
           <div class="setting-row">
             <div class="setting-info">
               <span class="setting-name">Max Concurrent Agents</span>
               <span class="setting-desc">Number of agents running simultaneously</span>
             </div>
-            <input type="text" class="setting-input" value="4">
+            <input type="text" class="setting-input" id="settingMaxAgents" value="4">
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Max Order Quantity</span>
+              <span class="setting-desc">Maximum shares per single order</span>
+            </div>
+            <input type="text" class="setting-input" id="settingMaxOrderQty" value="500">
           </div>
         </div>
       </div>
@@ -1610,6 +1696,122 @@
   <div class="fdt-body" id="fdtBody"></div>
 </div>
 
+<!-- Agent Logs Modal -->
+<div class="modal-overlay" id="agentLogsModal">
+  <div class="modal-content modal-logs">
+    <div class="modal-header">
+      <h2 id="logsModalTitle">Agent Logs</h2>
+      <button class="modal-close" onclick="closeModal('agentLogsModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="logs-filter">
+        <button class="log-filter-btn active" data-level="all">All</button>
+        <button class="log-filter-btn" data-level="trade">Trades</button>
+        <button class="log-filter-btn" data-level="signal">Signals</button>
+        <button class="log-filter-btn" data-level="warn">Warnings</button>
+        <button class="log-filter-btn" data-level="error">Errors</button>
+      </div>
+      <div class="logs-container" id="logsContainer">
+        <div class="log-empty">No logs yet. Start the agent to see activity.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Agent Configure Modal -->
+<div class="modal-overlay" id="agentConfigModal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2 id="configModalTitle">Configure Agent</h2>
+      <button class="modal-close" onclick="closeModal('agentConfigModal')">&times;</button>
+    </div>
+    <div class="modal-body" id="configModalBody">
+      <!-- Populated dynamically -->
+    </div>
+    <div class="modal-footer">
+      <button class="agent-btn" onclick="closeModal('agentConfigModal')">Cancel</button>
+      <button class="btn-primary" id="saveConfigBtn">Save Configuration</button>
+    </div>
+  </div>
+</div>
+
+<!-- Deploy New Agent Modal -->
+<div class="modal-overlay" id="deployAgentModal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2>Deploy New Agent</h2>
+      <button class="modal-close" onclick="closeModal('deployAgentModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="deploy-strategies">
+        <div class="deploy-strategy-card" data-strategy="ArbitrageHunter">
+          <h3>Arbitrage Hunter</h3>
+          <p>Cross-pair price discrepancy detection. Trades correlated pairs when spread exceeds threshold.</p>
+          <div class="deploy-meta">
+            <span>Tick: 3s</span>
+            <span>Risk: Low-Medium</span>
+          </div>
+        </div>
+        <div class="deploy-strategy-card" data-strategy="SwingMomentum">
+          <h3>Swing Momentum</h3>
+          <p>RSI + MACD + Volume multi-day swing entries. Targets 2:1 R:R minimum with trailing stops.</p>
+          <div class="deploy-meta">
+            <span>Tick: 10s</span>
+            <span>Risk: Medium</span>
+          </div>
+        </div>
+        <div class="deploy-strategy-card" data-strategy="GammaScalper">
+          <h3>Gamma Scalper</h3>
+          <p>Delta-neutral options strategy. Profits from gamma by rebalancing when underlying moves.</p>
+          <div class="deploy-meta">
+            <span>Tick: 5s</span>
+            <span>Risk: Medium-High</span>
+          </div>
+        </div>
+        <div class="deploy-strategy-card" data-strategy="MeanReversion">
+          <h3>Mean Reversion</h3>
+          <p>Z-score + Bollinger Band extremes. Enters on deviation, exits on mean normalization.</p>
+          <div class="deploy-meta">
+            <span>Tick: 8s</span>
+            <span>Risk: Medium</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Live Trade Confirmation Modal -->
+<div class="modal-overlay" id="liveTradeConfirmModal">
+  <div class="modal-content modal-confirm">
+    <div class="modal-header" style="border-color: var(--loss)">
+      <h2 style="color: var(--loss)">WARNING: Live Trading</h2>
+      <button class="modal-close" onclick="closeModal('liveTradeConfirmModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="color: var(--loss); font-weight: 600; font-size: 14px;">You are about to enable LIVE TRADING with real money.</p>
+      <p style="color: var(--text-secondary); margin-top: 8px;">This will execute real trades on your Alpaca brokerage account. Losses are real and irreversible. Are you absolutely sure?</p>
+      <div style="margin-top: 16px;">
+        <label style="color: var(--text-secondary); font-size: 12px; display: flex; align-items: center; gap: 8px;">
+          <input type="checkbox" id="liveTradeConfirmCheck"> I understand and accept the risk of live trading
+        </label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="agent-btn" onclick="closeModal('liveTradeConfirmModal')">Cancel - Stay on Paper</button>
+      <button class="agent-btn" id="confirmLiveBtn" style="background: var(--loss); color: white;" disabled>Enable Live Trading</button>
+    </div>
+  </div>
+</div>
+
+<script src="services/black-scholes.js"></script>
+<script src="services/options-data.js"></script>
+<script src="services/alpaca-client.js"></script>
+<script src="services/trading-agents.js"></script>
+<script src="services/strategies/arbitrage-hunter.js"></script>
+<script src="services/strategies/swing-momentum.js"></script>
+<script src="services/strategies/gamma-scalper.js"></script>
+<script src="services/strategies/mean-reversion.js"></script>
 <script src="services/grey-sankore.js"></script>
 <script src="services/flow-engine.js"></script>
 <script src="services/flow-analytics.js"></script>

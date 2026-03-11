@@ -324,107 +324,293 @@ function drawVolumeChart() {
   }
 }
 
-// ---- OPTIONS CHAIN ----
-function populateOptionsChain() {
+// ---- OPTIONS CHAIN ENGINE (Real Data) ----
+
+// Global options state
+const optionsState = {
+  symbol: 'AAPL',
+  currentChain: null,
+  selectedExpiration: null,
+  selectedContract: null,   // { type: 'call'|'put', strike, data }
+  strategyLegs: [],         // for strategy builder
+  isLoading: false,
+};
+
+function formatK(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return n.toString();
+}
+
+function formatDollar(n) {
+  if (Math.abs(n) >= 1000000) return '$' + (n / 1000000).toFixed(1) + 'M';
+  if (Math.abs(n) >= 1000) return '$' + (n / 1000).toFixed(1) + 'K';
+  return '$' + n.toFixed(2);
+}
+
+/**
+ * Main entry: load options chain for current symbol/expiration
+ */
+async function populateOptionsChain() {
   const callsBody = document.getElementById('callsChain');
   const putsBody = document.getElementById('putsChain');
   const strikeCol = document.getElementById('strikeColumn');
   if (!callsBody || !putsBody || !strikeCol) return;
 
-  const currentPrice = 227.48;
-  const strikes = [];
-  for (let s = 215; s <= 245; s += 2.5) strikes.push(s);
+  if (optionsState.isLoading) return;
+  optionsState.isLoading = true;
 
-  const daysToExp = 18;
+  // Show loading state
+  callsBody.innerHTML = '<tr><td colspan="11" class="options-loading">Loading options chain...</td></tr>';
+  putsBody.innerHTML = '<tr><td colspan="11" class="options-loading"></td></tr>';
 
-  strikes.forEach(strike => {
-    const itm = strike <= currentPrice;
-    const moneyness = (currentPrice - strike) / currentPrice;
+  try {
+    // Load expirations first if needed
+    await loadExpirations(optionsState.symbol);
 
-    // Call Greeks (simplified Black-Scholes approximation)
-    const callDelta = Math.max(0.01, Math.min(0.99, 0.5 + moneyness * 4));
-    const callGamma = Math.exp(-moneyness * moneyness * 20) * 0.04;
-    const callTheta = -(0.05 + Math.random() * 0.15);
-    const callVega = 0.2 + Math.random() * 0.2;
-    const callIV = 28 + Math.random() * 12 + Math.abs(moneyness) * 30;
-    const intrinsic = Math.max(0, currentPrice - strike);
-    const timeValue = callIV * 0.08 * Math.sqrt(daysToExp / 365);
-    const callLast = Math.max(0.01, intrinsic + timeValue * (5 + Math.random() * 3));
-    const spread = Math.max(0.01, callLast * 0.02);
-    const callBid = Math.max(0.01, callLast - spread);
-    const callAsk = callLast + spread;
-    const callChg = (Math.random() - 0.4) * 1.5;
-    const callVol = Math.floor(Math.random() * 8000 + (itm ? 2000 : 500));
-    const callOI = Math.floor(Math.random() * 25000 + 1000);
+    // Fetch chain data
+    const chain = await OptionsData.getOptionsChain(
+      optionsState.symbol,
+      optionsState.selectedExpiration
+    );
+    optionsState.currentChain = chain;
 
-    // Put Greeks
-    const putDelta = callDelta - 1;
-    const putGamma = callGamma;
-    const putTheta = callTheta - 0.02;
-    const putVega = callVega;
-    const putIV = callIV + 2;
-    const putIntrinsic = Math.max(0, strike - currentPrice);
-    const putLast = Math.max(0.01, putIntrinsic + timeValue * (5 + Math.random() * 3));
-    const putSpread = Math.max(0.01, putLast * 0.02);
-    const putBid = Math.max(0.01, putLast - putSpread);
-    const putAsk = putLast + putSpread;
-    const putChg = (Math.random() - 0.6) * 1.5;
-    const putVol = Math.floor(Math.random() * 6000 + (itm ? 500 : 2000));
-    const putOI = Math.floor(Math.random() * 20000 + 800);
+    // Clear old data
+    callsBody.innerHTML = '';
+    putsBody.innerHTML = '';
+    // Keep the "Strike" header, remove old strike rows
+    const existingStrikes = strikeCol.querySelectorAll('.strike-row');
+    existingStrikes.forEach(s => s.remove());
 
-    const itmClass = itm ? ' class="itm"' : '';
+    // Update subtitle
+    const subtitle = document.getElementById('optionsSubtitle');
+    if (subtitle) subtitle.textContent = `${chain.symbol} - $${chain.spotPrice.toFixed(2)}`;
 
-    // Calls row
-    const callRow = document.createElement('tr');
-    if (itm) callRow.className = 'itm';
-    callRow.innerHTML = `
-      <td class="highlight">${callLast.toFixed(2)}</td>
-      <td style="color: ${callChg >= 0 ? 'var(--profit)' : 'var(--loss)'}">${callChg >= 0 ? '+' : ''}${callChg.toFixed(2)}</td>
-      <td>${callBid.toFixed(2)}</td>
-      <td>${callAsk.toFixed(2)}</td>
-      <td>${formatK(callVol)}</td>
-      <td>${formatK(callOI)}</td>
-      <td>${callIV.toFixed(1)}%</td>
-      <td class="greek">${callDelta.toFixed(3)}</td>
-      <td class="greek">${callGamma.toFixed(4)}</td>
-      <td class="greek" style="color: var(--loss)">${callTheta.toFixed(3)}</td>
-      <td class="greek">${callVega.toFixed(3)}</td>
-    `;
-    callsBody.appendChild(callRow);
+    // Update stats bar
+    updateOptionsStats(chain);
 
-    // Strike
-    const strikeDiv = document.createElement('div');
-    strikeDiv.className = 'strike-row' + (Math.abs(strike - currentPrice) < 1.25 ? ' atm' : '');
-    strikeDiv.textContent = strike.toFixed(1);
-    strikeCol.appendChild(strikeDiv);
+    const spot = chain.spotPrice;
+    const calls = chain.calls || [];
+    const puts = chain.puts || [];
 
-    // Puts row
-    const putRow = document.createElement('tr');
-    if (!itm) putRow.className = 'itm';
-    putRow.innerHTML = `
-      <td class="greek">${putVega.toFixed(3)}</td>
-      <td class="greek" style="color: var(--loss)">${putTheta.toFixed(3)}</td>
-      <td class="greek">${putGamma.toFixed(4)}</td>
-      <td class="greek">${putDelta.toFixed(3)}</td>
-      <td>${putIV.toFixed(1)}%</td>
-      <td>${formatK(putOI)}</td>
-      <td>${formatK(putVol)}</td>
-      <td>${putAsk.toFixed(2)}</td>
-      <td>${putBid.toFixed(2)}</td>
-      <td style="color: ${putChg >= 0 ? 'var(--profit)' : 'var(--loss)'}">${putChg >= 0 ? '+' : ''}${putChg.toFixed(2)}</td>
-      <td class="highlight">${putLast.toFixed(2)}</td>
-    `;
-    putsBody.appendChild(putRow);
+    // Build strike-indexed maps
+    const callMap = {};
+    const putMap = {};
+    calls.forEach(c => { callMap[c.strike] = c; });
+    puts.forEach(p => { putMap[p.strike] = p; });
+
+    // Collect all strikes
+    const allStrikes = new Set();
+    calls.forEach(c => allStrikes.add(c.strike));
+    puts.forEach(p => allStrikes.add(p.strike));
+    const strikes = Array.from(allStrikes).sort((a, b) => a - b);
+
+    // Find ATM strike (closest to spot)
+    let atmStrike = strikes[0];
+    let minDist = Infinity;
+    strikes.forEach(s => {
+      const dist = Math.abs(s - spot);
+      if (dist < minDist) { minDist = dist; atmStrike = s; }
+    });
+
+    // Determine strike step for ATM threshold
+    const strikeStep = strikes.length > 1 ? strikes[1] - strikes[0] : 1;
+
+    strikes.forEach(strike => {
+      const isATM = Math.abs(strike - spot) <= strikeStep * 0.6;
+      const callITM = strike < spot;
+      const putITM = strike > spot;
+
+      const call = callMap[strike] || {};
+      const put = putMap[strike] || {};
+      const cg = call.calculatedGreeks || {};
+      const pg = put.calculatedGreeks || {};
+
+      // Call row
+      const callRow = document.createElement('tr');
+      if (isATM) callRow.className = 'atm-row';
+      else if (callITM) callRow.className = 'itm';
+      else callRow.className = 'otm';
+
+      callRow.dataset.strike = strike;
+      callRow.dataset.type = 'call';
+      callRow.innerHTML = `
+        <td class="highlight">${(call.last || 0).toFixed(2)}</td>
+        <td style="color: ${(call.change || 0) >= 0 ? 'var(--profit)' : 'var(--loss)'}">${(call.change || 0) >= 0 ? '+' : ''}${(call.change || 0).toFixed(2)}</td>
+        <td>${(call.bid || 0).toFixed(2)}</td>
+        <td>${(call.ask || 0).toFixed(2)}</td>
+        <td>${formatK(call.volume || 0)}</td>
+        <td>${formatK(call.openInterest || 0)}</td>
+        <td>${((call.impliedVolatility || 0) * 100).toFixed(1)}%</td>
+        <td class="greek">${(cg.delta || 0).toFixed(3)}</td>
+        <td class="greek">${(cg.gamma || 0).toFixed(4)}</td>
+        <td class="greek" style="color: var(--loss)">${(cg.theta || 0).toFixed(3)}</td>
+        <td class="greek">${(cg.vega || 0).toFixed(3)}</td>
+      `;
+      callRow.addEventListener('click', () => selectContract('call', strike, call));
+      callsBody.appendChild(callRow);
+
+      // Strike column
+      const strikeDiv = document.createElement('div');
+      strikeDiv.className = 'strike-row' + (isATM ? ' atm' : '');
+      strikeDiv.textContent = strike.toFixed(strike % 1 === 0 ? 0 : 1);
+      strikeCol.appendChild(strikeDiv);
+
+      // Put row
+      const putRow = document.createElement('tr');
+      if (isATM) putRow.className = 'atm-row';
+      else if (putITM) putRow.className = 'itm';
+      else putRow.className = 'otm';
+
+      putRow.dataset.strike = strike;
+      putRow.dataset.type = 'put';
+      putRow.innerHTML = `
+        <td class="greek">${(pg.vega || 0).toFixed(3)}</td>
+        <td class="greek" style="color: var(--loss)">${(pg.theta || 0).toFixed(3)}</td>
+        <td class="greek">${(pg.gamma || 0).toFixed(4)}</td>
+        <td class="greek">${(pg.delta || 0).toFixed(3)}</td>
+        <td>${((put.impliedVolatility || 0) * 100).toFixed(1)}%</td>
+        <td>${formatK(put.openInterest || 0)}</td>
+        <td>${formatK(put.volume || 0)}</td>
+        <td>${(put.ask || 0).toFixed(2)}</td>
+        <td>${(put.bid || 0).toFixed(2)}</td>
+        <td style="color: ${(put.change || 0) >= 0 ? 'var(--profit)' : 'var(--loss)'}">${(put.change || 0) >= 0 ? '+' : ''}${(put.change || 0).toFixed(2)}</td>
+        <td class="highlight">${(put.last || 0).toFixed(2)}</td>
+      `;
+      putRow.addEventListener('click', () => selectContract('put', strike, put));
+      putsBody.appendChild(putRow);
+    });
+
+    // Scroll to ATM row
+    const atmRow = callsBody.querySelector('.atm-row');
+    if (atmRow) {
+      setTimeout(() => atmRow.scrollIntoView({ block: 'center', behavior: 'smooth' }), 100);
+    }
+
+    // Draw default P&L (ATM call)
+    const atmCall = callMap[atmStrike];
+    if (atmCall) {
+      selectContract('call', atmStrike, atmCall);
+    }
+
+  } catch (err) {
+    console.error('Failed to populate options chain:', err);
+    callsBody.innerHTML = '<tr><td colspan="11" style="color: var(--loss); padding: 20px;">Failed to load data. Retrying with simulated data...</td></tr>';
+  } finally {
+    optionsState.isLoading = false;
+  }
+}
+
+/**
+ * Load expiration dates into the dropdown
+ */
+async function loadExpirations(symbol) {
+  const select = document.getElementById('optExpirySelect');
+  if (!select) return;
+
+  try {
+    const exps = await OptionsData.getExpirations(symbol);
+    select.innerHTML = '';
+    exps.forEach((exp, i) => {
+      const opt = document.createElement('option');
+      opt.value = exp.timestamp;
+      opt.textContent = `${exp.date} (${exp.dte}d)`;
+      if (i === 2) opt.selected = true; // Default to ~3rd expiration
+      select.appendChild(opt);
+    });
+
+    // Set selected expiration
+    if (!optionsState.selectedExpiration && exps.length > 2) {
+      optionsState.selectedExpiration = exps[2].timestamp;
+    }
+  } catch (err) {
+    console.warn('Failed to load expirations:', err);
+  }
+}
+
+/**
+ * Update the options stats bar
+ */
+function updateOptionsStats(chain) {
+  if (!chain || !chain.stats) return;
+  const s = chain.stats;
+  const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+
+  setEl('statIVRank', s.ivRank ? s.ivRank.toFixed(1) + '%' : '--');
+  setEl('statIVPctile', s.ivPercentile ? s.ivPercentile.toFixed(1) + '%' : '--');
+  setEl('statPCRatio', s.putCallRatio ? s.putCallRatio.toFixed(2) : '--');
+  setEl('statExpMove', s.expectedMove ? '+/- $' + s.expectedMove.toFixed(2) : '--');
+  setEl('statTotalOI', formatK((s.totalCallOI || 0) + (s.totalPutOI || 0)));
+  setEl('statTotalVol', formatK((s.totalCallVolume || 0) + (s.totalPutVolume || 0)));
+  setEl('statSizzle', s.sizzleIndex ? s.sizzleIndex.toFixed(1) + 'x' : '--');
+}
+
+/**
+ * Handle contract selection in the chain
+ */
+function selectContract(type, strike, contractData) {
+  const chain = optionsState.currentChain;
+  if (!chain) return;
+
+  optionsState.selectedContract = { type, strike, data: contractData };
+
+  // Highlight selected row
+  document.querySelectorAll('#callsChain tr, #putsChain tr').forEach(r => r.classList.remove('selected'));
+  const table = type === 'call' ? 'callsChain' : 'putsChain';
+  const rows = document.querySelectorAll(`#${table} tr`);
+  rows.forEach(r => {
+    if (parseFloat(r.dataset.strike) === strike) r.classList.add('selected');
+  });
+
+  // Update Greeks panel
+  const greeks = contractData.calculatedGreeks || {};
+  updateGreeksPanel(greeks, type);
+
+  // Update P&L chart for this contract
+  const premium = contractData.last || contractData.ask || 0;
+  const legs = [{ type, strike, premium, quantity: 1, side: 'long' }];
+  const spot = chain.spotPrice;
+
+  drawPnLChart(legs, spot, {
+    name: `Long ${type === 'call' ? 'Call' : 'Put'} $${strike}`,
+    cost: `Debit: $${premium.toFixed(2)}`,
+    dte: contractData.dte || 18,
   });
 }
 
-function formatK(n) {
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
-  return n.toString();
+/**
+ * Update the Greeks display panel
+ */
+function updateGreeksPanel(greeks, type) {
+  const setGreek = (id, val, gaugeId, gaugeMax) => {
+    const el = document.getElementById(id);
+    const gauge = document.getElementById(gaugeId);
+    if (el) {
+      el.textContent = val.toFixed(val < 1 && val > -1 ? 3 : 2);
+      if (val < 0) el.className = 'greek-value loss';
+      else el.className = 'greek-value';
+    }
+    if (gauge) {
+      gauge.style.width = Math.min(100, Math.abs(val / gaugeMax) * 100) + '%';
+    }
+  };
+
+  setGreek('greekDelta', greeks.delta || 0, 'greekDeltaGauge', 1);
+  setGreek('greekGamma', greeks.gamma || 0, 'greekGammaGauge', 0.05);
+  setGreek('greekTheta', greeks.theta || 0, 'greekThetaGauge', 0.5);
+  setGreek('greekVega', greeks.vega || 0, 'greekVegaGauge', 0.5);
+  setGreek('greekRho', greeks.rho || 0, 'greekRhoGauge', 0.5);
 }
 
-// ---- P&L CHART ----
-function drawPnLChart() {
+// ---- P&L CHART (Data-Driven) ----
+
+/**
+ * Draw P&L chart for given strategy legs
+ * @param {Array} legs - strategy legs
+ * @param {number} spotPrice - current spot price
+ * @param {object} info - { name, cost, dte }
+ */
+function drawPnLChart(legs, spotPrice, info) {
   const canvas = document.getElementById('pnlCanvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -432,97 +618,598 @@ function drawPnLChart() {
   canvas.width = rect.width;
   canvas.height = rect.height;
 
-  const strike = 230;
-  const premium = 4.85;
-  const breakeven = strike + premium;
+  if (!legs || legs.length === 0) {
+    // Default display
+    legs = [{ type: 'call', strike: 230, premium: 4.85, quantity: 1, side: 'long' }];
+    spotPrice = spotPrice || 227.48;
+    info = info || { name: 'Long Call $230', cost: 'Debit: $4.85', dte: 18 };
+  }
 
-  const minPrice = 210;
-  const maxPrice = 260;
-  const maxProfit = 20;
-  const maxLoss = -premium;
+  // Compute price range: 15% around spot, centered
+  const range = spotPrice * 0.15;
+  const minPrice = spotPrice - range;
+  const maxPrice = spotPrice + range;
 
-  const padding = { top: 20, right: 40, bottom: 30, left: 50 };
+  // Calculate P&L using OptionsData
+  const pnlData = OptionsData.calculatePnL(legs, {
+    minPrice, maxPrice, points: 300, spotPrice
+  });
+
+  // Update info labels
+  const nameEl = document.getElementById('pnlStratName');
+  const costEl = document.getElementById('pnlStratCost');
+  if (nameEl && info) nameEl.textContent = info.name || '';
+  if (costEl && info) costEl.textContent = info.cost || '';
+
+  // Update stats
+  const maxProfitEl = document.getElementById('pnlMaxProfit');
+  const maxLossEl = document.getElementById('pnlMaxLoss');
+  const breakevenEl = document.getElementById('pnlBreakeven');
+  const dteEl = document.getElementById('pnlDTE');
+  const probProfitEl = document.getElementById('pnlProbProfit');
+
+  if (maxProfitEl) {
+    if (pnlData.maxProfit > 100000) maxProfitEl.textContent = 'Unlimited';
+    else maxProfitEl.textContent = formatDollar(pnlData.maxProfit);
+    maxProfitEl.className = 'pnl-stat-value profit';
+  }
+  if (maxLossEl) {
+    if (pnlData.maxLoss < -100000) maxLossEl.textContent = 'Unlimited';
+    else maxLossEl.textContent = '-' + formatDollar(Math.abs(pnlData.maxLoss));
+    maxLossEl.className = 'pnl-stat-value loss';
+  }
+  if (breakevenEl) {
+    breakevenEl.textContent = pnlData.breakevens.map(b => '$' + b.toFixed(2)).join(', ') || '--';
+  }
+  if (dteEl && info) dteEl.textContent = info.dte || '--';
+
+  // Estimate probability of profit (using normal distribution if we have IV)
+  if (probProfitEl && pnlData.breakevens.length > 0 && optionsState.currentChain) {
+    const chain = optionsState.currentChain;
+    const avgIV = chain.stats ? chain.stats.avgIV : 0.30;
+    const dte = info.dte || 18;
+    const sqrtT = Math.sqrt(dte / 365);
+    let probProfit = 0;
+    if (pnlData.breakevens.length === 1) {
+      const be = pnlData.breakevens[0];
+      const lastPnl = pnlData.pnl[pnlData.pnl.length - 1];
+      const d = Math.log(spotPrice / be) / (avgIV * sqrtT);
+      if (lastPnl > 0) {
+        probProfit = BlackScholes.normalCDF(d) * 100;
+      } else {
+        probProfit = (1 - BlackScholes.normalCDF(d)) * 100;
+      }
+    } else if (pnlData.breakevens.length === 2) {
+      const be1 = pnlData.breakevens[0];
+      const be2 = pnlData.breakevens[1];
+      const midPnl = pnlData.pnl[Math.floor(pnlData.pnl.length / 2)];
+      const d1 = Math.log(spotPrice / be1) / (avgIV * sqrtT);
+      const d2 = Math.log(spotPrice / be2) / (avgIV * sqrtT);
+      if (midPnl > 0) {
+        probProfit = (BlackScholes.normalCDF(d1) - BlackScholes.normalCDF(d2)) * 100;
+      } else {
+        probProfit = (1 - BlackScholes.normalCDF(d1) + BlackScholes.normalCDF(d2)) * 100;
+      }
+    }
+    probProfitEl.textContent = Math.abs(probProfit).toFixed(1) + '%';
+  }
+
+  // ---- DRAW THE CHART ----
+  const padding = { top: 20, right: 40, bottom: 30, left: 55 };
   const w = canvas.width - padding.left - padding.right;
   const h = canvas.height - padding.top - padding.bottom;
 
-  // Zero line
-  const zeroY = padding.top + (maxProfit / (maxProfit - maxLoss)) * h;
+  const pnlValues = pnlData.pnl;
+  const displayMax = Math.min(pnlData.maxProfit, Math.abs(pnlData.maxLoss) * 5);
+  const displayMin = Math.max(pnlData.maxLoss, -Math.abs(pnlData.maxProfit) * 5);
+  const pnlMax = displayMax * 1.1;
+  const pnlMin = displayMin * 1.1;
+  const pnlRange = pnlMax - pnlMin;
 
-  // Grid
+  const zeroY = padding.top + ((pnlMax - 0) / pnlRange) * h;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Grid lines
   ctx.strokeStyle = '#1A1A24';
   ctx.lineWidth = 0.5;
-  ctx.beginPath();
-  ctx.moveTo(padding.left, zeroY);
-  ctx.lineTo(padding.left + w, zeroY);
-  ctx.stroke();
+  const gridSteps = 5;
+  for (let i = 0; i <= gridSteps; i++) {
+    const y = padding.top + (h / gridSteps) * i;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(padding.left + w, y);
+    ctx.stroke();
 
-  // Axis labels
+    const val = pnlMax - (pnlRange / gridSteps) * i;
+    ctx.fillStyle = '#5C5C6E';
+    ctx.font = '10px JetBrains Mono';
+    ctx.textAlign = 'right';
+    ctx.fillText(formatDollar(val), padding.left - 5, y + 3);
+  }
+
+  // Zero line (emphasized)
+  if (zeroY >= padding.top && zeroY <= padding.top + h) {
+    ctx.strokeStyle = '#2A2A38';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, zeroY);
+    ctx.lineTo(padding.left + w, zeroY);
+    ctx.stroke();
+    ctx.fillStyle = '#5C5C6E';
+    ctx.textAlign = 'right';
+    ctx.fillText('$0', padding.left - 5, zeroY + 3);
+  }
+
+  // Price axis labels
   ctx.fillStyle = '#5C5C6E';
   ctx.font = '10px JetBrains Mono';
-  ctx.textAlign = 'right';
-  ctx.fillText('$0', padding.left - 5, zeroY + 3);
-  ctx.fillText(`+$${maxProfit * 100}`, padding.left - 5, padding.top + 10);
-  ctx.fillText(`-$${Math.abs(maxLoss * 100).toFixed(0)}`, padding.left - 5, canvas.height - padding.bottom - 5);
-
   ctx.textAlign = 'center';
-  for (let p = minPrice; p <= maxPrice; p += 10) {
+  const priceStep = (maxPrice - minPrice) / 6;
+  for (let p = minPrice; p <= maxPrice; p += priceStep) {
     const x = padding.left + ((p - minPrice) / (maxPrice - minPrice)) * w;
-    ctx.fillText('$' + p, x, canvas.height - padding.bottom + 15);
+    ctx.fillText('$' + p.toFixed(0), x, canvas.height - padding.bottom + 15);
   }
 
-  // P&L curve
-  ctx.beginPath();
+  // Build point array
   const points = [];
-  for (let price = minPrice; price <= maxPrice; price += 0.5) {
-    const pnl = Math.max(-premium, price - strike - premium);
+  for (let i = 0; i < pnlData.prices.length; i++) {
+    const price = pnlData.prices[i];
+    const pnl = Math.max(pnlMin, Math.min(pnlMax, pnlValues[i]));
     const x = padding.left + ((price - minPrice) / (maxPrice - minPrice)) * w;
-    const y = padding.top + ((maxProfit - pnl) / (maxProfit - maxLoss)) * h;
-    points.push({ x, y, pnl });
-    if (price === minPrice) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    const y = padding.top + ((pnlMax - pnl) / pnlRange) * h;
+    points.push({ x, y, pnl: pnlValues[i], price });
   }
+
+  // Fill profit area (green)
+  ctx.beginPath();
+  let inProfit = false;
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    const clampedY = Math.max(padding.top, Math.min(padding.top + h, p.y));
+    const effectiveZeroY = Math.max(padding.top, Math.min(padding.top + h, zeroY));
+
+    if (p.pnl > 0) {
+      if (!inProfit) {
+        ctx.moveTo(p.x, effectiveZeroY);
+        inProfit = true;
+      }
+      ctx.lineTo(p.x, clampedY);
+    } else if (inProfit) {
+      ctx.lineTo(p.x, effectiveZeroY);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.12)';
+      ctx.fill();
+      ctx.beginPath();
+      inProfit = false;
+    }
+  }
+  if (inProfit) {
+    const effectiveZeroY = Math.max(padding.top, Math.min(padding.top + h, zeroY));
+    ctx.lineTo(points[points.length - 1].x, effectiveZeroY);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(16, 185, 129, 0.12)';
+    ctx.fill();
+  }
+
+  // Fill loss area (red)
+  ctx.beginPath();
+  let inLoss = false;
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    const clampedY = Math.max(padding.top, Math.min(padding.top + h, p.y));
+    const effectiveZeroY = Math.max(padding.top, Math.min(padding.top + h, zeroY));
+
+    if (p.pnl < 0) {
+      if (!inLoss) {
+        ctx.moveTo(p.x, effectiveZeroY);
+        inLoss = true;
+      }
+      ctx.lineTo(p.x, clampedY);
+    } else if (inLoss) {
+      ctx.lineTo(p.x, effectiveZeroY);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.12)';
+      ctx.fill();
+      ctx.beginPath();
+      inLoss = false;
+    }
+  }
+  if (inLoss) {
+    const effectiveZeroY = Math.max(padding.top, Math.min(padding.top + h, zeroY));
+    ctx.lineTo(points[points.length - 1].x, effectiveZeroY);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.12)';
+    ctx.fill();
+  }
+
+  // P&L curve line
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    const clampedY = Math.max(padding.top, Math.min(padding.top + h, p.y));
+    if (i === 0) ctx.moveTo(p.x, clampedY);
+    else ctx.lineTo(p.x, clampedY);
+  });
   ctx.strokeStyle = '#8B5CF6';
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  // Fill profit area
-  ctx.beginPath();
-  let startedProfit = false;
-  points.forEach(p => {
-    if (p.pnl > 0 && !startedProfit) { ctx.moveTo(p.x, zeroY); startedProfit = true; }
-    if (p.pnl > 0) ctx.lineTo(p.x, p.y);
-  });
-  if (startedProfit) {
-    ctx.lineTo(points[points.length - 1].x, zeroY);
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(16, 185, 129, 0.1)';
-    ctx.fill();
+  // Current price marker (vertical dashed line)
+  if (spotPrice >= minPrice && spotPrice <= maxPrice) {
+    const spotX = padding.left + ((spotPrice - minPrice) / (maxPrice - minPrice)) * w;
+    ctx.strokeStyle = '#3B82F6';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(spotX, padding.top);
+    ctx.lineTo(spotX, padding.top + h);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = '#3B82F6';
+    ctx.font = '10px JetBrains Mono';
+    ctx.textAlign = 'center';
+    ctx.fillText('Spot: $' + spotPrice.toFixed(2), spotX, padding.top - 5);
   }
 
-  // Fill loss area
-  ctx.beginPath();
-  let startedLoss = false;
-  points.forEach(p => {
-    if (p.pnl <= 0 && !startedLoss) { ctx.moveTo(p.x, zeroY); startedLoss = true; }
-    if (p.pnl <= 0) ctx.lineTo(p.x, p.y);
+  // Breakeven dots
+  pnlData.breakevens.forEach(be => {
+    if (be >= minPrice && be <= maxPrice) {
+      const beX = padding.left + ((be - minPrice) / (maxPrice - minPrice)) * w;
+      const effectiveZeroY = Math.max(padding.top, Math.min(padding.top + h, zeroY));
+      ctx.beginPath();
+      ctx.arc(beX, effectiveZeroY, 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#F59E0B';
+      ctx.fill();
+      ctx.fillStyle = '#F59E0B';
+      ctx.font = '10px JetBrains Mono';
+      ctx.textAlign = 'center';
+      ctx.fillText('BE: $' + be.toFixed(2), beX, effectiveZeroY - 10);
+    }
   });
-  if (startedLoss) {
-    const lastLoss = points.filter(p => p.pnl <= 0).pop();
-    ctx.lineTo(lastLoss.x, zeroY);
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(239, 68, 68, 0.1)';
-    ctx.fill();
+
+  // Max profit/loss zone labels
+  const maxProfitPoint = points.reduce((best, p) => p.pnl > best.pnl ? p : best, points[0]);
+  if (maxProfitPoint.pnl > 0) {
+    ctx.fillStyle = 'rgba(16, 185, 129, 0.7)';
+    ctx.font = 'bold 9px JetBrains Mono';
+    ctx.textAlign = 'center';
+    const mpY = Math.max(padding.top + 15, Math.min(padding.top + h - 5, maxProfitPoint.y - 8));
+    if (pnlData.maxProfit < 100000) {
+      ctx.fillText('Max: ' + formatDollar(pnlData.maxProfit), maxProfitPoint.x, mpY);
+    }
+  }
+}
+
+// ---- TICKER INPUT & EXPIRATION HANDLERS ----
+
+function setupOptionsControls() {
+  const tickerInput = document.getElementById('optTickerInput');
+  const expirySelect = document.getElementById('optExpirySelect');
+
+  if (tickerInput) {
+    let debounceTimer;
+    tickerInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const symbol = tickerInput.value.trim().toUpperCase();
+        if (symbol && symbol !== optionsState.symbol) {
+          optionsState.symbol = symbol;
+          optionsState.selectedExpiration = null;
+          optionsState.selectedContract = null;
+          populateOptionsChain();
+        }
+      }
+    });
+    tickerInput.addEventListener('input', () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        const symbol = tickerInput.value.trim().toUpperCase();
+        if (symbol.length >= 1 && symbol.length <= 5 && symbol !== optionsState.symbol) {
+          optionsState.symbol = symbol;
+          optionsState.selectedExpiration = null;
+          populateOptionsChain();
+        }
+      }, 800);
+    });
   }
 
-  // Breakeven dot
-  const beX = padding.left + ((breakeven - minPrice) / (maxPrice - minPrice)) * w;
-  ctx.beginPath();
-  ctx.arc(beX, zeroY, 4, 0, Math.PI * 2);
-  ctx.fillStyle = '#F59E0B';
-  ctx.fill();
-  ctx.fillStyle = '#F59E0B';
-  ctx.font = '10px JetBrains Mono';
-  ctx.textAlign = 'center';
-  ctx.fillText('BE: $' + breakeven.toFixed(2), beX, zeroY - 10);
+  if (expirySelect) {
+    expirySelect.addEventListener('change', () => {
+      optionsState.selectedExpiration = parseInt(expirySelect.value);
+      optionsState.selectedContract = null;
+      populateOptionsChain();
+    });
+  }
+
+  // View toggle (Chain / Strategy / Vol Surface)
+  document.querySelectorAll('.ovt-btn[data-optview]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.ovt-btn[data-optview]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      const view = btn.dataset.optview;
+      const chainContainer = document.querySelector('.options-chain-container');
+      const stratBuilder = document.getElementById('strategyBuilder');
+
+      if (view === 'chain') {
+        if (chainContainer) chainContainer.style.display = '';
+        if (stratBuilder) stratBuilder.style.display = 'none';
+      } else if (view === 'strategy') {
+        if (chainContainer) chainContainer.style.display = '';
+        if (stratBuilder) stratBuilder.style.display = '';
+      } else if (view === 'volsurface') {
+        if (chainContainer) chainContainer.style.display = '';
+        if (stratBuilder) stratBuilder.style.display = 'none';
+      }
+    });
+  });
+}
+
+// ---- STRATEGY BUILDER ----
+
+function setupStrategyBuilder() {
+  const addBtn = document.getElementById('addLegBtn');
+  const clearBtn = document.getElementById('clearStrategy');
+  const presetSelect = document.getElementById('strategyPreset');
+
+  if (addBtn) {
+    addBtn.addEventListener('click', () => addStrategyLeg());
+  }
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      optionsState.strategyLegs = [];
+      renderStrategyLegs();
+      updateStrategyPnL();
+    });
+  }
+  if (presetSelect) {
+    presetSelect.addEventListener('change', () => {
+      applyStrategyPreset(presetSelect.value);
+    });
+  }
+}
+
+function addStrategyLeg(defaults) {
+  const chain = optionsState.currentChain;
+  const spot = chain ? chain.spotPrice : 227;
+  const nearestStrike = Math.round(spot);
+
+  const leg = {
+    id: Date.now() + Math.random(),
+    side: 'long',
+    type: 'call',
+    strike: nearestStrike,
+    premium: 0,
+    quantity: 1,
+    ...defaults,
+  };
+
+  // Auto-fill premium from chain if available
+  if (chain && leg.premium === 0) {
+    const source = leg.type === 'call' ? chain.calls : chain.puts;
+    const match = source.find(c => c.strike === leg.strike);
+    if (match) leg.premium = match.last || match.ask || 0;
+  }
+
+  optionsState.strategyLegs.push(leg);
+  renderStrategyLegs();
+  updateStrategyPnL();
+}
+
+function removeStrategyLeg(id) {
+  optionsState.strategyLegs = optionsState.strategyLegs.filter(l => l.id !== id);
+  renderStrategyLegs();
+  updateStrategyPnL();
+}
+
+function renderStrategyLegs() {
+  const container = document.getElementById('strategyLegs');
+  if (!container) return;
+
+  const header = container.querySelector('.strategy-legs-header');
+  container.innerHTML = '';
+  if (header) container.appendChild(header);
+  else {
+    const h = document.createElement('div');
+    h.className = 'strategy-legs-header';
+    h.innerHTML = '<span>Side</span><span>Type</span><span>Strike</span><span>Premium</span><span>Qty</span><span></span>';
+    container.appendChild(h);
+  }
+
+  optionsState.strategyLegs.forEach(leg => {
+    const row = document.createElement('div');
+    row.className = 'strategy-leg-row';
+    row.innerHTML = `
+      <select class="leg-side" data-id="${leg.id}">
+        <option value="long" ${leg.side === 'long' ? 'selected' : ''}>Long</option>
+        <option value="short" ${leg.side === 'short' ? 'selected' : ''}>Short</option>
+      </select>
+      <select class="leg-type" data-id="${leg.id}">
+        <option value="call" ${leg.type === 'call' ? 'selected' : ''}>Call</option>
+        <option value="put" ${leg.type === 'put' ? 'selected' : ''}>Put</option>
+      </select>
+      <input type="number" class="leg-strike" data-id="${leg.id}" value="${leg.strike}" step="0.5">
+      <input type="number" class="leg-premium" data-id="${leg.id}" value="${leg.premium.toFixed(2)}" step="0.01">
+      <input type="number" class="leg-qty" data-id="${leg.id}" value="${leg.quantity}" min="1" max="100" step="1">
+      <button class="leg-remove" data-id="${leg.id}">x</button>
+    `;
+    container.appendChild(row);
+
+    row.querySelector('.leg-side').addEventListener('change', (e) => {
+      leg.side = e.target.value;
+      updateStrategyPnL();
+    });
+    row.querySelector('.leg-type').addEventListener('change', (e) => {
+      leg.type = e.target.value;
+      const chain = optionsState.currentChain;
+      if (chain) {
+        const source = leg.type === 'call' ? chain.calls : chain.puts;
+        const match = source.find(c => c.strike === leg.strike);
+        if (match) {
+          leg.premium = match.last || match.ask || 0;
+          row.querySelector('.leg-premium').value = leg.premium.toFixed(2);
+        }
+      }
+      updateStrategyPnL();
+    });
+    row.querySelector('.leg-strike').addEventListener('change', (e) => {
+      leg.strike = parseFloat(e.target.value);
+      const chain = optionsState.currentChain;
+      if (chain) {
+        const source = leg.type === 'call' ? chain.calls : chain.puts;
+        const match = source.find(c => Math.abs(c.strike - leg.strike) < 0.01);
+        if (match) {
+          leg.premium = match.last || match.ask || 0;
+          row.querySelector('.leg-premium').value = leg.premium.toFixed(2);
+        }
+      }
+      updateStrategyPnL();
+    });
+    row.querySelector('.leg-premium').addEventListener('change', (e) => {
+      leg.premium = parseFloat(e.target.value);
+      updateStrategyPnL();
+    });
+    row.querySelector('.leg-qty').addEventListener('change', (e) => {
+      leg.quantity = parseInt(e.target.value) || 1;
+      updateStrategyPnL();
+    });
+    row.querySelector('.leg-remove').addEventListener('click', () => {
+      removeStrategyLeg(leg.id);
+    });
+  });
+}
+
+function updateStrategyPnL() {
+  const legs = optionsState.strategyLegs;
+  if (legs.length === 0) {
+    if (optionsState.selectedContract) {
+      const c = optionsState.selectedContract;
+      selectContract(c.type, c.strike, c.data);
+    }
+    return;
+  }
+
+  const chain = optionsState.currentChain;
+  const spot = chain ? chain.spotPrice : 227;
+  const dte = chain && chain.calls && chain.calls[0] ? chain.calls[0].dte : 18;
+
+  let netCost = 0;
+  legs.forEach(l => {
+    const mult = (l.side === 'long' ? -1 : 1) * l.quantity;
+    netCost += mult * l.premium * 100;
+  });
+
+  const legDescriptions = legs.map(l =>
+    `${l.side === 'short' ? 'Short' : 'Long'} ${l.type === 'call' ? 'C' : 'P'} $${l.strike}`
+  );
+  const stratName = legDescriptions.join(' / ');
+
+  drawPnLChart(legs, spot, {
+    name: stratName,
+    cost: netCost >= 0 ? `Credit: $${netCost.toFixed(0)}` : `Debit: $${Math.abs(netCost).toFixed(0)}`,
+    dte: dte,
+  });
+
+  let aggGreeks = { delta: 0, gamma: 0, theta: 0, vega: 0, rho: 0 };
+  legs.forEach(l => {
+    if (chain) {
+      const source = l.type === 'call' ? chain.calls : chain.puts;
+      const match = source.find(c => Math.abs(c.strike - l.strike) < 0.01);
+      if (match && match.calculatedGreeks) {
+        const mult = (l.side === 'long' ? 1 : -1) * l.quantity;
+        aggGreeks.delta += match.calculatedGreeks.delta * mult;
+        aggGreeks.gamma += match.calculatedGreeks.gamma * mult;
+        aggGreeks.theta += match.calculatedGreeks.theta * mult;
+        aggGreeks.vega += match.calculatedGreeks.vega * mult;
+        aggGreeks.rho += match.calculatedGreeks.rho * mult;
+      }
+    }
+  });
+  updateGreeksPanel(aggGreeks);
+
+  const rangeVal = spot * 0.15;
+  const pnlData = OptionsData.calculatePnL(legs, { minPrice: spot - rangeVal, maxPrice: spot + rangeVal, points: 300, spotPrice: spot });
+
+  const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  setEl('stratNetCost', netCost >= 0 ? '+$' + netCost.toFixed(0) : '-$' + Math.abs(netCost).toFixed(0));
+  setEl('stratMaxRisk', pnlData.maxLoss < -100000 ? 'Unlimited' : '-' + formatDollar(Math.abs(pnlData.maxLoss)));
+  setEl('stratMaxReward', pnlData.maxProfit > 100000 ? 'Unlimited' : formatDollar(pnlData.maxProfit));
+  setEl('stratBreakevens', pnlData.breakevens.map(b => '$' + b.toFixed(2)).join(', ') || '--');
+}
+
+function applyStrategyPreset(preset) {
+  const chain = optionsState.currentChain;
+  if (!chain) return;
+
+  const spot = chain.spotPrice;
+  const step = chain.calls.length > 1 ? chain.calls[1].strike - chain.calls[0].strike : 5;
+
+  let atmStrike = chain.calls[0].strike;
+  let minDist = Infinity;
+  chain.calls.forEach(c => {
+    if (Math.abs(c.strike - spot) < minDist) { minDist = Math.abs(c.strike - spot); atmStrike = c.strike; }
+  });
+
+  const findPrem = (type, strike) => {
+    const source = type === 'call' ? chain.calls : chain.puts;
+    const match = source.find(c => Math.abs(c.strike - strike) < 0.01);
+    return match ? (match.last || match.ask || 0) : 0;
+  };
+
+  optionsState.strategyLegs = [];
+
+  switch (preset) {
+    case 'longCall':
+      addStrategyLeg({ side: 'long', type: 'call', strike: atmStrike, premium: findPrem('call', atmStrike) });
+      break;
+    case 'longPut':
+      addStrategyLeg({ side: 'long', type: 'put', strike: atmStrike, premium: findPrem('put', atmStrike) });
+      break;
+    case 'shortCall':
+      addStrategyLeg({ side: 'short', type: 'call', strike: atmStrike + step * 2, premium: findPrem('call', atmStrike + step * 2) });
+      break;
+    case 'shortPut':
+      addStrategyLeg({ side: 'short', type: 'put', strike: atmStrike - step * 2, premium: findPrem('put', atmStrike - step * 2) });
+      break;
+    case 'bullCallSpread':
+      addStrategyLeg({ side: 'long', type: 'call', strike: atmStrike, premium: findPrem('call', atmStrike) });
+      addStrategyLeg({ side: 'short', type: 'call', strike: atmStrike + step * 2, premium: findPrem('call', atmStrike + step * 2) });
+      break;
+    case 'bearPutSpread':
+      addStrategyLeg({ side: 'long', type: 'put', strike: atmStrike, premium: findPrem('put', atmStrike) });
+      addStrategyLeg({ side: 'short', type: 'put', strike: atmStrike - step * 2, premium: findPrem('put', atmStrike - step * 2) });
+      break;
+    case 'straddle':
+      addStrategyLeg({ side: 'long', type: 'call', strike: atmStrike, premium: findPrem('call', atmStrike) });
+      addStrategyLeg({ side: 'long', type: 'put', strike: atmStrike, premium: findPrem('put', atmStrike) });
+      break;
+    case 'strangle':
+      addStrategyLeg({ side: 'long', type: 'call', strike: atmStrike + step * 2, premium: findPrem('call', atmStrike + step * 2) });
+      addStrategyLeg({ side: 'long', type: 'put', strike: atmStrike - step * 2, premium: findPrem('put', atmStrike - step * 2) });
+      break;
+    case 'ironCondor': {
+      const ps = atmStrike - step * 3;
+      const pbs = atmStrike - step * 2;
+      const css = atmStrike + step * 2;
+      const cbs = atmStrike + step * 3;
+      addStrategyLeg({ side: 'long', type: 'put', strike: ps, premium: findPrem('put', ps) });
+      addStrategyLeg({ side: 'short', type: 'put', strike: pbs, premium: findPrem('put', pbs) });
+      addStrategyLeg({ side: 'short', type: 'call', strike: css, premium: findPrem('call', css) });
+      addStrategyLeg({ side: 'long', type: 'call', strike: cbs, premium: findPrem('call', cbs) });
+      break;
+    }
+    case 'butterfly': {
+      const low = atmStrike - step * 2;
+      const high = atmStrike + step * 2;
+      addStrategyLeg({ side: 'long', type: 'call', strike: low, premium: findPrem('call', low) });
+      addStrategyLeg({ side: 'short', type: 'call', strike: atmStrike, premium: findPrem('call', atmStrike), quantity: 2 });
+      addStrategyLeg({ side: 'long', type: 'call', strike: high, premium: findPrem('call', high) });
+      break;
+    }
+    default:
+      break;
+  }
 }
 
 // ---- ORDER FLOW FEED (Engine-Powered) ----
@@ -1534,10 +2221,11 @@ function init() {
   drawVolumeChart();
   drawSparklines();
   populateOptionsChain();
-  drawPnLChart();
   populateFlowFeed();
   drawAgentPerfChart();
   initSettingsApiKey();
+  setupOptionsControls();
+  setupStrategyBuilder();
 
   // Refresh AI insight cards on load (async, non-blocking)
   setTimeout(() => refreshInsightCards(), 1500);
@@ -1550,12 +2238,630 @@ window.addEventListener('resize', () => {
   resizeTimer = setTimeout(() => {
     drawCandlestickChart();
     drawVolumeChart();
-    drawPnLChart();
     drawAgentPerfChart();
     drawNetFlowChart();
+    // Redraw P&L if we have an active selection
+    if (optionsState.selectedContract) {
+      const c = optionsState.selectedContract;
+      selectContract(c.type, c.strike, c.data);
+    } else if (optionsState.strategyLegs.length > 0) {
+      updateStrategyPnL();
+    }
   }, 200);
 });
 
 document.addEventListener('DOMContentLoaded', init);
 // Also run immediately in case DOM is already loaded
 if (document.readyState !== 'loading') init();
+
+/* ============================================
+   TRADING AGENT UI INTEGRATION
+   Wires up agent cards, modals, settings
+   ============================================ */
+
+// --- Modal helpers ---
+function openModal(id) {
+  const modal = document.getElementById(id);
+  if (modal) modal.classList.add('active');
+}
+function closeModal(id) {
+  const modal = document.getElementById(id);
+  if (modal) modal.classList.remove('active');
+}
+// Close modal on overlay click
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.classList.remove('active');
+  });
+});
+
+// --- Default agent instances ---
+const defaultAgents = {
+  arb: null,
+  swing: null,
+  gamma: null,
+  meanrev: null,
+};
+
+function initDefaultAgents() {
+  if (typeof ArbitrageHunter === 'undefined') return; // Guard: strategies not loaded
+  defaultAgents.arb = new ArbitrageHunter({ id: 'arb-hunter' });
+  defaultAgents.swing = new SwingMomentum({ id: 'swing-momentum' });
+  defaultAgents.gamma = new GammaScalper({ id: 'gamma-scalper' });
+  defaultAgents.meanrev = new MeanReversion({ id: 'mean-reversion' });
+
+  AgentManager.register(defaultAgents.arb);
+  AgentManager.register(defaultAgents.swing);
+  AgentManager.register(defaultAgents.gamma);
+  AgentManager.register(defaultAgents.meanrev);
+}
+
+// --- Render agent cards ---
+function renderAgentCards() {
+  const grid = document.getElementById('agentsGrid');
+  if (!grid || typeof AgentManager === 'undefined') return;
+  grid.innerHTML = '';
+
+  const agents = AgentManager.getAll();
+  agents.forEach(agent => {
+    grid.appendChild(createAgentCard(agent));
+  });
+
+  // Deploy new agent card
+  const deployCard = document.createElement('div');
+  deployCard.className = 'agent-card new-agent';
+  deployCard.innerHTML = `
+    <div class="new-agent-inner">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M12 5v14M5 12h14"/></svg>
+      <h3>Deploy New Agent</h3>
+      <p>Choose from pre-built strategies or configure a custom agent</p>
+      <div class="new-agent-templates">
+        <span class="template-tag">Arbitrage Hunter</span>
+        <span class="template-tag">Swing Momentum</span>
+        <span class="template-tag">Gamma Scalper</span>
+        <span class="template-tag">Mean Reversion</span>
+      </div>
+    </div>
+  `;
+  deployCard.addEventListener('click', () => openModal('deployAgentModal'));
+  grid.appendChild(deployCard);
+}
+
+function createAgentCard(agent) {
+  const stats = agent.getStats();
+  const pnl = agent.getPnL();
+  const isRunning = agent.state === AgentState.RUNNING;
+  const isPaused = agent.state === AgentState.PAUSED;
+  const isStopped = agent.state === AgentState.STOPPED;
+  const stateClass = isRunning ? 'running' : isPaused ? 'paused' : 'stopped';
+  const stateLabel = isRunning ? 'RUNNING' : isPaused ? 'PAUSED' : 'STOPPED';
+  const simLabel = agent.simulationMode ? ' (SIM)' : '';
+
+  const card = document.createElement('div');
+  card.className = `agent-card${isRunning ? ' active' : ''}`;
+  card.id = `card-${agent.id}`;
+
+  const pnlClass = pnl.total >= 0 ? 'profit' : 'loss';
+  const pnlSign = pnl.total >= 0 ? '+' : '';
+
+  // Build positions HTML if any
+  let positionsHtml = '';
+  const positions = agent.getPositions();
+  if (positions.length > 0) {
+    positionsHtml = `<div class="agent-positions"><div class="ap-header">Open Positions</div>`;
+    positions.forEach(pos => {
+      const currentPrice = agent._simPrices?.[pos.symbol] || pos.avgPrice;
+      const pctChange = pos.side === 'long'
+        ? ((currentPrice - pos.avgPrice) / pos.avgPrice * 100)
+        : ((pos.avgPrice - currentPrice) / pos.avgPrice * 100);
+      const posClass = pctChange >= 0 ? 'profit' : 'loss';
+      const posSign = pctChange >= 0 ? '+' : '';
+      positionsHtml += `
+        <div class="ap-row ${posClass}">
+          <span>${pos.symbol} ${pos.side === 'long' ? 'Long' : 'Short'} @ $${pos.avgPrice.toFixed(2)}</span>
+          <span class="${posClass}">${posSign}${pctChange.toFixed(1)}%</span>
+          <span>Qty: ${pos.qty}</span>
+        </div>`;
+    });
+    positionsHtml += '</div>';
+  }
+
+  card.innerHTML = `
+    <div class="agent-header">
+      <div class="agent-status-dot ${stateClass}"></div>
+      <h3 class="agent-name">${agent.name}</h3>
+      <span class="agent-badge ${stateClass}">${stateLabel}${simLabel}</span>
+    </div>
+    <div class="agent-desc">${agent.description}</div>
+    <div class="agent-stats">
+      <div class="agent-stat">
+        <span class="as-label">Strategy</span>
+        <span class="as-value">${agent.strategy}</span>
+      </div>
+      <div class="agent-stat">
+        <span class="as-label">Total P&L</span>
+        <span class="as-value ${pnlClass}">${pnlSign}$${Math.abs(pnl.total).toFixed(0)}</span>
+      </div>
+      <div class="agent-stat">
+        <span class="as-label">Win Rate</span>
+        <span class="as-value">${stats.winRate.toFixed(1)}%</span>
+      </div>
+      <div class="agent-stat">
+        <span class="as-label">Trades</span>
+        <span class="as-value">${stats.totalTrades}</span>
+      </div>
+      <div class="agent-stat">
+        <span class="as-label">Positions</span>
+        <span class="as-value">${stats.positionCount}</span>
+      </div>
+      <div class="agent-stat">
+        <span class="as-label">Max Drawdown</span>
+        <span class="as-value ${stats.maxDrawdown > 0 ? 'loss' : ''}">${stats.maxDrawdown > 0 ? '-' : ''}${stats.maxDrawdown.toFixed(1)}%</span>
+      </div>
+    </div>
+    ${positionsHtml}
+    <div class="agent-controls">
+      ${isRunning
+        ? `<button class="agent-btn pause" data-action="pause" data-agent="${agent.id}">Pause</button>`
+        : `<button class="agent-btn start" data-action="start" data-agent="${agent.id}">${isPaused ? 'Resume' : 'Start'}</button>`
+      }
+      <button class="agent-btn" data-action="configure" data-agent="${agent.id}">Configure</button>
+      <button class="agent-btn" data-action="logs" data-agent="${agent.id}">Logs</button>
+      ${isStopped ? `<button class="agent-btn" data-action="remove" data-agent="${agent.id}" style="color:var(--loss)">Remove</button>` : ''}
+    </div>
+  `;
+
+  // Wire up button events
+  card.querySelectorAll('[data-action]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleAgentAction(btn.dataset.action, btn.dataset.agent);
+    });
+  });
+
+  return card;
+}
+
+function handleAgentAction(action, agentId) {
+  const agent = AgentManager.get(agentId);
+  if (!agent) return;
+
+  switch (action) {
+    case 'start':
+      if (agent.state === AgentState.PAUSED) {
+        agent.resume();
+      } else {
+        agent.start();
+      }
+      break;
+    case 'pause':
+      agent.pause();
+      break;
+    case 'configure':
+      openConfigModal(agent);
+      break;
+    case 'logs':
+      openLogsModal(agent);
+      break;
+    case 'remove':
+      if (agent.state !== AgentState.STOPPED) agent.stop();
+      AgentManager.unregister(agentId);
+      renderAgentCards();
+      break;
+  }
+}
+
+// --- Logs Modal ---
+let _currentLogsAgent = null;
+let _logsRefreshTimer = null;
+
+function openLogsModal(agent) {
+  _currentLogsAgent = agent;
+  const title = document.getElementById('logsModalTitle');
+  if (title) title.textContent = `${agent.name} - Logs`;
+
+  // Wire filter buttons
+  document.querySelectorAll('.log-filter-btn').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('.log-filter-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      renderLogs(btn.dataset.level);
+    };
+  });
+
+  renderLogs('all');
+  openModal('agentLogsModal');
+
+  // Auto-refresh logs
+  if (_logsRefreshTimer) clearInterval(_logsRefreshTimer);
+  _logsRefreshTimer = setInterval(() => {
+    if (!document.getElementById('agentLogsModal').classList.contains('active')) {
+      clearInterval(_logsRefreshTimer);
+      return;
+    }
+    const activeFilter = document.querySelector('.log-filter-btn.active')?.dataset.level || 'all';
+    renderLogs(activeFilter);
+  }, 2000);
+}
+
+function renderLogs(filter) {
+  const container = document.getElementById('logsContainer');
+  if (!container || !_currentLogsAgent) return;
+
+  let logs = _currentLogsAgent.logs;
+  if (filter !== 'all') {
+    logs = logs.filter(l => l.level === filter);
+  }
+
+  if (logs.length === 0) {
+    container.innerHTML = '<div class="log-empty">No logs matching filter. Start the agent to see activity.</div>';
+    return;
+  }
+
+  container.innerHTML = logs.slice(-200).reverse().map(log => {
+    const levelClass = {
+      info: 'log-info', warn: 'log-warn', error: 'log-error',
+      trade: 'log-trade', signal: 'log-signal',
+    }[log.level] || 'log-info';
+    return `<div class="log-entry ${levelClass}">${log.format()}</div>`;
+  }).join('');
+}
+
+// --- Configure Modal ---
+let _currentConfigAgent = null;
+
+function openConfigModal(agent) {
+  _currentConfigAgent = agent;
+  const title = document.getElementById('configModalTitle');
+  if (title) title.textContent = `Configure: ${agent.name}`;
+
+  const body = document.getElementById('configModalBody');
+  if (!body) return;
+
+  body.innerHTML = `
+    <div class="config-grid">
+      <div class="setting-row">
+        <div class="setting-info"><span class="setting-name">Max Position Size ($)</span></div>
+        <input type="number" class="setting-input" id="cfgMaxPos" value="${agent.maxPositionSize}">
+      </div>
+      <div class="setting-row">
+        <div class="setting-info"><span class="setting-name">Daily Loss Limit ($)</span></div>
+        <input type="number" class="setting-input" id="cfgDailyLoss" value="${agent.dailyLossLimit}">
+      </div>
+      <div class="setting-row">
+        <div class="setting-info"><span class="setting-name">Max Positions</span></div>
+        <input type="number" class="setting-input" id="cfgMaxPositions" value="${agent.maxPositions}">
+      </div>
+      <div class="setting-row">
+        <div class="setting-info"><span class="setting-name">Tick Interval (ms)</span></div>
+        <input type="number" class="setting-input" id="cfgTickInterval" value="${agent.tickInterval}">
+      </div>
+      <div class="setting-row">
+        <div class="setting-info"><span class="setting-name">Symbols (comma-separated)</span></div>
+        <input type="text" class="setting-input" id="cfgSymbols" value="${agent.symbols.join(', ')}">
+      </div>
+    </div>
+  `;
+
+  document.getElementById('saveConfigBtn').onclick = () => {
+    if (!_currentConfigAgent) return;
+    const wasRunning = _currentConfigAgent.state === AgentState.RUNNING;
+    if (wasRunning) _currentConfigAgent.pause();
+
+    _currentConfigAgent.maxPositionSize = parseInt(document.getElementById('cfgMaxPos').value) || 10000;
+    _currentConfigAgent.dailyLossLimit = parseInt(document.getElementById('cfgDailyLoss').value) || 2000;
+    _currentConfigAgent.maxPositions = parseInt(document.getElementById('cfgMaxPositions').value) || 5;
+    _currentConfigAgent.tickInterval = parseInt(document.getElementById('cfgTickInterval').value) || 5000;
+    _currentConfigAgent.symbols = document.getElementById('cfgSymbols').value.split(',').map(s => s.trim()).filter(Boolean);
+
+    if (wasRunning) _currentConfigAgent.resume();
+    closeModal('agentConfigModal');
+    renderAgentCards();
+  };
+
+  openModal('agentConfigModal');
+}
+
+// --- Deploy Agent Modal ---
+document.querySelectorAll('.deploy-strategy-card').forEach(card => {
+  card.addEventListener('click', () => {
+    if (typeof AgentManager === 'undefined') return;
+    const strategy = card.dataset.strategy;
+    let agent;
+    const id = `${strategy.toLowerCase()}-${Date.now()}`;
+    switch (strategy) {
+      case 'ArbitrageHunter':
+        agent = new ArbitrageHunter({ id });
+        break;
+      case 'SwingMomentum':
+        agent = new SwingMomentum({ id });
+        break;
+      case 'GammaScalper':
+        agent = new GammaScalper({ id });
+        break;
+      case 'MeanReversion':
+        agent = new MeanReversion({ id });
+        break;
+      default: return;
+    }
+    AgentManager.register(agent);
+    closeModal('deployAgentModal');
+    renderAgentCards();
+  });
+});
+
+// "Deploy New Agent" button in header
+document.getElementById('newAgentBtn')?.addEventListener('click', () => {
+  openModal('deployAgentModal');
+});
+
+// --- Settings: Alpaca ---
+function loadAlpacaSettings() {
+  const key = localStorage.getItem('alpaca_api_key') || '';
+  const secret = localStorage.getItem('alpaca_api_secret') || '';
+  const mode = localStorage.getItem('alpaca_paper_mode') !== 'false' ? 'paper' : 'live';
+
+  const keyEl = document.getElementById('settingAlpacaKey');
+  const secretEl = document.getElementById('settingAlpacaSecret');
+  const modeEl = document.getElementById('settingAlpacaMode');
+
+  if (keyEl) keyEl.value = key;
+  if (secretEl) secretEl.value = secret;
+  if (modeEl) modeEl.value = mode;
+
+  updateAlpacaStatus(key && secret);
+}
+
+function updateAlpacaStatus(connected) {
+  const desc = document.getElementById('alpacaStatusDesc');
+  if (!desc) return;
+  if (connected) {
+    desc.textContent = 'API keys saved. Click Test to verify.';
+    desc.style.color = 'var(--accent-gold)';
+  } else {
+    desc.textContent = 'Not configured - agents will run in simulation mode';
+    desc.style.color = 'var(--text-muted)';
+  }
+}
+
+document.getElementById('saveAlpacaBtn')?.addEventListener('click', () => {
+  const key = document.getElementById('settingAlpacaKey')?.value?.trim() || '';
+  const secret = document.getElementById('settingAlpacaSecret')?.value?.trim() || '';
+  const mode = document.getElementById('settingAlpacaMode')?.value || 'paper';
+
+  // Live mode confirmation
+  if (mode === 'live') {
+    openModal('liveTradeConfirmModal');
+    const check = document.getElementById('liveTradeConfirmCheck');
+    const btn = document.getElementById('confirmLiveBtn');
+    if (check) check.checked = false;
+    if (btn) btn.disabled = true;
+
+    check.onchange = () => { btn.disabled = !check.checked; };
+    btn.onclick = () => {
+      localStorage.setItem('alpaca_api_key', key);
+      localStorage.setItem('alpaca_api_secret', secret);
+      localStorage.setItem('alpaca_paper_mode', 'false');
+      closeModal('liveTradeConfirmModal');
+      updateAlpacaStatus(key && secret);
+    };
+    return;
+  }
+
+  localStorage.setItem('alpaca_api_key', key);
+  localStorage.setItem('alpaca_api_secret', secret);
+  localStorage.setItem('alpaca_paper_mode', 'true');
+  updateAlpacaStatus(key && secret);
+});
+
+document.getElementById('testAlpacaBtn')?.addEventListener('click', async () => {
+  const desc = document.getElementById('alpacaStatusDesc');
+  if (!desc) return;
+  desc.textContent = 'Testing connection...';
+  desc.style.color = 'var(--accent-gold)';
+
+  const key = document.getElementById('settingAlpacaKey')?.value?.trim() || '';
+  const secret = document.getElementById('settingAlpacaSecret')?.value?.trim() || '';
+  if (!key || !secret) {
+    desc.textContent = 'Enter API key and secret first';
+    desc.style.color = 'var(--loss)';
+    return;
+  }
+
+  localStorage.setItem('alpaca_api_key', key);
+  localStorage.setItem('alpaca_api_secret', secret);
+
+  if (typeof AlpacaClient !== 'undefined') {
+    const result = await AlpacaClient.getAccount();
+    if (result.error) {
+      desc.textContent = `Connection failed: ${result.message}`;
+      desc.style.color = 'var(--loss)';
+    } else {
+      const equity = parseFloat(result.equity || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+      const bp = parseFloat(result.buying_power || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+      desc.textContent = `Connected. Equity: ${equity}, Buying Power: ${bp}`;
+      desc.style.color = 'var(--profit)';
+    }
+  } else {
+    desc.textContent = 'AlpacaClient not loaded';
+    desc.style.color = 'var(--loss)';
+  }
+});
+
+// --- Live P&L refresh for agent cards + chart ---
+let _agentUITimer = null;
+
+function startAgentUIUpdates() {
+  if (_agentUITimer) clearInterval(_agentUITimer);
+  _agentUITimer = setInterval(() => {
+    if (typeof AgentManager === 'undefined') return;
+    AgentManager.getAll().forEach(agent => {
+      const card = document.getElementById(`card-${agent.id}`);
+      if (!card) return;
+
+      const stats = agent.getStats();
+      const pnl = agent.getPnL();
+      const stateClass = agent.state === AgentState.RUNNING ? 'running' : agent.state === AgentState.PAUSED ? 'paused' : 'stopped';
+      const stateLabel = agent.state === AgentState.RUNNING ? 'RUNNING' : agent.state === AgentState.PAUSED ? 'PAUSED' : 'STOPPED';
+      const simLabel = agent.simulationMode ? ' (SIM)' : '';
+
+      const badge = card.querySelector('.agent-badge');
+      if (badge) {
+        badge.className = `agent-badge ${stateClass}`;
+        badge.textContent = stateLabel + simLabel;
+      }
+
+      const dot = card.querySelector('.agent-status-dot');
+      if (dot) dot.className = `agent-status-dot ${stateClass}`;
+
+      card.className = `agent-card${agent.state === AgentState.RUNNING ? ' active' : ''}`;
+
+      const statValues = card.querySelectorAll('.as-value');
+      if (statValues.length >= 6) {
+        const pnlClass = pnl.total >= 0 ? 'profit' : 'loss';
+        const pnlSign = pnl.total >= 0 ? '+' : '';
+        statValues[1].className = `as-value ${pnlClass}`;
+        statValues[1].textContent = `${pnlSign}$${Math.abs(pnl.total).toFixed(0)}`;
+        statValues[2].textContent = `${stats.winRate.toFixed(1)}%`;
+        statValues[3].textContent = stats.totalTrades;
+        statValues[4].textContent = stats.positionCount;
+        statValues[5].className = `as-value${stats.maxDrawdown > 0 ? ' loss' : ''}`;
+        statValues[5].textContent = `${stats.maxDrawdown > 0 ? '-' : ''}${stats.maxDrawdown.toFixed(1)}%`;
+      }
+    });
+  }, 3000);
+}
+
+// --- Agent perf chart with real data ---
+function drawAgentPerfChartLive() {
+  const canvas = document.getElementById('agentPerfCanvas');
+  if (!canvas || typeof AgentManager === 'undefined') return;
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width;
+  canvas.height = rect.height;
+
+  const padding = { top: 20, right: 20, bottom: 30, left: 60 };
+  const w = canvas.width - padding.left - padding.right;
+  const h = canvas.height - padding.top - padding.bottom;
+
+  const agents = AgentManager.getAll();
+  const colors = ['#3B82F6', '#10B981', '#8B5CF6', '#F59E0B', '#EF4444', '#14B8A6'];
+
+  const agentData = agents.map((agent, i) => {
+    if (agent.dailyPnLHistory && agent.dailyPnLHistory.length > 1) {
+      const cum = [0];
+      agent.dailyPnLHistory.forEach(d => cum.push(cum[cum.length - 1] + d));
+      return { color: colors[i % colors.length], data: cum };
+    }
+    return { color: colors[i % colors.length], data: generateCumPnL(30, 100 + i * 30, 0.55 + i * 0.03) };
+  });
+
+  const days = Math.max(30, ...agentData.map(a => a.data.length));
+
+  let min = 0, max = 0;
+  agentData.forEach(a => { a.data.forEach(v => { min = Math.min(min, v); max = Math.max(max, v); }); });
+  max *= 1.1 || 1;
+  min = Math.min(min, -max * 0.1);
+
+  ctx.strokeStyle = '#1A1A24';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 4; i++) {
+    const y = padding.top + (h / 4) * i;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(canvas.width - padding.right, y);
+    ctx.stroke();
+    const val = max - ((max - min) / 4) * i;
+    ctx.fillStyle = '#5C5C6E';
+    ctx.font = '10px JetBrains Mono';
+    ctx.textAlign = 'right';
+    ctx.fillText('$' + val.toFixed(0), padding.left - 8, y + 3);
+  }
+
+  const zeroY = padding.top + (max / (max - min)) * h;
+  ctx.strokeStyle = '#2A2A38';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padding.left, zeroY);
+  ctx.lineTo(canvas.width - padding.right, zeroY);
+  ctx.stroke();
+
+  agentData.forEach(agentLine => {
+    const lineLen = agentLine.data.length;
+    ctx.beginPath();
+    agentLine.data.forEach((val, i) => {
+      const x = padding.left + (i / (Math.max(lineLen - 1, 1))) * w;
+      const y = padding.top + ((max - val) / (max - min)) * h;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = agentLine.color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    const lastX = padding.left + w;
+    ctx.lineTo(lastX, zeroY);
+    ctx.lineTo(padding.left, zeroY);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, padding.top, 0, padding.top + h);
+    grad.addColorStop(0, agentLine.color + '15');
+    grad.addColorStop(1, agentLine.color + '00');
+    ctx.fillStyle = grad;
+    ctx.fill();
+  });
+}
+
+// --- Initialize agent system on load ---
+function initAgentSystem() {
+  if (typeof AgentManager === 'undefined') return;
+  initDefaultAgents();
+  loadAlpacaSettings();
+  renderAgentCards();
+  startAgentUIUpdates();
+
+  setInterval(() => {
+    if (document.querySelector('[data-view="agents"]')?.classList?.contains('active') ||
+        document.getElementById('view-agents')?.classList?.contains('active')) {
+      drawAgentPerfChartLive();
+    }
+  }, 5000);
+
+  AgentManager.getAll().forEach(agent => {
+    agent.on('stateChange', () => renderAgentCards());
+    agent.on('guardrailTriggered', () => renderAgentCards());
+  });
+}
+
+// Load settings from localStorage for risk guardrails
+function loadRiskSettings() {
+  const maxPos = localStorage.getItem('setting_max_position');
+  const dailyLoss = localStorage.getItem('setting_daily_loss');
+  const maxAgents = localStorage.getItem('setting_max_agents');
+  const maxOrderQty = localStorage.getItem('setting_max_order_qty');
+
+  if (maxPos && document.getElementById('settingMaxPosition')) document.getElementById('settingMaxPosition').value = maxPos;
+  if (dailyLoss && document.getElementById('settingDailyLoss')) document.getElementById('settingDailyLoss').value = dailyLoss;
+  if (maxAgents && document.getElementById('settingMaxAgents')) document.getElementById('settingMaxAgents').value = maxAgents;
+  if (maxOrderQty && document.getElementById('settingMaxOrderQty')) document.getElementById('settingMaxOrderQty').value = maxOrderQty;
+}
+
+// Save risk settings when inputs change
+['settingMaxPosition', 'settingDailyLoss', 'settingMaxAgents', 'settingMaxOrderQty'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) {
+    el.addEventListener('change', () => {
+      localStorage.setItem(`setting_${id.replace('setting', '').toLowerCase()}`, el.value);
+    });
+  }
+});
+
+// Run agent system init when DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    initAgentSystem();
+    loadRiskSettings();
+  });
+} else {
+  initAgentSystem();
+  loadRiskSettings();
+}

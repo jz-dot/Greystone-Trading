@@ -1549,6 +1549,23 @@
               <option>GPT-4o</option>
             </select>
           </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Anthropic API Key</span>
+              <span class="setting-desc">Required for live Grey Sankore AI analysis</span>
+            </div>
+            <div class="setting-api-key-group">
+              <input type="password" class="setting-input" id="anthropicApiKeyInput" placeholder="sk-ant-..." autocomplete="off" style="flex: 1;">
+              <button class="setting-api-btn" id="saveApiKeyBtn">Save</button>
+            </div>
+          </div>
+          <div class="setting-row" id="apiKeyStatusRow" style="border-top: none; padding-top: 0;">
+            <div class="setting-info">
+              <span class="setting-name" style="font-size: 0.75rem;"></span>
+              <span class="setting-desc" id="apiKeyStatus" style="font-size: 0.8rem;">Checking connection...</span>
+            </div>
+            <div id="apiKeyStatusIndicator" class="api-status-indicator"></div>
+          </div>
         </div>
         <div class="panel settings-panel">
           <h3 class="settings-section-title">Risk Parameters</h3>
@@ -1594,6 +1611,7 @@
   </div>
 </div>
 
+<script src="services/grey-sankore.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

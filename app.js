@@ -742,41 +742,291 @@ function drawSparklines() {
   });
 }
 
-// ---- GS CHAT ----
+// ---- GS CHAT (AI-Powered) ----
 document.getElementById('gsChatSend')?.addEventListener('click', sendGsChat);
 document.getElementById('gsChatInput')?.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') sendGsChat();
+  if (e.key === 'Enter' && !e.shiftKey) sendGsChat();
 });
 
-function sendGsChat() {
+async function sendGsChat() {
   const input = document.getElementById('gsChatInput');
   const body = document.getElementById('gsChatBody');
   if (!input || !body || !input.value.trim()) return;
+  if (typeof GreySankore !== 'undefined' && GreySankore.isCurrentlyStreaming()) return;
 
   const msg = input.value.trim();
   input.value = '';
 
+  // Escape HTML in user message
+  const escapedMsg = msg.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
   // User message
   const userDiv = document.createElement('div');
   userDiv.className = 'gs-chat-message user';
-  userDiv.innerHTML = `<div class="gs-chat-avatar" style="background: var(--bg-tertiary); color: var(--text-secondary);">ZJ</div><div class="gs-chat-content"><p>${msg}</p></div>`;
+  userDiv.innerHTML = `<div class="gs-chat-avatar" style="background: var(--bg-tertiary); color: var(--text-secondary);">ZJ</div><div class="gs-chat-content"><p>${escapedMsg}</p></div>`;
   body.appendChild(userDiv);
-
-  // Simulated AI response
-  setTimeout(() => {
-    const aiDiv = document.createElement('div');
-    aiDiv.className = 'gs-chat-message ai';
-    const responses = [
-      `<p>Analyzing <strong>${msg.split(' ').find(w => w === w.toUpperCase() && w.length <= 5) || 'the market'}</strong>. Based on my multi-factor model:</p><ul><li>Current IV percentile sits at the 42nd percentile - not extreme in either direction</li><li>Options flow is net bullish with a 1.3:1 call/put premium ratio over the last 4 hours</li><li>Dark pool activity shows institutional accumulation with 3 block prints above $10M in the last session</li></ul><p>I'd classify this as a moderate conviction opportunity. The risk/reward improves if you structure it as a defined-risk spread rather than a naked directional position.</p>`,
-      `<p>Good question. Here's my current read on market conditions:</p><ul><li>The VIX at 18.73 suggests mild fear, but not panic - options are reasonably priced</li><li>Sector rotation is favoring tech and communication services, which typically precedes risk-on behavior</li><li>The 10Y yield ticking up could pressure growth names if it accelerates past 4.35%</li></ul><p>Net positioning: cautiously bullish, but sizing conservatively given the macro uncertainty. I'm watching FOMC minutes closely for rate path signals.</p>`,
-      `<p>Running my anomaly detection scan now. Three patterns stand out:</p><ul><li><strong>Volatility compression</strong> in mega-cap tech - BB width at 6-month lows for AAPL, MSFT, GOOGL. Historically precedes 3-5% directional moves</li><li><strong>Sector divergence</strong> between XLK (+2.4%) and XLU (-0.9%) widening to 2-sigma - risk appetite expanding</li><li><strong>Smart money flow</strong> into small-cap value (IWN) accelerating - 4 consecutive days of dark pool accumulation</li></ul><p>The small-cap signal is particularly interesting for the micro-cap universe. Want me to drill into specific names?</p>`
-    ];
-    aiDiv.innerHTML = `<div class="gs-chat-avatar">GS</div><div class="gs-chat-content">${responses[Math.floor(Math.random() * responses.length)]}</div>`;
-    body.appendChild(aiDiv);
-    body.scrollTop = body.scrollHeight;
-  }, 800);
-
   body.scrollTop = body.scrollHeight;
+
+  // Thinking indicator
+  const thinkingDiv = document.createElement('div');
+  thinkingDiv.className = 'gs-chat-message ai gs-thinking';
+  thinkingDiv.innerHTML = `<div class="gs-chat-avatar">GS</div><div class="gs-chat-content"><div class="gs-thinking-dots"><span></span><span></span><span></span></div></div>`;
+  body.appendChild(thinkingDiv);
+  body.scrollTop = body.scrollHeight;
+
+  // Disable input during response
+  input.disabled = true;
+  const sendBtn = document.getElementById('gsChatSend');
+  if (sendBtn) sendBtn.disabled = true;
+
+  try {
+    const context = typeof GreySankore !== 'undefined' ? GreySankore.gatherContext() : {};
+    const result = await GreySankore.chat(msg, context);
+
+    // Remove thinking indicator
+    if (thinkingDiv.parentNode) thinkingDiv.remove();
+
+    if (!result) {
+      input.disabled = false;
+      if (sendBtn) sendBtn.disabled = false;
+      return;
+    }
+
+    if (result.type === 'error') {
+      const errorDiv = document.createElement('div');
+      errorDiv.className = 'gs-chat-message ai';
+      let errorHtml;
+      if (result.error === 'no_api_key') {
+        errorHtml = `<p style="color: var(--warning);">No API key configured.</p><p>Go to <strong>Settings</strong> and enter your Anthropic API key to enable live AI analysis. Using fallback responses in the meantime.</p>`;
+      } else {
+        errorHtml = `<p style="color: var(--loss);">Error: ${result.message}</p>`;
+      }
+      errorDiv.innerHTML = `<div class="gs-chat-avatar">GS</div><div class="gs-chat-content">${errorHtml}</div>`;
+      body.appendChild(errorDiv);
+      body.scrollTop = body.scrollHeight;
+    } else if (result.type === 'mock') {
+      // Mock fallback response with typing effect
+      const aiDiv = document.createElement('div');
+      aiDiv.className = 'gs-chat-message ai';
+      aiDiv.innerHTML = `<div class="gs-chat-avatar">GS</div><div class="gs-chat-content"></div>`;
+      body.appendChild(aiDiv);
+      const contentDiv = aiDiv.querySelector('.gs-chat-content');
+      await typewriteHtml(contentDiv, result.html, body);
+    } else if (result.type === 'stream') {
+      // Streaming AI response
+      const aiDiv = document.createElement('div');
+      aiDiv.className = 'gs-chat-message ai';
+      aiDiv.innerHTML = `<div class="gs-chat-avatar">GS</div><div class="gs-chat-content"><span class="gs-stream-cursor"></span></div>`;
+      body.appendChild(aiDiv);
+      const contentDiv = aiDiv.querySelector('.gs-chat-content');
+      let accumulatedText = '';
+
+      await result.read(
+        // onChunk
+        function (chunk, fullText) {
+          accumulatedText = fullText;
+          contentDiv.innerHTML = formatStreamText(fullText) + '<span class="gs-stream-cursor"></span>';
+          body.scrollTop = body.scrollHeight;
+        },
+        // onDone
+        function (fullText, error) {
+          const cursor = contentDiv.querySelector('.gs-stream-cursor');
+          if (cursor) cursor.remove();
+          if (error) {
+            contentDiv.innerHTML += `<p style="color: var(--loss); font-size: 0.8rem; margin-top: 8px;">Stream interrupted: ${error}</p>`;
+          }
+          if (fullText) {
+            contentDiv.innerHTML = formatStreamText(fullText);
+          }
+          body.scrollTop = body.scrollHeight;
+        }
+      );
+    }
+  } catch (e) {
+    if (thinkingDiv.parentNode) thinkingDiv.remove();
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'gs-chat-message ai';
+    errorDiv.innerHTML = `<div class="gs-chat-avatar">GS</div><div class="gs-chat-content"><p style="color: var(--loss);">Connection error. Make sure the server is running (npm start).</p></div>`;
+    body.appendChild(errorDiv);
+  }
+
+  // Re-enable input
+  input.disabled = false;
+  if (sendBtn) sendBtn.disabled = false;
+  input.focus();
+  body.scrollTop = body.scrollHeight;
+}
+
+// Format streamed text (may contain raw text or HTML)
+function formatStreamText(text) {
+  // If the AI already returned HTML tags, use as-is
+  if (/<[a-z][\s\S]*>/i.test(text)) {
+    return text;
+  }
+  // Otherwise, convert plain text to basic HTML
+  return text
+    .split('\n\n').map(p => `<p>${p}</p>`).join('')
+    .replace(/\n/g, '<br>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+}
+
+// Typewrite effect for mock/fallback HTML responses
+async function typewriteHtml(container, html, scrollParent) {
+  return new Promise(resolve => {
+    // Parse the HTML and insert it piece by piece
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = html;
+    const fullText = tempDiv.textContent || tempDiv.innerText;
+    const words = fullText.split(/(\s+)/);
+    let wordIndex = 0;
+
+    // Just render the full HTML with a fade-in effect for mock responses
+    container.style.opacity = '0';
+    container.innerHTML = html;
+    container.style.transition = 'opacity 0.4s ease';
+    requestAnimationFrame(() => {
+      container.style.opacity = '1';
+      if (scrollParent) scrollParent.scrollTop = scrollParent.scrollHeight;
+    });
+    setTimeout(resolve, 500);
+  });
+}
+
+// ---- DASHBOARD INSIGHT CARDS (AI-powered) ----
+async function refreshInsightCards() {
+  if (typeof GreySankore === 'undefined') return;
+
+  const insightsBody = document.querySelector('.gs-insights-body');
+  if (!insightsBody) return;
+
+  const context = GreySankore.gatherContext();
+  const result = await GreySankore.generateInsights(context.marketData);
+
+  if (!result || !result.insights || result.insights.length === 0) return;
+
+  // SVG icons by type
+  const icons = {
+    anomaly: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    value: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>',
+    momentum: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>'
+  };
+
+  const timeLabels = ['Just now', '3 min ago', '7 min ago'];
+
+  insightsBody.innerHTML = '';
+  result.insights.forEach((insight, i) => {
+    const card = document.createElement('div');
+    card.className = `gs-insight-card ${insight.type || 'anomaly'}`;
+    const icon = icons[insight.type] || icons.anomaly;
+    const typeLabel = insight.typeLabel || insight.type?.toUpperCase() || 'INSIGHT';
+    const confidenceClass = insight.confidence || 'medium';
+    const confidenceLabel = insight.label || (confidenceClass === 'high' ? 'High Conviction' : confidenceClass === 'medium' ? 'Medium Conviction' : 'Low Conviction');
+
+    card.innerHTML = `
+      <div class="insight-type">
+        ${icon}
+        ${typeLabel}
+      </div>
+      <div class="insight-content">
+        <strong>${insight.ticker || ''}</strong>${insight.ticker ? ' - ' : ''}${insight.content || ''}
+      </div>
+      <div class="insight-meta">
+        <span class="insight-time">${timeLabels[i] || 'Just now'}</span>
+        <span class="insight-confidence ${confidenceClass}">${confidenceLabel}</span>
+      </div>
+    `;
+    insightsBody.appendChild(card);
+  });
+}
+
+// ---- SETTINGS: API KEY MANAGEMENT ----
+function initSettingsApiKey() {
+  const input = document.getElementById('anthropicApiKeyInput');
+  const saveBtn = document.getElementById('saveApiKeyBtn');
+  const statusEl = document.getElementById('apiKeyStatus');
+  const indicatorEl = document.getElementById('apiKeyStatusIndicator');
+
+  if (!input || !saveBtn) return;
+
+  // Load saved key display
+  const savedKey = localStorage.getItem('gs_anthropic_key');
+  if (savedKey) {
+    input.placeholder = savedKey.slice(0, 10) + '...' + savedKey.slice(-4);
+  }
+
+  // Save button handler
+  saveBtn.addEventListener('click', async () => {
+    const key = input.value.trim();
+    if (!key) return;
+
+    saveBtn.textContent = 'Saving...';
+    saveBtn.disabled = true;
+
+    const result = await GreySankore.saveApiKey(key);
+
+    if (result.success) {
+      input.value = '';
+      input.placeholder = key.slice(0, 10) + '...' + key.slice(-4);
+      saveBtn.textContent = 'Saved';
+
+      // Validate the key
+      const validation = await GreySankore.validateApiKey();
+      updateApiStatus(statusEl, indicatorEl, validation);
+
+      // Refresh insights with new key
+      refreshInsightCards();
+    } else {
+      saveBtn.textContent = 'Error';
+      if (statusEl) {
+        statusEl.textContent = result.error || 'Failed to save key';
+        statusEl.style.color = 'var(--loss)';
+      }
+    }
+
+    setTimeout(() => {
+      saveBtn.textContent = 'Save';
+      saveBtn.disabled = false;
+    }, 2000);
+  });
+
+  // Check initial status
+  checkAndDisplayApiStatus(statusEl, indicatorEl);
+}
+
+async function checkAndDisplayApiStatus(statusEl, indicatorEl) {
+  if (typeof GreySankore === 'undefined') return;
+
+  // First, restore key from localStorage to server
+  await GreySankore.restoreApiKey();
+
+  const configured = await GreySankore.checkApiStatus();
+
+  if (configured) {
+    const validation = await GreySankore.validateApiKey();
+    updateApiStatus(statusEl, indicatorEl, validation);
+  } else {
+    updateApiStatus(statusEl, indicatorEl, { valid: false, message: 'No API key configured. Using mock responses.' });
+  }
+}
+
+function updateApiStatus(statusEl, indicatorEl, validation) {
+  if (!statusEl) return;
+
+  if (validation.valid) {
+    statusEl.textContent = 'Connected - ' + (validation.message || 'API key valid');
+    statusEl.style.color = 'var(--profit)';
+    if (indicatorEl) {
+      indicatorEl.className = 'api-status-indicator connected';
+      indicatorEl.textContent = 'LIVE';
+    }
+  } else {
+    statusEl.textContent = validation.message || 'Not connected';
+    statusEl.style.color = 'var(--warning)';
+    if (indicatorEl) {
+      indicatorEl.className = 'api-status-indicator disconnected';
+      indicatorEl.textContent = 'OFFLINE';
+    }
+  }
 }
 
 // ---- LIVE FLOW SIMULATION ----
@@ -846,13 +1096,7 @@ document.querySelectorAll('.wl-row').forEach(row => {
 });
 
 // ---- SIMULATED LIVE PRICE UPDATES ----
-// Only runs when live market data is unavailable (graceful degradation)
-let _simulatedPriceInterval = null;
-
 function simulatePriceUpdate() {
-  // Skip simulated updates if live data is active
-  if (typeof MarketData !== 'undefined' && MarketData.isConnected()) return;
-
   const rows = document.querySelectorAll('.wl-row');
   if (!rows.length) return;
   const row = rows[Math.floor(Math.random() * rows.length)];
@@ -881,7 +1125,7 @@ function simulatePriceUpdate() {
   }
   setTimeout(() => row.classList.remove('flash-up', 'flash-down'), 600);
 }
-_simulatedPriceInterval = setInterval(simulatePriceUpdate, 1500);
+setInterval(simulatePriceUpdate, 1500);
 
 // ---- INIT ----
 function init() {
@@ -892,11 +1136,10 @@ function init() {
   drawPnLChart();
   populateFlowFeed();
   drawAgentPerfChart();
+  initSettingsApiKey();
 
-  // Initialize live market data (falls back to simulated data if server unavailable)
-  if (typeof MarketData !== 'undefined') {
-    MarketData.init();
-  }
+  // Refresh AI insight cards on load (async, non-blocking)
+  setTimeout(() => refreshInsightCards(), 1500);
 }
 
 // Redraw on resize

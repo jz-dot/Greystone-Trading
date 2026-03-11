@@ -1,7 +1,7 @@
 {
   "name": "greystone-trading",
   "version": "1.0.0",
-  "description": "Greystone Trading Platform - Institutional-grade market intelligence dashboard",
+  "description": "Greystone Trading Platform with Grey Sankore AI",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

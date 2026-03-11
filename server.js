@@ -1254,6 +1254,71 @@ app.delete('/api/user/api-keys/:id', requireAuth, async (req, res) => {
 });
 
 // ============================================
+// NEWS FEED ENDPOINT
+// ============================================
+
+const newsCache = { data: null, timestamp: 0 };
+const NEWS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+function generateMockNews(symbols) {
+  const now = Date.now();
+  const allNews = [
+    { headline: 'NVIDIA Surges on Record Data Center Revenue, AI Demand Accelerates', source: 'Reuters', time: now - 120000, sentiment: 'bullish', tickers: ['NVDA'], category: 'top' },
+    { headline: 'Federal Reserve Signals Patience on Rate Cuts Amid Sticky Inflation', source: 'Bloomberg', time: now - 300000, sentiment: 'bearish', tickers: ['SPY','QQQ'], category: 'top' },
+    { headline: 'Apple Announces New AI Features Coming to iPhone 17 Lineup', source: 'CNBC', time: now - 480000, sentiment: 'bullish', tickers: ['AAPL'], category: 'top' },
+    { headline: 'Tesla Deliveries Miss Estimates for Q1, Shares Under Pressure', source: 'MarketWatch', time: now - 720000, sentiment: 'bearish', tickers: ['TSLA'], category: 'top' },
+    { headline: 'Microsoft Azure Growth Reaccelerates, Cloud Spending Cycle Intact', source: 'The Information', time: now - 900000, sentiment: 'bullish', tickers: ['MSFT'], category: 'top' },
+    { headline: 'Amazon Web Services Wins Major Government Cloud Contract', source: 'WSJ', time: now - 1200000, sentiment: 'bullish', tickers: ['AMZN'], category: 'top' },
+    { headline: 'Meta Platforms Increases Capital Expenditure Guidance for AI Infrastructure', source: 'Reuters', time: now - 1500000, sentiment: 'neutral', tickers: ['META'], category: 'top' },
+    { headline: 'Palantir Secures $480M Pentagon Contract for AI Defense Platform', source: 'Defense News', time: now - 1800000, sentiment: 'bullish', tickers: ['PLTR'], category: 'top' },
+    { headline: 'JPMorgan Warns of Rising Credit Card Delinquencies in Consumer Banking', source: 'Financial Times', time: now - 2100000, sentiment: 'bearish', tickers: ['JPM'], category: 'top' },
+    { headline: 'Coinbase Volume Surges as Bitcoin Breaks New All-Time Highs', source: 'CoinDesk', time: now - 2400000, sentiment: 'bullish', tickers: ['COIN'], category: 'top' },
+    { headline: 'AMD Unveils Next-Gen MI400 AI Chip to Challenge NVIDIA Dominance', source: 'Tom\'s Hardware', time: now - 2700000, sentiment: 'bullish', tickers: ['AMD'], category: 'top' },
+    { headline: 'Disney Streaming Subscriber Growth Slows, Ad Tier Shows Promise', source: 'Variety', time: now - 3000000, sentiment: 'neutral', tickers: ['DIS'], category: 'top' },
+    { headline: 'Google Cloud Revenue Crosses $40B Annual Run Rate', source: 'TechCrunch', time: now - 3300000, sentiment: 'bullish', tickers: ['GOOGL'], category: 'top' },
+    { headline: 'VIX Spikes Above 20 Amid Geopolitical Uncertainty in Middle East', source: 'Bloomberg', time: now - 3600000, sentiment: 'bearish', tickers: ['SPY'], category: 'top' },
+    { headline: 'Semiconductor Equipment Orders Surge, Signaling Capacity Build-Out', source: 'SEMI', time: now - 4200000, sentiment: 'bullish', tickers: ['NVDA','AMD'], category: 'top' },
+    // Earnings-specific news
+    { headline: 'NVIDIA Q4 Earnings Preview: Street Expects Massive Beat on AI Momentum', source: 'Seeking Alpha', time: now - 600000, sentiment: 'bullish', tickers: ['NVDA'], category: 'earnings' },
+    { headline: 'Apple Earnings This Week: Services Revenue Key to Beating Estimates', source: 'Barron\'s', time: now - 900000, sentiment: 'neutral', tickers: ['AAPL'], category: 'earnings' },
+    { headline: 'AMD Earnings: Can Data Center Segment Offset PC Weakness?', source: 'Motley Fool', time: now - 1400000, sentiment: 'neutral', tickers: ['AMD'], category: 'earnings' },
+    { headline: 'Meta Earnings Expected to Show Strong Reels Monetization Progress', source: 'The Verge', time: now - 2000000, sentiment: 'bullish', tickers: ['META'], category: 'earnings' },
+  ];
+
+  let filtered = allNews;
+  if (symbols && symbols.length > 0) {
+    const symSet = new Set(symbols.map(s => s.toUpperCase()));
+    filtered = allNews.filter(n => n.tickers.some(t => symSet.has(t)));
+  }
+  return filtered;
+}
+
+app.get('/api/news', (req, res) => {
+  const symbols = req.query.symbols ? req.query.symbols.split(',') : [];
+  const category = req.query.category || 'all';
+
+  // Check cache
+  const now = Date.now();
+  if (newsCache.data && (now - newsCache.timestamp) < NEWS_CACHE_TTL && !symbols.length) {
+    let data = newsCache.data;
+    if (category !== 'all') data = data.filter(n => n.category === category);
+    return res.json({ news: data, cached: true });
+  }
+
+  // Generate fresh mock news
+  const news = generateMockNews(symbols);
+  if (!symbols.length) {
+    newsCache.data = news;
+    newsCache.timestamp = now;
+  }
+
+  let result = news;
+  if (category !== 'all') result = result.filter(n => n.category === category);
+
+  res.json({ news: result, cached: false });
+});
+
+// ============================================
 // STATIC FILES & SERVER START
 // ============================================
 
@@ -1314,6 +1379,9 @@ app.listen(PORT, function () {
   console.log('    POST /api/alpaca/order');
   console.log('    GET  /api/alpaca/orders');
   console.log('    GET  /api/health');
+  console.log('');
+  console.log('  News Feed:');
+  console.log('    GET /api/news?symbols=AAPL,NVDA&category=top');
   console.log('');
   console.log('  Supabase Auth:');
   console.log('    Configured: ' + (SUPABASE_URL ? 'Yes' : 'No (guest mode only)'));

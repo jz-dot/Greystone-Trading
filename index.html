@@ -1,0 +1,1526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Greystone Trading Platform</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- TOP BAR -->
+<header class="topbar">
+  <div class="topbar-left">
+    <div class="logo">
+      <div class="logo-icon">GS</div>
+      <div class="logo-text">
+        <span class="logo-name">GREYSTONE</span>
+        <span class="logo-sub">TRADING PLATFORM</span>
+      </div>
+    </div>
+  </div>
+  <div class="topbar-ticker" id="marketTicker">
+    <!-- Populated by JS -->
+  </div>
+  <div class="topbar-right">
+    <div class="market-status">
+      <span class="status-dot live"></span>
+      <span class="status-text">MARKET OPEN</span>
+    </div>
+    <div class="topbar-time" id="clockDisplay"></div>
+    <div class="topbar-user">
+      <div class="user-avatar">ZJ</div>
+    </div>
+  </div>
+</header>
+
+<!-- MAIN LAYOUT -->
+<div class="app-layout">
+
+  <!-- SIDEBAR -->
+  <nav class="sidebar">
+    <div class="sidebar-nav">
+      <button class="nav-btn active" data-view="dashboard" title="Dashboard">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="7" height="7" rx="1"/>
+          <rect x="14" y="3" width="7" height="7" rx="1"/>
+          <rect x="3" y="14" width="7" height="7" rx="1"/>
+          <rect x="14" y="14" width="7" height="7" rx="1"/>
+        </svg>
+        <span>Dashboard</span>
+      </button>
+      <button class="nav-btn" data-view="options" title="Options Chain">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M3 3v18h18"/>
+          <path d="M7 16l4-8 4 4 5-9"/>
+        </svg>
+        <span>Options</span>
+      </button>
+      <button class="nav-btn" data-view="greysankore" title="Grey Sankore AI">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+          <path d="M2 17l10 5 10-5"/>
+          <path d="M2 12l10 5 10-5"/>
+        </svg>
+        <span>Grey Sankore</span>
+      </button>
+      <button class="nav-btn" data-view="flow" title="Order Flow">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+        </svg>
+        <span>Flow</span>
+      </button>
+      <button class="nav-btn" data-view="agents" title="Trading Agents">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+        </svg>
+        <span>Agents</span>
+      </button>
+      <button class="nav-btn" data-view="risk" title="Risk Analytics">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+        <span>Risk</span>
+      </button>
+    </div>
+    <div class="sidebar-bottom">
+      <button class="nav-btn" data-view="settings" title="Settings">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+        </svg>
+        <span>Settings</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- MAIN CONTENT -->
+  <main class="main-content">
+
+    <!-- ===================== DASHBOARD VIEW ===================== -->
+    <div class="view active" id="view-dashboard">
+
+      <!-- Cap Size Toggle -->
+      <div class="view-header">
+        <div class="view-title">
+          <h1>Market Dashboard</h1>
+          <span class="view-subtitle">Real-time market intelligence</span>
+        </div>
+        <div class="cap-toggle">
+          <button class="cap-btn active" data-cap="large">Large Cap</button>
+          <button class="cap-btn" data-cap="mid">Mid Cap</button>
+          <button class="cap-btn" data-cap="small">Small Cap</button>
+          <button class="cap-btn" data-cap="micro">Micro Cap</button>
+        </div>
+        <div class="view-actions">
+          <div class="search-box">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+            <input type="text" placeholder="Search ticker... (Ctrl+K)" id="tickerSearch">
+          </div>
+        </div>
+      </div>
+
+      <!-- Market Summary Cards -->
+      <div class="metric-cards">
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-label">S&P 500</span>
+            <span class="metric-badge profit">+1.24%</span>
+          </div>
+          <div class="metric-value">5,842.31</div>
+          <div class="metric-sparkline" id="spark-sp500"></div>
+          <div class="metric-footer">
+            <span class="metric-change profit">+71.82</span>
+            <span class="metric-vol">Vol: 2.4B</span>
+          </div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-label">NASDAQ</span>
+            <span class="metric-badge profit">+1.67%</span>
+          </div>
+          <div class="metric-value">18,432.78</div>
+          <div class="metric-sparkline" id="spark-nasdaq"></div>
+          <div class="metric-footer">
+            <span class="metric-change profit">+302.14</span>
+            <span class="metric-vol">Vol: 5.1B</span>
+          </div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-label">DOW</span>
+            <span class="metric-badge loss">-0.32%</span>
+          </div>
+          <div class="metric-value">42,156.09</div>
+          <div class="metric-sparkline" id="spark-dow"></div>
+          <div class="metric-footer">
+            <span class="metric-change loss">-134.71</span>
+            <span class="metric-vol">Vol: 892M</span>
+          </div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-label">VIX</span>
+            <span class="metric-badge loss">+8.42%</span>
+          </div>
+          <div class="metric-value">18.73</div>
+          <div class="metric-sparkline" id="spark-vix"></div>
+          <div class="metric-footer">
+            <span class="metric-change loss">+1.46</span>
+            <span class="metric-vol">Fear: Moderate</span>
+          </div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-label">10Y YIELD</span>
+            <span class="metric-badge loss">+2.1bp</span>
+          </div>
+          <div class="metric-value">4.287%</div>
+          <div class="metric-sparkline" id="spark-yield"></div>
+          <div class="metric-footer">
+            <span class="metric-change neutral">+0.021</span>
+            <span class="metric-vol">Curve: Normal</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main Chart + Watchlist Row -->
+      <div class="dashboard-grid">
+
+        <!-- Primary Chart -->
+        <div class="panel chart-panel">
+          <div class="panel-header">
+            <div class="panel-title-group">
+              <h3 class="panel-title">AAPL</h3>
+              <span class="panel-price profit">$227.48 <small>+2.31 (+1.03%)</small></span>
+            </div>
+            <div class="chart-controls">
+              <div class="timeframe-btns">
+                <button class="tf-btn">1m</button>
+                <button class="tf-btn">5m</button>
+                <button class="tf-btn active">15m</button>
+                <button class="tf-btn">1H</button>
+                <button class="tf-btn">4H</button>
+                <button class="tf-btn">1D</button>
+                <button class="tf-btn">1W</button>
+              </div>
+              <div class="chart-type-btns">
+                <button class="ct-btn active" title="Candlestick">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <rect x="9" y="4" width="2" height="5"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="10" y1="9" x2="10" y2="12"/>
+                    <rect x="15" y="10" width="2" height="6"/><line x1="16" y1="7" x2="16" y2="10"/><line x1="16" y1="16" x2="16" y2="19"/>
+                    <rect x="3" y="7" width="2" height="4"/><line x1="4" y1="5" x2="4" y2="7"/><line x1="4" y1="11" x2="4" y2="14"/>
+                  </svg>
+                </button>
+                <button class="ct-btn" title="Line">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 17l6-6 4 4 8-8"/></svg>
+                </button>
+                <button class="ct-btn" title="Area">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 17l6-6 4 4 8-8v11H3z"/></svg>
+                </button>
+              </div>
+              <div class="indicator-menu">
+                <button class="indicator-btn">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 5v14M5 12h14"/></svg>
+                  Indicators
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="chart-area" id="mainChart">
+            <canvas id="chartCanvas"></canvas>
+            <div class="chart-overlay-data">
+              <span class="overlay-item">O: 225.17</span>
+              <span class="overlay-item">H: 228.94</span>
+              <span class="overlay-item">L: 224.82</span>
+              <span class="overlay-item">C: 227.48</span>
+              <span class="overlay-item vol">V: 48.2M</span>
+            </div>
+            <div class="chart-indicators-overlay">
+              <span class="ind-tag">SMA(20): 224.31</span>
+              <span class="ind-tag">EMA(50): 221.87</span>
+              <span class="ind-tag">RSI(14): 62.4</span>
+              <span class="ind-tag">MACD: 1.24</span>
+              <span class="ind-tag">BB: 219.4 / 229.6</span>
+            </div>
+          </div>
+          <div class="chart-volume" id="volumeChart">
+            <canvas id="volumeCanvas"></canvas>
+          </div>
+        </div>
+
+        <!-- Watchlist -->
+        <div class="panel watchlist-panel">
+          <div class="panel-header">
+            <h3 class="panel-title">Watchlist</h3>
+            <div class="watchlist-tabs">
+              <button class="wl-tab active">Favorites</button>
+              <button class="wl-tab">Tech</button>
+              <button class="wl-tab">Earnings</button>
+            </div>
+          </div>
+          <div class="watchlist-table">
+            <div class="wl-header-row">
+              <span>Symbol</span>
+              <span>Last</span>
+              <span>Chg%</span>
+              <span>Vol</span>
+            </div>
+            <div class="wl-row profit" data-ticker="AAPL">
+              <span class="wl-sym">AAPL</span>
+              <span class="wl-price">227.48</span>
+              <span class="wl-change profit">+1.03%</span>
+              <span class="wl-vol">48.2M</span>
+            </div>
+            <div class="wl-row profit" data-ticker="NVDA">
+              <span class="wl-sym">NVDA</span>
+              <span class="wl-price">924.31</span>
+              <span class="wl-change profit">+3.42%</span>
+              <span class="wl-vol">62.1M</span>
+            </div>
+            <div class="wl-row loss" data-ticker="MSFT">
+              <span class="wl-sym">MSFT</span>
+              <span class="wl-price">418.72</span>
+              <span class="wl-change loss">-0.87%</span>
+              <span class="wl-vol">22.4M</span>
+            </div>
+            <div class="wl-row profit" data-ticker="AMZN">
+              <span class="wl-sym">AMZN</span>
+              <span class="wl-price">186.43</span>
+              <span class="wl-change profit">+2.14%</span>
+              <span class="wl-vol">38.7M</span>
+            </div>
+            <div class="wl-row loss" data-ticker="TSLA">
+              <span class="wl-sym">TSLA</span>
+              <span class="wl-price">248.91</span>
+              <span class="wl-change loss">-1.56%</span>
+              <span class="wl-vol">71.3M</span>
+            </div>
+            <div class="wl-row profit" data-ticker="META">
+              <span class="wl-sym">META</span>
+              <span class="wl-price">512.67</span>
+              <span class="wl-change profit">+1.89%</span>
+              <span class="wl-vol">18.9M</span>
+            </div>
+            <div class="wl-row profit" data-ticker="GOOGL">
+              <span class="wl-sym">GOOGL</span>
+              <span class="wl-price">167.24</span>
+              <span class="wl-change profit">+0.72%</span>
+              <span class="wl-vol">24.6M</span>
+            </div>
+            <div class="wl-row loss" data-ticker="JPM">
+              <span class="wl-sym">JPM</span>
+              <span class="wl-price">198.43</span>
+              <span class="wl-change loss">-0.41%</span>
+              <span class="wl-vol">8.2M</span>
+            </div>
+            <div class="wl-row profit" data-ticker="AMD">
+              <span class="wl-sym">AMD</span>
+              <span class="wl-price">178.56</span>
+              <span class="wl-change profit">+4.21%</span>
+              <span class="wl-vol">54.3M</span>
+            </div>
+            <div class="wl-row profit" data-ticker="COIN">
+              <span class="wl-sym">COIN</span>
+              <span class="wl-price">267.89</span>
+              <span class="wl-change profit">+5.67%</span>
+              <span class="wl-vol">12.8M</span>
+            </div>
+            <div class="wl-row loss" data-ticker="DIS">
+              <span class="wl-sym">DIS</span>
+              <span class="wl-price">112.34</span>
+              <span class="wl-change loss">-2.13%</span>
+              <span class="wl-vol">15.1M</span>
+            </div>
+            <div class="wl-row profit" data-ticker="PLTR">
+              <span class="wl-sym">PLTR</span>
+              <span class="wl-price">24.87</span>
+              <span class="wl-change profit">+6.32%</span>
+              <span class="wl-vol">89.4M</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Row: Grey Sankore AI Insights + Sector Heatmap -->
+      <div class="dashboard-bottom-grid">
+
+        <!-- Grey Sankore Quick Insights -->
+        <div class="panel gs-insights-panel">
+          <div class="panel-header">
+            <div class="panel-title-group">
+              <div class="gs-ai-badge">
+                <div class="gs-ai-icon">GS</div>
+                <div>
+                  <h3 class="panel-title">Grey Sankore AI</h3>
+                  <span class="gs-ai-role">Head of Investment</span>
+                </div>
+              </div>
+            </div>
+            <div class="gs-confidence">
+              <span class="confidence-label">Confidence</span>
+              <div class="confidence-bar">
+                <div class="confidence-fill" style="width: 87%"></div>
+              </div>
+              <span class="confidence-val">87%</span>
+            </div>
+          </div>
+          <div class="gs-insights-body">
+            <div class="gs-insight-card anomaly">
+              <div class="insight-type">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                ANOMALY DETECTED
+              </div>
+              <div class="insight-content">
+                <strong>NVDA</strong> - Unusual call volume spike at $950 strike, 3.2x normal. Dark pool prints at $928 suggest institutional accumulation ahead of GTC keynote. Historical pattern match: 78% probability of 5-8% move within 5 sessions.
+              </div>
+              <div class="insight-meta">
+                <span class="insight-time">2 min ago</span>
+                <span class="insight-confidence high">High Conviction</span>
+              </div>
+            </div>
+            <div class="gs-insight-card value">
+              <div class="insight-type">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+                VALUE OPPORTUNITY
+              </div>
+              <div class="insight-content">
+                <strong>DIS</strong> - Trading at 14.2x forward P/E vs 5Y avg of 22.1x. FCF yield at 6.8%, highest since 2012. Streaming losses narrowing faster than consensus. Risk/reward asymmetric at current levels.
+              </div>
+              <div class="insight-meta">
+                <span class="insight-time">8 min ago</span>
+                <span class="insight-confidence medium">Medium Conviction</span>
+              </div>
+            </div>
+            <div class="gs-insight-card momentum">
+              <div class="insight-type">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                MOMENTUM SIGNAL
+              </div>
+              <div class="insight-content">
+                <strong>PLTR</strong> - Breakout above 200-day MA with volume confirmation (3.8x avg). Government contract pipeline expanding. AI/defense narrative strengthening. RSI at 68 - approaching overbought but not yet exhausted.
+              </div>
+              <div class="insight-meta">
+                <span class="insight-time">15 min ago</span>
+                <span class="insight-confidence high">High Conviction</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sector Heatmap -->
+        <div class="panel heatmap-panel">
+          <div class="panel-header">
+            <h3 class="panel-title">Sector Performance</h3>
+            <div class="heatmap-period">
+              <button class="hp-btn active">1D</button>
+              <button class="hp-btn">1W</button>
+              <button class="hp-btn">1M</button>
+              <button class="hp-btn">YTD</button>
+            </div>
+          </div>
+          <div class="heatmap-grid" id="sectorHeatmap">
+            <div class="heatmap-cell profit-strong" style="grid-column: span 3; grid-row: span 2;">
+              <span class="hm-label">Technology</span>
+              <span class="hm-value">+2.41%</span>
+            </div>
+            <div class="heatmap-cell profit" style="grid-column: span 2; grid-row: span 2;">
+              <span class="hm-label">Healthcare</span>
+              <span class="hm-value">+1.12%</span>
+            </div>
+            <div class="heatmap-cell loss" style="grid-column: span 2;">
+              <span class="hm-label">Energy</span>
+              <span class="hm-value">-1.83%</span>
+            </div>
+            <div class="heatmap-cell profit-mild" style="grid-column: span 2;">
+              <span class="hm-label">Financials</span>
+              <span class="hm-value">+0.34%</span>
+            </div>
+            <div class="heatmap-cell loss-mild" style="grid-column: span 2;">
+              <span class="hm-label">Consumer Disc.</span>
+              <span class="hm-value">-0.21%</span>
+            </div>
+            <div class="heatmap-cell profit" style="grid-column: span 2;">
+              <span class="hm-label">Industrials</span>
+              <span class="hm-value">+0.87%</span>
+            </div>
+            <div class="heatmap-cell profit-mild" style="grid-column: span 2;">
+              <span class="hm-label">Materials</span>
+              <span class="hm-value">+0.19%</span>
+            </div>
+            <div class="heatmap-cell loss" style="grid-column: span 1;">
+              <span class="hm-label">Utilities</span>
+              <span class="hm-value">-0.92%</span>
+            </div>
+            <div class="heatmap-cell profit-mild" style="grid-column: span 1;">
+              <span class="hm-label">REITs</span>
+              <span class="hm-value">+0.11%</span>
+            </div>
+            <div class="heatmap-cell loss-mild" style="grid-column: span 1;">
+              <span class="hm-label">Staples</span>
+              <span class="hm-value">-0.08%</span>
+            </div>
+            <div class="heatmap-cell profit" style="grid-column: span 2;">
+              <span class="hm-label">Comm. Services</span>
+              <span class="hm-value">+1.56%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== OPTIONS VIEW ===================== -->
+    <div class="view" id="view-options">
+      <div class="view-header">
+        <div class="view-title">
+          <h1>Options Chain</h1>
+          <span class="view-subtitle">AAPL - Apple Inc.</span>
+        </div>
+        <div class="options-controls">
+          <div class="option-ticker-select">
+            <input type="text" value="AAPL" class="opt-ticker-input" placeholder="Ticker">
+          </div>
+          <select class="opt-expiry-select">
+            <option>Mar 14, 2026 (4d)</option>
+            <option>Mar 21, 2026 (11d)</option>
+            <option selected>Mar 28, 2026 (18d)</option>
+            <option>Apr 4, 2026 (25d)</option>
+            <option>Apr 18, 2026 (39d)</option>
+            <option>May 16, 2026 (67d)</option>
+            <option>Jun 20, 2026 (102d)</option>
+          </select>
+          <div class="opt-view-toggle">
+            <button class="ovt-btn active">Chain</button>
+            <button class="ovt-btn">Strategy</button>
+            <button class="ovt-btn">Vol Surface</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Options Quick Stats -->
+      <div class="options-stats-row">
+        <div class="opt-stat">
+          <span class="opt-stat-label">IV Rank</span>
+          <span class="opt-stat-value">42.3%</span>
+        </div>
+        <div class="opt-stat">
+          <span class="opt-stat-label">IV Percentile</span>
+          <span class="opt-stat-value">38.7%</span>
+        </div>
+        <div class="opt-stat">
+          <span class="opt-stat-label">Put/Call Ratio</span>
+          <span class="opt-stat-value">0.84</span>
+        </div>
+        <div class="opt-stat">
+          <span class="opt-stat-label">Expected Move</span>
+          <span class="opt-stat-value">+/- $8.42</span>
+        </div>
+        <div class="opt-stat">
+          <span class="opt-stat-label">Total OI</span>
+          <span class="opt-stat-value">1.24M</span>
+        </div>
+        <div class="opt-stat">
+          <span class="opt-stat-label">Today's Volume</span>
+          <span class="opt-stat-value">892K</span>
+        </div>
+        <div class="opt-stat">
+          <span class="opt-stat-label">Sizzle Index</span>
+          <span class="opt-stat-value highlight">2.4x</span>
+        </div>
+      </div>
+
+      <!-- Options Chain Table -->
+      <div class="options-chain-container">
+        <!-- CALLS SIDE -->
+        <div class="chain-side calls-side">
+          <div class="chain-side-header">CALLS</div>
+          <table class="chain-table">
+            <thead>
+              <tr>
+                <th>Last</th>
+                <th>Chg</th>
+                <th>Bid</th>
+                <th>Ask</th>
+                <th>Vol</th>
+                <th>OI</th>
+                <th>IV</th>
+                <th class="greek">Delta</th>
+                <th class="greek">Gamma</th>
+                <th class="greek">Theta</th>
+                <th class="greek">Vega</th>
+              </tr>
+            </thead>
+            <tbody id="callsChain">
+              <!-- Populated by JS -->
+            </tbody>
+          </table>
+        </div>
+
+        <!-- STRIKE COLUMN -->
+        <div class="chain-strikes" id="strikeColumn">
+          <div class="chain-side-header">Strike</div>
+          <!-- Populated by JS -->
+        </div>
+
+        <!-- PUTS SIDE -->
+        <div class="chain-side puts-side">
+          <div class="chain-side-header">PUTS</div>
+          <table class="chain-table">
+            <thead>
+              <tr>
+                <th class="greek">Vega</th>
+                <th class="greek">Theta</th>
+                <th class="greek">Gamma</th>
+                <th class="greek">Delta</th>
+                <th>IV</th>
+                <th>OI</th>
+                <th>Vol</th>
+                <th>Ask</th>
+                <th>Bid</th>
+                <th>Chg</th>
+                <th>Last</th>
+              </tr>
+            </thead>
+            <tbody id="putsChain">
+              <!-- Populated by JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- P&L Diagram -->
+      <div class="options-bottom-row">
+        <div class="panel pnl-panel">
+          <div class="panel-header">
+            <h3 class="panel-title">P&L at Expiration</h3>
+            <div class="pnl-strategy-info">
+              <span class="pnl-strat-name">Long Call $230</span>
+              <span class="pnl-strat-cost">Debit: $4.85</span>
+            </div>
+          </div>
+          <div class="pnl-chart" id="pnlChart">
+            <canvas id="pnlCanvas"></canvas>
+          </div>
+          <div class="pnl-stats">
+            <div class="pnl-stat">
+              <span class="pnl-stat-label">Max Profit</span>
+              <span class="pnl-stat-value profit">Unlimited</span>
+            </div>
+            <div class="pnl-stat">
+              <span class="pnl-stat-label">Max Loss</span>
+              <span class="pnl-stat-value loss">-$485.00</span>
+            </div>
+            <div class="pnl-stat">
+              <span class="pnl-stat-label">Break Even</span>
+              <span class="pnl-stat-value">$234.85</span>
+            </div>
+            <div class="pnl-stat">
+              <span class="pnl-stat-label">Prob. Profit</span>
+              <span class="pnl-stat-value">34.2%</span>
+            </div>
+            <div class="pnl-stat">
+              <span class="pnl-stat-label">Days to Exp.</span>
+              <span class="pnl-stat-value">18</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Greeks Summary -->
+        <div class="panel greeks-panel">
+          <div class="panel-header">
+            <h3 class="panel-title">Position Greeks</h3>
+          </div>
+          <div class="greeks-grid">
+            <div class="greek-card">
+              <div class="greek-name">Delta</div>
+              <div class="greek-value">0.42</div>
+              <div class="greek-gauge">
+                <div class="gauge-fill" style="width: 42%; background: var(--accent-blue);"></div>
+              </div>
+              <div class="greek-desc">Price sensitivity per $1 move</div>
+            </div>
+            <div class="greek-card">
+              <div class="greek-name">Gamma</div>
+              <div class="greek-value">0.028</div>
+              <div class="gauge-fill" style="width: 56%; background: var(--accent-purple);"></div>
+              <div class="greek-desc">Delta change rate</div>
+            </div>
+            <div class="greek-card">
+              <div class="greek-name">Theta</div>
+              <div class="greek-value loss">-0.18</div>
+              <div class="gauge-fill" style="width: 36%; background: var(--loss);"></div>
+              <div class="greek-desc">Daily time decay</div>
+            </div>
+            <div class="greek-card">
+              <div class="greek-name">Vega</div>
+              <div class="greek-value">0.31</div>
+              <div class="gauge-fill" style="width: 62%; background: var(--accent-gold);"></div>
+              <div class="greek-desc">IV sensitivity per 1% change</div>
+            </div>
+            <div class="greek-card">
+              <div class="greek-name">Rho</div>
+              <div class="greek-value">0.08</div>
+              <div class="gauge-fill" style="width: 16%; background: var(--text-muted);"></div>
+              <div class="greek-desc">Interest rate sensitivity</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== GREY SANKORE AI VIEW ===================== -->
+    <div class="view" id="view-greysankore">
+      <div class="view-header">
+        <div class="view-title">
+          <div class="gs-header-brand">
+            <div class="gs-avatar-large">GS</div>
+            <div>
+              <h1>Grey Sankore</h1>
+              <span class="view-subtitle">Head of Investment - AI-Powered Analysis Engine</span>
+            </div>
+          </div>
+        </div>
+        <div class="cap-toggle">
+          <button class="cap-btn active" data-cap="large">Large Cap</button>
+          <button class="cap-btn" data-cap="mid">Mid Cap</button>
+          <button class="cap-btn" data-cap="small">Small Cap</button>
+          <button class="cap-btn" data-cap="micro">Micro Cap</button>
+        </div>
+      </div>
+
+      <!-- AI Model Stats -->
+      <div class="gs-model-stats">
+        <div class="gs-model-stat">
+          <div class="gms-icon anomaly">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+          </div>
+          <div class="gms-data">
+            <span class="gms-value">7</span>
+            <span class="gms-label">Active Anomalies</span>
+          </div>
+        </div>
+        <div class="gs-model-stat">
+          <div class="gms-icon value">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+          </div>
+          <div class="gms-data">
+            <span class="gms-value">12</span>
+            <span class="gms-label">Value Opportunities</span>
+          </div>
+        </div>
+        <div class="gs-model-stat">
+          <div class="gms-icon momentum">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          </div>
+          <div class="gms-data">
+            <span class="gms-value">5</span>
+            <span class="gms-label">Momentum Signals</span>
+          </div>
+        </div>
+        <div class="gs-model-stat">
+          <div class="gms-icon models">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+          </div>
+          <div class="gms-data">
+            <span class="gms-value">94.2%</span>
+            <span class="gms-label">Model Accuracy (30d)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Analysis Grid -->
+      <div class="gs-analysis-grid">
+
+        <!-- Anomaly Detection -->
+        <div class="panel gs-section-panel">
+          <div class="panel-header">
+            <h3 class="panel-title">
+              <span class="section-dot anomaly"></span>
+              Anomaly Detection
+            </h3>
+            <span class="panel-badge">Real-time</span>
+          </div>
+          <div class="gs-alert-list">
+            <div class="gs-alert anomaly">
+              <div class="alert-header">
+                <span class="alert-ticker">NVDA</span>
+                <span class="alert-type">Options Flow Anomaly</span>
+                <span class="alert-severity high">HIGH</span>
+              </div>
+              <div class="alert-body">
+                Call volume at $950 strike is 3.2x the 20-day average. $12.4M in premium swept at the ask in the last 30 minutes. Dark pool prints detected at $928.50 (2 blocks, 180K shares). Pattern historically precedes 5-8% moves within 5 sessions. GTC keynote catalyst in 3 days.
+              </div>
+              <div class="alert-actions">
+                <button class="alert-action-btn primary">Analyze Position</button>
+                <button class="alert-action-btn">Set Alert</button>
+                <button class="alert-action-btn">View Flow</button>
+              </div>
+            </div>
+            <div class="gs-alert anomaly">
+              <div class="alert-header">
+                <span class="alert-ticker">TSLA</span>
+                <span class="alert-type">Volatility Skew Anomaly</span>
+                <span class="alert-severity medium">MED</span>
+              </div>
+              <div class="alert-body">
+                Put skew steepening to 2-sigma level. 25-delta put IV exceeds 25-delta call IV by 14.2 points (vs 8.1 avg). Suggests institutional hedging activity. Last occurrence preceded a -12% drawdown within 2 weeks.
+              </div>
+              <div class="alert-actions">
+                <button class="alert-action-btn primary">View Skew Chart</button>
+                <button class="alert-action-btn">Set Alert</button>
+              </div>
+            </div>
+            <div class="gs-alert anomaly">
+              <div class="alert-header">
+                <span class="alert-ticker">AMD</span>
+                <span class="alert-type">Volume Divergence</span>
+                <span class="alert-severity low">LOW</span>
+              </div>
+              <div class="alert-body">
+                Price up +4.21% on 2.1x average volume, but options put/call ratio inverted to 1.3 (bearish). Divergence between equity momentum and options positioning often signals reversal within 3-5 sessions.
+              </div>
+              <div class="alert-actions">
+                <button class="alert-action-btn primary">Deep Dive</button>
+                <button class="alert-action-btn">Dismiss</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Value Opportunities -->
+        <div class="panel gs-section-panel">
+          <div class="panel-header">
+            <h3 class="panel-title">
+              <span class="section-dot value"></span>
+              Value Opportunities
+            </h3>
+            <span class="panel-badge">Updated 5m ago</span>
+          </div>
+          <div class="gs-value-table">
+            <div class="gvt-header">
+              <span>Ticker</span>
+              <span>Fwd P/E</span>
+              <span>vs 5Y Avg</span>
+              <span>FCF Yield</span>
+              <span>Score</span>
+              <span>Conviction</span>
+            </div>
+            <div class="gvt-row">
+              <span class="gvt-ticker">DIS</span>
+              <span>14.2x</span>
+              <span class="loss">-35.7%</span>
+              <span class="profit">6.8%</span>
+              <span class="gvt-score">92</span>
+              <span class="conviction high">High</span>
+            </div>
+            <div class="gvt-row">
+              <span class="gvt-ticker">PYPL</span>
+              <span>15.8x</span>
+              <span class="loss">-41.2%</span>
+              <span class="profit">5.2%</span>
+              <span class="gvt-score">88</span>
+              <span class="conviction high">High</span>
+            </div>
+            <div class="gvt-row">
+              <span class="gvt-ticker">BABA</span>
+              <span>9.4x</span>
+              <span class="loss">-52.1%</span>
+              <span class="profit">8.1%</span>
+              <span class="gvt-score">85</span>
+              <span class="conviction medium">Med</span>
+            </div>
+            <div class="gvt-row">
+              <span class="gvt-ticker">WBD</span>
+              <span>8.7x</span>
+              <span class="loss">-61.3%</span>
+              <span class="profit">9.4%</span>
+              <span class="gvt-score">81</span>
+              <span class="conviction medium">Med</span>
+            </div>
+            <div class="gvt-row">
+              <span class="gvt-ticker">INTC</span>
+              <span>22.1x</span>
+              <span class="loss">-28.4%</span>
+              <span class="profit">3.2%</span>
+              <span class="gvt-score">74</span>
+              <span class="conviction low">Low</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- AI Chat Interface -->
+      <div class="panel gs-chat-panel">
+        <div class="panel-header">
+          <h3 class="panel-title">Ask Grey Sankore</h3>
+          <span class="panel-badge live">AI Active</span>
+        </div>
+        <div class="gs-chat-body" id="gsChatBody">
+          <div class="gs-chat-message ai">
+            <div class="gs-chat-avatar">GS</div>
+            <div class="gs-chat-content">
+              <p>Good morning. I've completed my pre-market scan across 4,200+ equities. Key findings:</p>
+              <ul>
+                <li><strong>7 anomalies</strong> detected in options flow - NVDA leads with unusual call accumulation</li>
+                <li><strong>12 value opportunities</strong> identified using our multi-factor model (P/E compression + FCF yield + momentum divergence)</li>
+                <li><strong>5 momentum signals</strong> triggered - PLTR and COIN showing strongest technical setups</li>
+              </ul>
+              <p>The VIX is elevated at 18.73, suggesting the market is pricing in near-term uncertainty. I'd recommend focusing on high-conviction asymmetric positions rather than broad exposure. Want me to build a specific thesis on any of these?</p>
+            </div>
+          </div>
+        </div>
+        <div class="gs-chat-input-area">
+          <input type="text" class="gs-chat-input" placeholder="Ask about any ticker, strategy, or market thesis..." id="gsChatInput">
+          <button class="gs-chat-send" id="gsChatSend">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== ORDER FLOW VIEW ===================== -->
+    <div class="view" id="view-flow">
+      <div class="view-header">
+        <div class="view-title">
+          <h1>Order Flow</h1>
+          <span class="view-subtitle">Real-time institutional activity</span>
+        </div>
+        <div class="flow-filters">
+          <select class="flow-select">
+            <option>All Tickers</option>
+            <option>Watchlist Only</option>
+            <option>S&P 500</option>
+          </select>
+          <select class="flow-select">
+            <option>All Types</option>
+            <option>Calls Only</option>
+            <option>Puts Only</option>
+            <option>Spreads</option>
+          </select>
+          <select class="flow-select">
+            <option>Min $100K</option>
+            <option>Min $250K</option>
+            <option>Min $500K</option>
+            <option>Min $1M</option>
+          </select>
+          <div class="flow-toggle">
+            <label class="toggle-label">
+              <input type="checkbox" checked> Live Feed
+              <span class="toggle-indicator live"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Flow Summary -->
+      <div class="flow-summary-row">
+        <div class="flow-stat">
+          <span class="flow-stat-label">Net Premium</span>
+          <span class="flow-stat-value profit">+$842M</span>
+        </div>
+        <div class="flow-stat">
+          <span class="flow-stat-label">Call Premium</span>
+          <span class="flow-stat-value">$1.24B</span>
+        </div>
+        <div class="flow-stat">
+          <span class="flow-stat-label">Put Premium</span>
+          <span class="flow-stat-value">$398M</span>
+        </div>
+        <div class="flow-stat">
+          <span class="flow-stat-label">Unusual Trades</span>
+          <span class="flow-stat-value highlight">247</span>
+        </div>
+        <div class="flow-stat">
+          <span class="flow-stat-label">Dark Pool %</span>
+          <span class="flow-stat-value">38.4%</span>
+        </div>
+      </div>
+
+      <!-- Flow Feed -->
+      <div class="panel flow-feed-panel">
+        <div class="flow-feed" id="flowFeed">
+          <div class="flow-header-row">
+            <span>Time</span>
+            <span>Ticker</span>
+            <span>Type</span>
+            <span>Strike</span>
+            <span>Exp</span>
+            <span>Side</span>
+            <span>Size</span>
+            <span>Premium</span>
+            <span>Spot</span>
+            <span>IV</span>
+            <span>Signal</span>
+          </div>
+          <!-- Populated by JS -->
+        </div>
+      </div>
+
+      <!-- Hottest Contracts + Net Flow -->
+      <div class="flow-bottom-grid">
+        <div class="panel">
+          <div class="panel-header">
+            <h3 class="panel-title">Hottest Contracts</h3>
+          </div>
+          <div class="hot-contracts" id="hotContracts">
+            <div class="hc-row">
+              <span class="hc-rank">1</span>
+              <span class="hc-contract">NVDA $950C 3/28</span>
+              <span class="hc-vol">24.8K</span>
+              <span class="hc-premium profit">$18.2M</span>
+              <span class="hc-sentiment bullish">Bullish</span>
+            </div>
+            <div class="hc-row">
+              <span class="hc-rank">2</span>
+              <span class="hc-contract">TSLA $240P 3/14</span>
+              <span class="hc-vol">18.4K</span>
+              <span class="hc-premium loss">$8.7M</span>
+              <span class="hc-sentiment bearish">Bearish</span>
+            </div>
+            <div class="hc-row">
+              <span class="hc-rank">3</span>
+              <span class="hc-contract">AAPL $230C 3/28</span>
+              <span class="hc-vol">15.2K</span>
+              <span class="hc-premium profit">$7.4M</span>
+              <span class="hc-sentiment bullish">Bullish</span>
+            </div>
+            <div class="hc-row">
+              <span class="hc-rank">4</span>
+              <span class="hc-contract">SPY $585P 3/21</span>
+              <span class="hc-vol">42.1K</span>
+              <span class="hc-premium loss">$24.1M</span>
+              <span class="hc-sentiment bearish">Bearish</span>
+            </div>
+            <div class="hc-row">
+              <span class="hc-rank">5</span>
+              <span class="hc-contract">META $520C 4/18</span>
+              <span class="hc-vol">8.9K</span>
+              <span class="hc-premium profit">$5.8M</span>
+              <span class="hc-sentiment bullish">Bullish</span>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <h3 class="panel-title">Dark Pool Prints</h3>
+            <span class="panel-badge">Delayed 15s</span>
+          </div>
+          <div class="dark-pool-feed" id="darkPoolFeed">
+            <div class="dp-row large">
+              <span class="dp-time">14:32:18</span>
+              <span class="dp-ticker">NVDA</span>
+              <span class="dp-size">180,000</span>
+              <span class="dp-price">$928.50</span>
+              <span class="dp-value">$167.1M</span>
+              <span class="dp-venue">FADF</span>
+            </div>
+            <div class="dp-row">
+              <span class="dp-time">14:31:42</span>
+              <span class="dp-ticker">AAPL</span>
+              <span class="dp-size">45,000</span>
+              <span class="dp-price">$227.12</span>
+              <span class="dp-value">$10.2M</span>
+              <span class="dp-venue">UBSS</span>
+            </div>
+            <div class="dp-row large">
+              <span class="dp-time">14:30:55</span>
+              <span class="dp-ticker">MSFT</span>
+              <span class="dp-size">92,000</span>
+              <span class="dp-price">$418.90</span>
+              <span class="dp-value">$38.5M</span>
+              <span class="dp-venue">CODA</span>
+            </div>
+            <div class="dp-row">
+              <span class="dp-time">14:29:31</span>
+              <span class="dp-ticker">META</span>
+              <span class="dp-size">28,000</span>
+              <span class="dp-price">$512.34</span>
+              <span class="dp-value">$14.3M</span>
+              <span class="dp-venue">JNST</span>
+            </div>
+            <div class="dp-row">
+              <span class="dp-time">14:28:17</span>
+              <span class="dp-ticker">AMZN</span>
+              <span class="dp-size">62,000</span>
+              <span class="dp-price">$186.21</span>
+              <span class="dp-value">$11.5M</span>
+              <span class="dp-venue">FADF</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== AGENTS VIEW ===================== -->
+    <div class="view" id="view-agents">
+      <div class="view-header">
+        <div class="view-title">
+          <h1>Trading Agents</h1>
+          <span class="view-subtitle">Autonomous strategy execution</span>
+        </div>
+        <button class="btn-primary" id="newAgentBtn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+          Deploy New Agent
+        </button>
+      </div>
+
+      <!-- Agent Cards -->
+      <div class="agents-grid">
+
+        <div class="agent-card active">
+          <div class="agent-header">
+            <div class="agent-status-dot running"></div>
+            <h3 class="agent-name">Arbitrage Hunter</h3>
+            <span class="agent-badge running">RUNNING</span>
+          </div>
+          <div class="agent-desc">Scans for cross-exchange price discrepancies, options mispricing, and ETF NAV arbitrage opportunities. Executes when spread exceeds transaction cost threshold.</div>
+          <div class="agent-stats">
+            <div class="agent-stat">
+              <span class="as-label">Strategy</span>
+              <span class="as-value">Statistical Arbitrage</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Today's P&L</span>
+              <span class="as-value profit">+$2,847</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Win Rate</span>
+              <span class="as-value">73.2%</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Trades Today</span>
+              <span class="as-value">142</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Avg Hold Time</span>
+              <span class="as-value">4.2 min</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Max Drawdown</span>
+              <span class="as-value loss">-$412</span>
+            </div>
+          </div>
+          <div class="agent-controls">
+            <button class="agent-btn pause">Pause</button>
+            <button class="agent-btn">Configure</button>
+            <button class="agent-btn">Logs</button>
+          </div>
+        </div>
+
+        <div class="agent-card active">
+          <div class="agent-header">
+            <div class="agent-status-dot running"></div>
+            <h3 class="agent-name">Swing Momentum</h3>
+            <span class="agent-badge running">RUNNING</span>
+          </div>
+          <div class="agent-desc">Identifies multi-day swing setups using RSI divergence, MACD crossovers, and volume profile analysis. Targets 2-5 day holding periods with 2:1 risk/reward minimum.</div>
+          <div class="agent-stats">
+            <div class="agent-stat">
+              <span class="as-label">Strategy</span>
+              <span class="as-value">Swing Trading</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Open Positions</span>
+              <span class="as-value">3</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Unrealized P&L</span>
+              <span class="as-value profit">+$1,234</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Win Rate (30d)</span>
+              <span class="as-value">61.8%</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Avg R:R</span>
+              <span class="as-value">2.4:1</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Sharpe (30d)</span>
+              <span class="as-value">1.87</span>
+            </div>
+          </div>
+          <div class="agent-positions">
+            <div class="ap-header">Open Positions</div>
+            <div class="ap-row profit">
+              <span>PLTR Long @ $23.42</span>
+              <span class="profit">+6.2%</span>
+              <span>Target: $27.80</span>
+              <span>Stop: $22.10</span>
+            </div>
+            <div class="ap-row profit">
+              <span>COIN Long @ $254.18</span>
+              <span class="profit">+5.4%</span>
+              <span>Target: $285.00</span>
+              <span>Stop: $242.00</span>
+            </div>
+            <div class="ap-row loss">
+              <span>JPM Short @ $199.87</span>
+              <span class="loss">-0.7%</span>
+              <span>Target: $192.00</span>
+              <span>Stop: $202.50</span>
+            </div>
+          </div>
+          <div class="agent-controls">
+            <button class="agent-btn pause">Pause</button>
+            <button class="agent-btn">Configure</button>
+            <button class="agent-btn">Logs</button>
+          </div>
+        </div>
+
+        <div class="agent-card">
+          <div class="agent-header">
+            <div class="agent-status-dot paused"></div>
+            <h3 class="agent-name">Gamma Scalper</h3>
+            <span class="agent-badge paused">PAUSED</span>
+          </div>
+          <div class="agent-desc">Delta-neutral options strategy that profits from gamma by continuously rebalancing. Targets high-IV names near expiration. Best in volatile, range-bound markets.</div>
+          <div class="agent-stats">
+            <div class="agent-stat">
+              <span class="as-label">Strategy</span>
+              <span class="as-value">Gamma Scalping</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">MTD P&L</span>
+              <span class="as-value profit">+$4,812</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Win Rate</span>
+              <span class="as-value">58.4%</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Avg Gamma P&L</span>
+              <span class="as-value profit">+$187/trade</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Theta Bleed</span>
+              <span class="as-value loss">-$89/day</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Rebalance Freq</span>
+              <span class="as-value">Every $0.50</span>
+            </div>
+          </div>
+          <div class="agent-controls">
+            <button class="agent-btn start">Resume</button>
+            <button class="agent-btn">Configure</button>
+            <button class="agent-btn">Backtest</button>
+          </div>
+        </div>
+
+        <div class="agent-card">
+          <div class="agent-header">
+            <div class="agent-status-dot paused"></div>
+            <h3 class="agent-name">Mean Reversion</h3>
+            <span class="agent-badge paused">PAUSED</span>
+          </div>
+          <div class="agent-desc">Identifies extreme deviations from statistical norms using z-score analysis, Bollinger Band compression, and pair correlation breakdowns. Profits from price normalization.</div>
+          <div class="agent-stats">
+            <div class="agent-stat">
+              <span class="as-label">Strategy</span>
+              <span class="as-value">Mean Reversion</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">MTD P&L</span>
+              <span class="as-value profit">+$3,291</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Win Rate</span>
+              <span class="as-value">67.1%</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Avg Hold</span>
+              <span class="as-value">1.8 days</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Z-Score Trigger</span>
+              <span class="as-value">+/- 2.5</span>
+            </div>
+            <div class="agent-stat">
+              <span class="as-label">Max Position</span>
+              <span class="as-value">$25K</span>
+            </div>
+          </div>
+          <div class="agent-controls">
+            <button class="agent-btn start">Resume</button>
+            <button class="agent-btn">Configure</button>
+            <button class="agent-btn">Backtest</button>
+          </div>
+        </div>
+
+        <!-- Deploy New Agent Card -->
+        <div class="agent-card new-agent">
+          <div class="new-agent-inner">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M12 5v14M5 12h14"/></svg>
+            <h3>Deploy New Agent</h3>
+            <p>Choose from pre-built strategies or create a custom agent with your own parameters</p>
+            <div class="new-agent-templates">
+              <span class="template-tag">Pairs Trading</span>
+              <span class="template-tag">Iron Condor Farm</span>
+              <span class="template-tag">Earnings Straddle</span>
+              <span class="template-tag">Momentum Breakout</span>
+              <span class="template-tag">Dividend Capture</span>
+              <span class="template-tag">Custom...</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Agent Performance Chart -->
+      <div class="panel agent-perf-panel">
+        <div class="panel-header">
+          <h3 class="panel-title">Cumulative Agent Performance</h3>
+          <div class="agent-perf-legend">
+            <span class="legend-item"><span class="legend-dot" style="background: var(--accent-blue)"></span>Arbitrage</span>
+            <span class="legend-item"><span class="legend-dot" style="background: var(--profit)"></span>Swing</span>
+            <span class="legend-item"><span class="legend-dot" style="background: var(--accent-purple)"></span>Gamma</span>
+            <span class="legend-item"><span class="legend-dot" style="background: var(--accent-gold)"></span>Mean Rev.</span>
+          </div>
+        </div>
+        <div class="agent-perf-chart" id="agentPerfChart">
+          <canvas id="agentPerfCanvas"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== RISK VIEW ===================== -->
+    <div class="view" id="view-risk">
+      <div class="view-header">
+        <div class="view-title">
+          <h1>Risk Analytics</h1>
+          <span class="view-subtitle">Portfolio risk management and scenario analysis</span>
+        </div>
+      </div>
+
+      <!-- Risk Overview Cards -->
+      <div class="risk-overview">
+        <div class="risk-card">
+          <div class="risk-card-header">Portfolio Beta</div>
+          <div class="risk-card-value">1.24</div>
+          <div class="risk-card-context">vs S&P 500</div>
+        </div>
+        <div class="risk-card">
+          <div class="risk-card-header">Value at Risk (95%)</div>
+          <div class="risk-card-value loss">-$12,847</div>
+          <div class="risk-card-context">Daily, parametric</div>
+        </div>
+        <div class="risk-card">
+          <div class="risk-card-header">Sharpe Ratio</div>
+          <div class="risk-card-value">1.67</div>
+          <div class="risk-card-context">30-day rolling</div>
+        </div>
+        <div class="risk-card">
+          <div class="risk-card-header">Max Drawdown</div>
+          <div class="risk-card-value loss">-8.4%</div>
+          <div class="risk-card-context">YTD</div>
+        </div>
+        <div class="risk-card">
+          <div class="risk-card-header">Net Delta Exposure</div>
+          <div class="risk-card-value">$48,230</div>
+          <div class="risk-card-context">All positions</div>
+        </div>
+        <div class="risk-card">
+          <div class="risk-card-header">Portfolio Theta</div>
+          <div class="risk-card-value loss">-$342/day</div>
+          <div class="risk-card-context">Time decay</div>
+        </div>
+      </div>
+
+      <!-- Scenario Analysis -->
+      <div class="risk-grid">
+        <div class="panel">
+          <div class="panel-header">
+            <h3 class="panel-title">Scenario Analysis</h3>
+          </div>
+          <div class="scenario-table">
+            <div class="scenario-header">
+              <span></span>
+              <span>SPY -10%</span>
+              <span>SPY -5%</span>
+              <span>SPY -2%</span>
+              <span>SPY +2%</span>
+              <span>SPY +5%</span>
+              <span>SPY +10%</span>
+            </div>
+            <div class="scenario-row">
+              <span class="scenario-label">IV Flat</span>
+              <span class="loss">-$18,420</span>
+              <span class="loss">-$8,912</span>
+              <span class="loss">-$3,241</span>
+              <span class="profit">+$3,872</span>
+              <span class="profit">+$9,143</span>
+              <span class="profit">+$19,871</span>
+            </div>
+            <div class="scenario-row">
+              <span class="scenario-label">IV +5pts</span>
+              <span class="loss">-$14,230</span>
+              <span class="loss">-$5,812</span>
+              <span class="loss">-$1,041</span>
+              <span class="profit">+$5,672</span>
+              <span class="profit">+$11,943</span>
+              <span class="profit">+$22,871</span>
+            </div>
+            <div class="scenario-row">
+              <span class="scenario-label">IV +10pts</span>
+              <span class="loss">-$10,130</span>
+              <span class="loss">-$2,512</span>
+              <span class="profit">+$1,259</span>
+              <span class="profit">+$7,972</span>
+              <span class="profit">+$14,543</span>
+              <span class="profit">+$25,871</span>
+            </div>
+            <div class="scenario-row">
+              <span class="scenario-label">IV -5pts</span>
+              <span class="loss">-$22,620</span>
+              <span class="loss">-$12,012</span>
+              <span class="loss">-$5,441</span>
+              <span class="profit">+$2,072</span>
+              <span class="profit">+$6,343</span>
+              <span class="profit">+$16,871</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <h3 class="panel-title">Position Concentration</h3>
+          </div>
+          <div class="concentration-chart" id="concentrationChart">
+            <div class="conc-bar-group">
+              <span class="conc-label">NVDA</span>
+              <div class="conc-bar-track">
+                <div class="conc-bar" style="width: 28%; background: var(--accent-blue);">28%</div>
+              </div>
+            </div>
+            <div class="conc-bar-group">
+              <span class="conc-label">AAPL</span>
+              <div class="conc-bar-track">
+                <div class="conc-bar" style="width: 22%; background: var(--profit);">22%</div>
+              </div>
+            </div>
+            <div class="conc-bar-group">
+              <span class="conc-label">MSFT</span>
+              <div class="conc-bar-track">
+                <div class="conc-bar" style="width: 18%; background: var(--accent-purple);">18%</div>
+              </div>
+            </div>
+            <div class="conc-bar-group">
+              <span class="conc-label">AMZN</span>
+              <div class="conc-bar-track">
+                <div class="conc-bar" style="width: 12%; background: var(--accent-gold);">12%</div>
+              </div>
+            </div>
+            <div class="conc-bar-group">
+              <span class="conc-label">PLTR</span>
+              <div class="conc-bar-track">
+                <div class="conc-bar" style="width: 8%; background: var(--loss);">8%</div>
+              </div>
+            </div>
+            <div class="conc-bar-group">
+              <span class="conc-label">Other</span>
+              <div class="conc-bar-track">
+                <div class="conc-bar" style="width: 12%; background: var(--text-muted);">12%</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== SETTINGS VIEW ===================== -->
+    <div class="view" id="view-settings">
+      <div class="view-header">
+        <div class="view-title">
+          <h1>Settings</h1>
+          <span class="view-subtitle">Platform configuration</span>
+        </div>
+      </div>
+      <div class="settings-grid">
+        <div class="panel settings-panel">
+          <h3 class="settings-section-title">API Connections</h3>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Market Data Provider</span>
+              <span class="setting-desc">Real-time equity and options data feed</span>
+            </div>
+            <select class="setting-select">
+              <option>Polygon.io</option>
+              <option>Alpha Vantage</option>
+              <option>IEX Cloud</option>
+              <option>Unusual Whales</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Broker Connection</span>
+              <span class="setting-desc">For live and paper trading execution</span>
+            </div>
+            <select class="setting-select">
+              <option>Alpaca (Paper)</option>
+              <option>Alpaca (Live)</option>
+              <option>Interactive Brokers</option>
+              <option>TD Ameritrade</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">AI Model</span>
+              <span class="setting-desc">Grey Sankore analysis engine</span>
+            </div>
+            <select class="setting-select">
+              <option>Claude Opus 4.6</option>
+              <option>Claude Sonnet 4.6</option>
+              <option>GPT-4o</option>
+            </select>
+          </div>
+        </div>
+        <div class="panel settings-panel">
+          <h3 class="settings-section-title">Risk Parameters</h3>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Max Position Size</span>
+              <span class="setting-desc">Maximum allocation per single position</span>
+            </div>
+            <input type="text" class="setting-input" value="$50,000">
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Daily Loss Limit</span>
+              <span class="setting-desc">Auto-pause agents when reached</span>
+            </div>
+            <input type="text" class="setting-input" value="$5,000">
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Max Concurrent Agents</span>
+              <span class="setting-desc">Number of agents running simultaneously</span>
+            </div>
+            <input type="text" class="setting-input" value="4">
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Keyboard Shortcut Overlay -->
+<div class="kbd-overlay" id="kbdOverlay">
+  <div class="kbd-modal">
+    <h2>Keyboard Shortcuts</h2>
+    <div class="kbd-grid">
+      <div class="kbd-item"><kbd>Ctrl</kbd>+<kbd>K</kbd> <span>Search ticker</span></div>
+      <div class="kbd-item"><kbd>1</kbd>-<kbd>6</kbd> <span>Switch views</span></div>
+      <div class="kbd-item"><kbd>Ctrl</kbd>+<kbd>G</kbd> <span>Ask Grey Sankore</span></div>
+      <div class="kbd-item"><kbd>Esc</kbd> <span>Close overlay</span></div>
+      <div class="kbd-item"><kbd>?</kbd> <span>Show shortcuts</span></div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

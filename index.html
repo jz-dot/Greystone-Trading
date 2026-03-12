@@ -371,7 +371,7 @@
       </button>
     </div>
     <div class="sidebar-bottom">
-      <button class="nav-btn" data-view="settings" title="Settings">
+      <button class="nav-btn" id="settingsPanelToggle" title="Settings">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <circle cx="12" cy="12" r="3"/>
           <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
@@ -400,16 +400,19 @@
           <button class="cap-btn" data-cap="micro">Micro Cap</button>
         </div>
         <div class="view-actions">
-          <div class="search-box">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-            <input type="text" placeholder="Search ticker... (Ctrl+K)" id="tickerSearch">
+          <div class="search-box-wrapper">
+            <div class="search-box">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+              <input type="text" placeholder="Search ticker... (Ctrl+K)" id="tickerSearch" autocomplete="off">
+            </div>
+            <div class="search-dropdown" id="searchDropdown"></div>
           </div>
         </div>
       </div>
 
       <!-- Market Summary Cards -->
       <div class="metric-cards">
-        <div class="metric-card">
+        <div class="metric-card" data-symbol="SPY">
           <div class="metric-header">
             <span class="metric-label">S&P 500</span>
             <span class="metric-badge profit">+1.24%</span>
@@ -421,7 +424,7 @@
             <span class="metric-vol">Vol: 2.4B</span>
           </div>
         </div>
-        <div class="metric-card">
+        <div class="metric-card" data-symbol="QQQ">
           <div class="metric-header">
             <span class="metric-label">NASDAQ</span>
             <span class="metric-badge profit">+1.67%</span>
@@ -433,7 +436,7 @@
             <span class="metric-vol">Vol: 5.1B</span>
           </div>
         </div>
-        <div class="metric-card">
+        <div class="metric-card" data-symbol="DIA">
           <div class="metric-header">
             <span class="metric-label">DOW</span>
             <span class="metric-badge loss">-0.32%</span>
@@ -445,7 +448,19 @@
             <span class="metric-vol">Vol: 892M</span>
           </div>
         </div>
-        <div class="metric-card">
+        <div class="metric-card" data-symbol="IWM">
+          <div class="metric-header">
+            <span class="metric-label">RUSSELL 2000</span>
+            <span class="metric-badge profit">+0.89%</span>
+          </div>
+          <div class="metric-value">2,074.30</div>
+          <div class="metric-sparkline" id="spark-russell"></div>
+          <div class="metric-footer">
+            <span class="metric-change profit">+18.31</span>
+            <span class="metric-vol">Vol: 1.8B</span>
+          </div>
+        </div>
+        <div class="metric-card" data-symbol="^VIX">
           <div class="metric-header">
             <span class="metric-label">VIX</span>
             <span class="metric-badge loss">+8.42%</span>
@@ -457,7 +472,7 @@
             <span class="metric-vol">Fear: Moderate</span>
           </div>
         </div>
-        <div class="metric-card">
+        <div class="metric-card" data-symbol="^TNX">
           <div class="metric-header">
             <span class="metric-label">10Y YIELD</span>
             <span class="metric-badge loss">+2.1bp</span>
@@ -485,11 +500,16 @@
               <div class="timeframe-btns">
                 <button class="tf-btn">1m</button>
                 <button class="tf-btn">5m</button>
-                <button class="tf-btn active">15m</button>
+                <button class="tf-btn">15m</button>
                 <button class="tf-btn">1H</button>
                 <button class="tf-btn">4H</button>
                 <button class="tf-btn">1D</button>
                 <button class="tf-btn">1W</button>
+                <button class="tf-btn active">1Y</button>
+                <button class="tf-btn">2Y</button>
+                <button class="tf-btn">3Y</button>
+                <button class="tf-btn">5Y</button>
+                <button class="tf-btn">MAX</button>
               </div>
               <div class="chart-type-btns">
                 <button class="ct-btn active" title="Candlestick">
@@ -506,11 +526,22 @@
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 17l6-6 4 4 8-8v11H3z"/></svg>
                 </button>
               </div>
-              <div class="indicator-menu">
-                <button class="indicator-btn">
+              <div class="indicator-menu" id="indicatorMenu">
+                <button class="indicator-btn" id="indicatorToggleBtn">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 5v14M5 12h14"/></svg>
                   Indicators
                 </button>
+                <div class="indicator-dropdown" id="indicatorDropdown">
+                  <label class="ind-option"><span class="ind-dot" style="background:#3B82F6"></span>SMA (20)<input type="checkbox" data-indicator="sma20"></label>
+                  <label class="ind-option"><span class="ind-dot" style="background:#F97316"></span>SMA (50)<input type="checkbox" data-indicator="sma50"></label>
+                  <label class="ind-option"><span class="ind-dot" style="background:#EF4444"></span>SMA (200)<input type="checkbox" data-indicator="sma200"></label>
+                  <label class="ind-option"><span class="ind-dot" style="background:#06B6D4"></span>EMA (9)<input type="checkbox" data-indicator="ema9"></label>
+                  <label class="ind-option"><span class="ind-dot" style="background:#D946EF"></span>EMA (21)<input type="checkbox" data-indicator="ema21"></label>
+                  <label class="ind-option"><span class="ind-dot" style="background:#8B5CF6"></span>Bollinger Bands<input type="checkbox" data-indicator="bb"></label>
+                  <label class="ind-option"><span class="ind-dot" style="background:#F59E0B"></span>RSI (14)<input type="checkbox" data-indicator="rsi"></label>
+                  <label class="ind-option"><span class="ind-dot" style="background:#3B82F6"></span>MACD<input type="checkbox" data-indicator="macd"></label>
+                  <label class="ind-option"><span class="ind-dot" style="background:#94A3B8"></span>VWAP<input type="checkbox" data-indicator="vwap"></label>
+                </div>
               </div>
             </div>
           </div>
@@ -524,15 +555,33 @@
               <span class="overlay-item vol">V: 48.2M</span>
             </div>
             <div class="chart-indicators-overlay">
-              <span class="ind-tag">SMA(20): 224.31</span>
-              <span class="ind-tag">EMA(50): 221.87</span>
-              <span class="ind-tag">RSI(14): 62.4</span>
-              <span class="ind-tag">MACD: 1.24</span>
-              <span class="ind-tag">BB: 219.4 / 229.6</span>
             </div>
           </div>
           <div class="chart-volume" id="volumeChart">
             <canvas id="volumeCanvas"></canvas>
+          </div>
+          <div class="indicator-subpanels" id="indicatorSubpanels">
+            <div class="indicator-subpanel" id="rsiPanel" style="display:none;">
+              <div class="subpanel-label">RSI(14)</div>
+              <canvas id="rsiCanvas"></canvas>
+            </div>
+            <div class="indicator-subpanel" id="macdPanel" style="display:none;">
+              <div class="subpanel-label">MACD</div>
+              <canvas id="macdCanvas"></canvas>
+            </div>
+          </div>
+          <div class="fundamentals-strip" id="fundamentalsStrip">
+            <div class="fund-item"><span class="fund-label">Mkt Cap</span><span class="fund-value" id="fundMktCap">--</span></div>
+            <div class="fund-item"><span class="fund-label">52W H</span><span class="fund-value" id="fund52H">--</span></div>
+            <div class="fund-item"><span class="fund-label">52W L</span><span class="fund-value" id="fund52L">--</span></div>
+            <div class="fund-item"><span class="fund-label">Open</span><span class="fund-value" id="fundOpen">--</span></div>
+            <div class="fund-item"><span class="fund-label">Prev Close</span><span class="fund-value" id="fundPrevClose">--</span></div>
+            <div class="fund-item"><span class="fund-label">Volume</span><span class="fund-value" id="fundVolume">--</span></div>
+            <div class="fund-item"><span class="fund-label">Avg Vol</span><span class="fund-value" id="fundAvgVol">--</span></div>
+            <div class="fund-item"><span class="fund-label">P/E</span><span class="fund-value" id="fundPE">--</span></div>
+            <div class="fund-item"><span class="fund-label">EPS</span><span class="fund-value" id="fundEPS">--</span></div>
+            <div class="fund-item"><span class="fund-label">Yield</span><span class="fund-value" id="fundYield">--</span></div>
+            <div class="fund-item"><span class="fund-label">Beta</span><span class="fund-value" id="fundBeta">--</span></div>
           </div>
         </div>
 
@@ -953,6 +1002,7 @@
 
     <!-- ===================== OPTIONS VIEW ===================== -->
     <div class="view" id="view-options">
+      <div class="wip-watermark"><span class="wip-watermark-text">Work in Progress</span></div>
       <div class="view-header">
         <div class="view-title">
           <h1>Options Chain</h1>
@@ -1186,6 +1236,7 @@
 
     <!-- ===================== GREY SANKORE AI VIEW ===================== -->
     <div class="view" id="view-greysankore">
+      <div class="wip-watermark"><span class="wip-watermark-text">Work in Progress</span></div>
       <div class="view-header">
         <div class="view-title">
           <div class="gs-header-brand">
@@ -1211,7 +1262,7 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
           </div>
           <div class="gms-data">
-            <span class="gms-value">7</span>
+            <span class="gms-value" id="gsStatAnomalies">7</span>
             <span class="gms-label">Active Anomalies</span>
           </div>
         </div>
@@ -1220,7 +1271,7 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
           </div>
           <div class="gms-data">
-            <span class="gms-value">12</span>
+            <span class="gms-value" id="gsStatValues">12</span>
             <span class="gms-label">Value Opportunities</span>
           </div>
         </div>
@@ -1229,7 +1280,7 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
           </div>
           <div class="gms-data">
-            <span class="gms-value">5</span>
+            <span class="gms-value" id="gsStatMomentum">5</span>
             <span class="gms-label">Momentum Signals</span>
           </div>
         </div>
@@ -1238,7 +1289,7 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
           </div>
           <div class="gms-data">
-            <span class="gms-value">94.2%</span>
+            <span class="gms-value" id="gsStatAccuracy">94.2%</span>
             <span class="gms-label">Model Accuracy (30d)</span>
           </div>
         </div>
@@ -1256,7 +1307,7 @@
             </h3>
             <span class="panel-badge">Real-time</span>
           </div>
-          <div class="gs-alert-list">
+          <div class="gs-alert-list" id="gsAlertList">
             <div class="gs-alert anomaly">
               <div class="alert-header">
                 <span class="alert-ticker">NVDA</span>
@@ -1312,7 +1363,7 @@
             </h3>
             <span class="panel-badge">Updated 5m ago</span>
           </div>
-          <div class="gs-value-table">
+          <div class="gs-value-table" id="gsValueTable">
             <div class="gvt-header">
               <span>Ticker</span>
               <span>Fwd P/E</span>
@@ -1404,6 +1455,7 @@
 
     <!-- ===================== ORDER FLOW VIEW ===================== -->
     <div class="view" id="view-flow">
+      <div class="wip-watermark"><span class="wip-watermark-text">Work in Progress</span></div>
       <div class="view-header">
         <div class="view-title">
           <h1>Order Flow</h1>
@@ -1584,6 +1636,7 @@
 
     <!-- ===================== AGENTS VIEW ===================== -->
     <div class="view" id="view-agents">
+      <div class="wip-watermark"><span class="wip-watermark-text">Work in Progress</span></div>
       <div class="view-header">
         <div class="view-title">
           <h1>Trading Agents</h1>
@@ -1595,226 +1648,76 @@
         </button>
       </div>
 
+      <!-- Signal Queue Panel -->
+      <div class="panel signal-queue-panel">
+        <div class="panel-header">
+          <div class="panel-title-group">
+            <h3 class="panel-title">AI Signal Queue</h3>
+            <span class="signal-queue-count" id="signalQueueCount">0 pending</span>
+          </div>
+          <div class="signal-queue-actions">
+            <select class="signal-filter-select" id="signalAgentFilter">
+              <option value="all">All Agents</option>
+            </select>
+            <button class="agent-btn" id="signalClearExpired">Clear Expired</button>
+          </div>
+        </div>
+        <div class="signal-queue-body" id="signalQueueBody">
+          <!-- Signal rows injected by JS -->
+        </div>
+      </div>
+
       <!-- Agent Cards (dynamically rendered) -->
       <div class="agents-grid" id="agentsGrid">
         <!-- Agent cards injected by app.js -->
       </div>
 
-      <!-- Static agent cards removed - now rendered dynamically -->
-      <div style="display:none" class="agents-grid-static-removed">
-        <div class="agent-card active">
-          <div class="agent-header">
-            <div class="agent-status-dot running"></div>
-            <h3 class="agent-name">Arbitrage Hunter</h3>
-            <span class="agent-badge running">RUNNING</span>
-          </div>
-          <div class="agent-desc">Scans for cross-exchange price discrepancies, options mispricing, and ETF NAV arbitrage opportunities. Executes when spread exceeds transaction cost threshold.</div>
-          <div class="agent-stats">
-            <div class="agent-stat">
-              <span class="as-label">Strategy</span>
-              <span class="as-value">Statistical Arbitrage</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Today's P&L</span>
-              <span class="as-value profit">+$2,847</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Win Rate</span>
-              <span class="as-value">73.2%</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Trades Today</span>
-              <span class="as-value">142</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Avg Hold Time</span>
-              <span class="as-value">4.2 min</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Max Drawdown</span>
-              <span class="as-value loss">-$412</span>
-            </div>
-          </div>
-          <div class="agent-controls">
-            <button class="agent-btn pause">Pause</button>
-            <button class="agent-btn">Configure</button>
-            <button class="agent-btn">Logs</button>
-          </div>
-        </div>
-
-        <div class="agent-card active">
-          <div class="agent-header">
-            <div class="agent-status-dot running"></div>
-            <h3 class="agent-name">Swing Momentum</h3>
-            <span class="agent-badge running">RUNNING</span>
-          </div>
-          <div class="agent-desc">Identifies multi-day swing setups using RSI divergence, MACD crossovers, and volume profile analysis. Targets 2-5 day holding periods with 2:1 risk/reward minimum.</div>
-          <div class="agent-stats">
-            <div class="agent-stat">
-              <span class="as-label">Strategy</span>
-              <span class="as-value">Swing Trading</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Open Positions</span>
-              <span class="as-value">3</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Unrealized P&L</span>
-              <span class="as-value profit">+$1,234</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Win Rate (30d)</span>
-              <span class="as-value">61.8%</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Avg R:R</span>
-              <span class="as-value">2.4:1</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Sharpe (30d)</span>
-              <span class="as-value">1.87</span>
-            </div>
-          </div>
-          <div class="agent-positions">
-            <div class="ap-header">Open Positions</div>
-            <div class="ap-row profit">
-              <span>PLTR Long @ $23.42</span>
-              <span class="profit">+6.2%</span>
-              <span>Target: $27.80</span>
-              <span>Stop: $22.10</span>
-            </div>
-            <div class="ap-row profit">
-              <span>COIN Long @ $254.18</span>
-              <span class="profit">+5.4%</span>
-              <span>Target: $285.00</span>
-              <span>Stop: $242.00</span>
-            </div>
-            <div class="ap-row loss">
-              <span>JPM Short @ $199.87</span>
-              <span class="loss">-0.7%</span>
-              <span>Target: $192.00</span>
-              <span>Stop: $202.50</span>
-            </div>
-          </div>
-          <div class="agent-controls">
-            <button class="agent-btn pause">Pause</button>
-            <button class="agent-btn">Configure</button>
-            <button class="agent-btn">Logs</button>
-          </div>
-        </div>
-
-        <div class="agent-card">
-          <div class="agent-header">
-            <div class="agent-status-dot paused"></div>
-            <h3 class="agent-name">Gamma Scalper</h3>
-            <span class="agent-badge paused">PAUSED</span>
-          </div>
-          <div class="agent-desc">Delta-neutral options strategy that profits from gamma by continuously rebalancing. Targets high-IV names near expiration. Best in volatile, range-bound markets.</div>
-          <div class="agent-stats">
-            <div class="agent-stat">
-              <span class="as-label">Strategy</span>
-              <span class="as-value">Gamma Scalping</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">MTD P&L</span>
-              <span class="as-value profit">+$4,812</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Win Rate</span>
-              <span class="as-value">58.4%</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Avg Gamma P&L</span>
-              <span class="as-value profit">+$187/trade</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Theta Bleed</span>
-              <span class="as-value loss">-$89/day</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Rebalance Freq</span>
-              <span class="as-value">Every $0.50</span>
-            </div>
-          </div>
-          <div class="agent-controls">
-            <button class="agent-btn start">Resume</button>
-            <button class="agent-btn">Configure</button>
-            <button class="agent-btn">Backtest</button>
-          </div>
-        </div>
-
-        <div class="agent-card">
-          <div class="agent-header">
-            <div class="agent-status-dot paused"></div>
-            <h3 class="agent-name">Mean Reversion</h3>
-            <span class="agent-badge paused">PAUSED</span>
-          </div>
-          <div class="agent-desc">Identifies extreme deviations from statistical norms using z-score analysis, Bollinger Band compression, and pair correlation breakdowns. Profits from price normalization.</div>
-          <div class="agent-stats">
-            <div class="agent-stat">
-              <span class="as-label">Strategy</span>
-              <span class="as-value">Mean Reversion</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">MTD P&L</span>
-              <span class="as-value profit">+$3,291</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Win Rate</span>
-              <span class="as-value">67.1%</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Avg Hold</span>
-              <span class="as-value">1.8 days</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Z-Score Trigger</span>
-              <span class="as-value">+/- 2.5</span>
-            </div>
-            <div class="agent-stat">
-              <span class="as-label">Max Position</span>
-              <span class="as-value">$25K</span>
-            </div>
-          </div>
-          <div class="agent-controls">
-            <button class="agent-btn start">Resume</button>
-            <button class="agent-btn">Configure</button>
-            <button class="agent-btn">Backtest</button>
-          </div>
-        </div>
-
-        <!-- Deploy New Agent Card -->
-        <div class="agent-card new-agent">
-          <div class="new-agent-inner">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M12 5v14M5 12h14"/></svg>
-            <h3>Deploy New Agent</h3>
-            <p>Choose from pre-built strategies or create a custom agent with your own parameters</p>
-            <div class="new-agent-templates">
-              <span class="template-tag">Pairs Trading</span>
-              <span class="template-tag">Iron Condor Farm</span>
-              <span class="template-tag">Earnings Straddle</span>
-              <span class="template-tag">Momentum Breakout</span>
-              <span class="template-tag">Dividend Capture</span>
-              <span class="template-tag">Custom...</span>
-            </div>
-          </div>
-        </div>
-      </div>
-      </div><!-- end hidden static agents -->
-
       <!-- Agent Performance Chart -->
       <div class="panel agent-perf-panel">
         <div class="panel-header">
           <h3 class="panel-title">Cumulative Agent Performance</h3>
-          <div class="agent-perf-legend">
-            <span class="legend-item"><span class="legend-dot" style="background: var(--accent-blue)"></span>Arbitrage</span>
-            <span class="legend-item"><span class="legend-dot" style="background: var(--profit)"></span>Swing</span>
-            <span class="legend-item"><span class="legend-dot" style="background: var(--accent-purple)"></span>Gamma</span>
-            <span class="legend-item"><span class="legend-dot" style="background: var(--accent-gold)"></span>Mean Rev.</span>
+          <div class="agent-perf-legend" id="agentPerfLegend">
+            <span class="legend-item"><span class="legend-dot" style="background: var(--accent-gold)"></span>Momentum Alpha</span>
+            <span class="legend-item"><span class="legend-dot" style="background: var(--accent-blue)"></span>Swing Trader</span>
+            <span class="legend-item"><span class="legend-dot" style="background: var(--profit)"></span>Gamma Scalper</span>
+            <span class="legend-item"><span class="legend-dot" style="background: var(--accent-purple)"></span>Value Scanner</span>
           </div>
         </div>
         <div class="agent-perf-chart" id="agentPerfChart">
           <canvas id="agentPerfCanvas"></canvas>
+        </div>
+      </div>
+
+      <!-- Execution Log -->
+      <div class="panel execution-log-panel">
+        <div class="panel-header execution-log-header" id="executionLogHeader">
+          <div class="panel-title-group">
+            <h3 class="panel-title">Execution Log</h3>
+            <span class="exec-log-count" id="execLogCount">0 entries</span>
+          </div>
+          <div class="exec-log-actions">
+            <select class="signal-filter-select" id="execLogAgentFilter">
+              <option value="all">All Agents</option>
+            </select>
+            <button class="agent-btn exec-log-collapse-btn" id="execLogCollapseBtn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 15l-6-6-6 6"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="execution-log-body" id="executionLogBody">
+          <div class="exec-log-table-header">
+            <span class="elh-time">Time</span>
+            <span class="elh-agent">Agent</span>
+            <span class="elh-action">Action</span>
+            <span class="elh-ticker">Ticker</span>
+            <span class="elh-dir">Side</span>
+            <span class="elh-price">Price</span>
+            <span class="elh-shares">Shares</span>
+            <span class="elh-pnl">P&L</span>
+          </div>
+          <div class="exec-log-rows" id="execLogRows">
+            <!-- Execution rows injected by JS -->
+          </div>
         </div>
       </div>
     </div>
@@ -1847,14 +1750,14 @@
           <div class="risk-card-context">Dollar delta</div>
         </div>
         <div class="risk-card">
-          <div class="risk-card-header">Net Gamma</div>
-          <div class="risk-card-value" id="riskNetGamma">--</div>
-          <div class="risk-card-context">1% move P&L change</div>
+          <div class="risk-card-header">Portfolio Beta</div>
+          <div class="risk-card-value" id="riskPortBeta">--</div>
+          <div class="risk-card-context">Weighted avg beta</div>
         </div>
         <div class="risk-card">
-          <div class="risk-card-header">Beta-Weighted Delta</div>
-          <div class="risk-card-value" id="riskBetaDelta">--</div>
-          <div class="risk-card-context">SPY-equivalent</div>
+          <div class="risk-card-header">Sharpe Ratio</div>
+          <div class="risk-card-value" id="riskSharpe">--</div>
+          <div class="risk-card-context">(Return - Rf) / StdDev</div>
         </div>
         <div class="risk-card">
           <div class="risk-card-header">Portfolio VaR (95%)</div>
@@ -1868,24 +1771,99 @@
         </div>
       </div>
 
+      <!-- Position Sizing Calculator -->
+      <div class="panel position-sizer-panel" style="margin-bottom:16px;">
+        <div class="panel-header">
+          <h3 class="panel-title">Position Sizing Calculator</h3>
+          <span class="panel-badge">MOST USED</span>
+        </div>
+        <div class="position-sizer-body">
+          <div class="sizer-inputs">
+            <div class="sizer-field">
+              <label>Account Size ($)</label>
+              <input type="number" id="sizerAccount" placeholder="100,000" value="100000" />
+            </div>
+            <div class="sizer-field">
+              <label>Risk Per Trade (%)</label>
+              <input type="number" id="sizerRiskPct" placeholder="1.0" value="1.0" step="0.1" />
+            </div>
+            <div class="sizer-field">
+              <label>Entry Price ($)</label>
+              <input type="number" id="sizerEntry" placeholder="150.00" step="0.01" />
+            </div>
+            <div class="sizer-field">
+              <label>Stop Loss ($)</label>
+              <input type="number" id="sizerStop" placeholder="142.00" step="0.01" />
+            </div>
+            <div class="sizer-field">
+              <label>Target Price ($)</label>
+              <input type="number" id="sizerTarget" placeholder="165.00" step="0.01" />
+            </div>
+            <div class="sizer-field sizer-field-btn">
+              <button class="btn-primary" id="sizerCalcBtn" style="width:100%;margin-top:16px;">Calculate</button>
+            </div>
+          </div>
+          <div class="sizer-results" id="sizerResults">
+            <div class="sizer-result-card sizer-primary">
+              <div class="sizer-result-label">Position Size</div>
+              <div class="sizer-result-value" id="sizerShares">--</div>
+              <div class="sizer-result-sub">shares</div>
+            </div>
+            <div class="sizer-result-card">
+              <div class="sizer-result-label">Position Value</div>
+              <div class="sizer-result-value" id="sizerValue">--</div>
+            </div>
+            <div class="sizer-result-card">
+              <div class="sizer-result-label">Dollar Risk</div>
+              <div class="sizer-result-value loss" id="sizerDollarRisk">--</div>
+            </div>
+            <div class="sizer-result-card">
+              <div class="sizer-result-label">% of Portfolio</div>
+              <div class="sizer-result-value" id="sizerPctPort">--</div>
+            </div>
+            <div class="sizer-result-card sizer-rr-card" id="sizerRRCard" style="display:none;">
+              <div class="sizer-result-label">Risk / Reward</div>
+              <div class="sizer-result-value" id="sizerRR">--</div>
+              <div class="sizer-rr-bar-wrap">
+                <div class="sizer-rr-bar-risk" id="sizerRRBarRisk"></div>
+                <div class="sizer-rr-bar-reward" id="sizerRRBarReward"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Drawdown Chart -->
+      <div class="panel" style="margin-bottom:16px;">
+        <div class="panel-header">
+          <h3 class="panel-title">Equity Drawdown</h3>
+          <span class="panel-subtitle-text" id="drawdownCurrentLabel">Current: --</span>
+        </div>
+        <div class="drawdown-chart-wrap">
+          <canvas id="drawdownCanvas"></canvas>
+        </div>
+      </div>
+
       <!-- Position Risk Table -->
       <div class="panel" style="margin-bottom:12px;">
         <div class="panel-header">
           <h3 class="panel-title">Position Risk Breakdown</h3>
+          <span class="panel-subtitle-text" id="riskTableSortHint">Click column to sort</span>
         </div>
         <div class="risk-position-table-wrap">
           <table class="risk-position-table" id="riskPositionTable">
             <thead>
               <tr>
-                <th>Symbol</th>
-                <th>Qty</th>
-                <th>Avg Cost</th>
-                <th>Current</th>
-                <th>P&L</th>
-                <th>P&L%</th>
-                <th>Weight%</th>
-                <th>Beta</th>
-                <th>Delta Contrib</th>
+                <th data-sort="symbol">Symbol</th>
+                <th data-sort="qty">Qty</th>
+                <th data-sort="avgCost">Avg Cost</th>
+                <th data-sort="current">Current</th>
+                <th data-sort="pnl">P&L</th>
+                <th data-sort="pnlPct">P&L%</th>
+                <th data-sort="weight">Weight%</th>
+                <th class="th-weight-bar">Portfolio Weight</th>
+                <th data-sort="beta">Beta</th>
+                <th data-sort="deltaContrib">Beta Contrib</th>
               </tr>
             </thead>
             <tbody id="riskPositionBody">
@@ -1946,6 +1924,7 @@
       <div class="panel" style="margin-top:12px;">
         <div class="panel-header">
           <h3 class="panel-title">Stress Test Scenarios</h3>
+          <span class="panel-subtitle-text">Beta-weighted portfolio impact</span>
         </div>
         <div class="stress-test-grid" id="stressTestGrid">
           <!-- Populated by JS -->
@@ -1964,6 +1943,24 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
           New Entry
         </button>
+      </div>
+
+      <!-- P&L Calendar Heatmap -->
+      <div class="panel journal-calendar-panel">
+        <div class="panel-header">
+          <h3 class="panel-title">P&L Calendar</h3>
+          <div class="journal-calendar-nav">
+            <button class="journal-cal-arrow" id="journalCalPrev" title="Previous month">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
+            <span class="journal-cal-month" id="journalCalMonth">March 2026</span>
+            <button class="journal-cal-arrow" id="journalCalNext" title="Next month">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+            </button>
+            <span class="journal-cal-total" id="journalCalTotal">$0</span>
+          </div>
+        </div>
+        <div class="journal-calendar-grid" id="journalCalendarGrid"></div>
       </div>
 
       <!-- Journal Stats Dashboard -->
@@ -2051,223 +2048,90 @@
       </div>
     </div>
 
-    <!-- ===================== SETTINGS VIEW ===================== -->
-    <div class="view" id="view-settings">
-      <div class="view-header">
-        <div class="view-title">
-          <h1>Settings</h1>
-          <span class="view-subtitle">Platform configuration</span>
-        </div>
-      </div>
-      <div class="settings-grid">
-        <div class="panel settings-panel">
-          <h3 class="settings-section-title">Alpaca Trading</h3>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">Trading Mode</span>
-              <span class="setting-desc">Paper trading uses simulated money. ALWAYS start with paper.</span>
-            </div>
-            <select class="setting-select" id="settingAlpacaMode">
-              <option value="paper" selected>Paper Trading (Simulated)</option>
-              <option value="live">Live Trading (Real Money)</option>
-            </select>
+    <!-- Settings view removed - content moved to slide-out panel -->
+
+    <!-- Grey Sankore Deep Analysis Modal -->
+    <div class="gs-analysis-overlay" id="gsAnalysisOverlay">
+      <div class="gs-analysis-modal">
+        <button class="gs-modal-close" id="gsModalClose">&times;</button>
+
+        <!-- Header -->
+        <div class="gs-modal-header">
+          <div class="gs-modal-ticker-info">
+            <span class="gs-modal-ticker" id="gsModalTicker">NVDA</span>
+            <span class="gs-modal-name" id="gsModalName">NVIDIA Corporation</span>
+            <span class="gs-modal-cap-badge" id="gsModalCapBadge">Large Cap</span>
           </div>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">Alpaca API Key</span>
-              <span class="setting-desc">From your Alpaca dashboard (paper or live)</span>
-            </div>
-            <input type="password" class="setting-input" id="settingAlpacaKey" placeholder="PK...">
-          </div>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">Alpaca API Secret</span>
-              <span class="setting-desc">Keep this private. Stored in browser localStorage.</span>
-            </div>
-            <input type="password" class="setting-input" id="settingAlpacaSecret" placeholder="Secret key...">
-          </div>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">Connection Status</span>
-              <span class="setting-desc" id="alpacaStatusDesc">Not connected</span>
-            </div>
-            <button class="agent-btn start" id="testAlpacaBtn" style="min-width:120px">Test Connection</button>
-          </div>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name"></span>
-            </div>
-            <button class="btn-primary" id="saveAlpacaBtn" style="min-width:160px">Save Alpaca Settings</button>
+          <div class="gs-modal-price-info">
+            <span class="gs-modal-price" id="gsModalPrice">$875.40</span>
+            <span class="gs-modal-change profit" id="gsModalChange">+2.34%</span>
           </div>
         </div>
-        <div class="panel settings-panel">
-          <h3 class="settings-section-title">API Connections</h3>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">Market Data Provider</span>
-              <span class="setting-desc">Real-time equity and options data feed</span>
-            </div>
-            <select class="setting-select">
-              <option>Polygon.io</option>
-              <option>Alpha Vantage</option>
-              <option>IEX Cloud</option>
-              <option>Unusual Whales</option>
-            </select>
-          </div>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">Broker Connection</span>
-              <span class="setting-desc">For live and paper trading execution</span>
-            </div>
-            <select class="setting-select">
-              <option>Alpaca (Paper)</option>
-              <option>Alpaca (Live)</option>
-              <option>Interactive Brokers</option>
-              <option>TD Ameritrade</option>
-            </select>
-          </div>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">AI Model</span>
-              <span class="setting-desc">Grey Sankore analysis engine</span>
-            </div>
-            <select class="setting-select">
-              <option>Claude Opus 4.6</option>
-              <option>Claude Sonnet 4.6</option>
-              <option>GPT-4o</option>
-            </select>
-          </div>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">Anthropic API Key</span>
-              <span class="setting-desc">Required for live Grey Sankore AI analysis</span>
-            </div>
-            <div class="setting-api-key-group">
-              <input type="password" class="setting-input" id="anthropicApiKeyInput" placeholder="sk-ant-..." autocomplete="off" style="flex: 1;">
-              <button class="setting-api-btn" id="saveApiKeyBtn">Save</button>
-            </div>
-          </div>
-          <div class="setting-row" id="apiKeyStatusRow" style="border-top: none; padding-top: 0;">
-            <div class="setting-info">
-              <span class="setting-name" style="font-size: 0.75rem;"></span>
-              <span class="setting-desc" id="apiKeyStatus" style="font-size: 0.8rem;">Checking connection...</span>
-            </div>
-            <div id="apiKeyStatusIndicator" class="api-status-indicator"></div>
-          </div>
+
+        <!-- Signal banner -->
+        <div class="gs-modal-signal" id="gsModalSignal">
+          <span class="gs-modal-signal-type">Volume Anomaly</span>
+          <span class="gs-modal-signal-severity high">HIGH</span>
+          <span class="gs-modal-signal-confidence">Confidence: 87%</span>
         </div>
-        <div class="panel settings-panel">
-          <h3 class="settings-section-title">Risk Guardrails</h3>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">Max Position Size</span>
-              <span class="setting-desc">Maximum allocation per single position</span>
+
+        <!-- Content grid (2 columns) -->
+        <div class="gs-modal-grid">
+          <!-- Left column -->
+          <div class="gs-modal-col">
+            <!-- AI Thesis -->
+            <div class="gs-modal-section">
+              <h4>AI Thesis</h4>
+              <div class="gs-modal-thesis" id="gsModalThesis">
+                <ul>
+                  <li>Loading analysis...</li>
+                </ul>
+              </div>
             </div>
-            <input type="text" class="setting-input" id="settingMaxPosition" value="$50,000">
-          </div>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">Daily Loss Limit</span>
-              <span class="setting-desc">Auto-pause all agents when reached</span>
+
+            <!-- Valuation Panel -->
+            <div class="gs-modal-section">
+              <h4>Valuation</h4>
+              <div class="gs-modal-valuation" id="gsModalValuation"></div>
             </div>
-            <input type="text" class="setting-input" id="settingDailyLoss" value="$5,000">
-          </div>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">Max Concurrent Agents</span>
-              <span class="setting-desc">Number of agents running simultaneously</span>
-            </div>
-            <input type="text" class="setting-input" id="settingMaxAgents" value="4">
-          </div>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">Max Order Quantity</span>
-              <span class="setting-desc">Maximum shares per single order</span>
-            </div>
-            <input type="text" class="setting-input" id="settingMaxOrderQty" value="500">
-          </div>
-        </div>
-        <div class="panel settings-panel">
-          <h3 class="settings-section-title">Theme</h3>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">Appearance</span>
-              <span class="setting-desc">Visual theme for the platform</span>
-            </div>
-            <div class="theme-option-group">
-              <button class="theme-option active" id="themeDark" data-theme="dark">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
-                Dark Terminal
-              </button>
+
+            <!-- Risk Factors -->
+            <div class="gs-modal-section">
+              <h4>Risk Factors</h4>
+              <div class="gs-modal-risks" id="gsModalRisks"></div>
             </div>
           </div>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">Accent Color</span>
-              <span class="setting-desc">Primary accent used across the UI</span>
+
+          <!-- Right column -->
+          <div class="gs-modal-col">
+            <!-- Chart (canvas) -->
+            <div class="gs-modal-section">
+              <h4>Price Action (90 Days)</h4>
+              <div class="gs-modal-chart-wrap">
+                <canvas id="gsModalChart" width="400" height="200"></canvas>
+              </div>
             </div>
-            <div class="accent-swatches">
-              <span class="accent-swatch active" data-color="gold" style="background:#F59E0B;" title="Gold"></span>
-              <span class="accent-swatch" data-color="blue" style="background:#3B82F6;" title="Blue"></span>
-              <span class="accent-swatch" data-color="teal" style="background:#14B8A6;" title="Teal"></span>
-              <span class="accent-swatch" data-color="purple" style="background:#8B5CF6;" title="Purple"></span>
+
+            <!-- Technical Levels -->
+            <div class="gs-modal-section">
+              <h4>Technical Levels</h4>
+              <div class="gs-modal-technicals" id="gsModalTechnicals"></div>
+            </div>
+
+            <!-- Catalysts -->
+            <div class="gs-modal-section">
+              <h4>Upcoming Catalysts</h4>
+              <div class="gs-modal-catalysts" id="gsModalCatalysts"></div>
             </div>
           </div>
         </div>
-        <div class="panel settings-panel">
-          <h3 class="settings-section-title">Data Preferences</h3>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">Refresh Interval</span>
-              <span class="setting-desc">How often market data auto-refreshes</span>
-            </div>
-            <select class="setting-select" id="settingRefreshInterval">
-              <option value="5000">5 seconds</option>
-              <option value="10000" selected>10 seconds</option>
-              <option value="15000">15 seconds</option>
-              <option value="30000">30 seconds</option>
-            </select>
-          </div>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">Default Chart Timeframe</span>
-              <span class="setting-desc">Initial timeframe when opening a chart</span>
-            </div>
-            <select class="setting-select" id="settingDefaultTimeframe">
-              <option value="1m">1 Minute</option>
-              <option value="5m">5 Minutes</option>
-              <option value="15m" selected>15 Minutes</option>
-              <option value="1H">1 Hour</option>
-              <option value="4H">4 Hours</option>
-              <option value="1D">1 Day</option>
-              <option value="1W">1 Week</option>
-            </select>
-          </div>
-        </div>
-        <div class="panel settings-panel">
-          <h3 class="settings-section-title">BigData.com Premium Data</h3>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">BigData.com API Key</span>
-              <span class="setting-desc">Institutional-grade flow, dark pool, sentiment, and insider data. Get a key at bigdata.com</span>
-            </div>
-            <div class="setting-api-key-group">
-              <input type="password" class="setting-input" id="bigdataApiKeyInput" placeholder="bd-..." autocomplete="off" style="flex: 1;">
-              <button class="setting-api-btn" id="saveBigdataKeyBtn">Save</button>
-            </div>
-          </div>
-          <div class="setting-row" id="bigdataKeyStatusRow" style="border-top: none; padding-top: 0;">
-            <div class="setting-info">
-              <span class="setting-name" style="font-size: 0.75rem;"></span>
-              <span class="setting-desc" id="bigdataKeyStatus" style="font-size: 0.8rem;">Checking connection...</span>
-            </div>
-            <div id="bigdataKeyStatusIndicator" class="api-status-indicator"></div>
-          </div>
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">Premium Features</span>
-              <span class="setting-desc">When connected, BigData.com provides real options flow, dark pool prints, sentiment scores, insider trading data, institutional ownership, and sector performance. These replace simulated data throughout the platform.</span>
-            </div>
-          </div>
+
+        <!-- Action bar (bottom) -->
+        <div class="gs-modal-actions">
+          <button class="gs-modal-action-btn" id="gsModalAddWatch">+ Add to Watchlist</button>
+          <button class="gs-modal-action-btn" id="gsModalCreateSignal">Create Signal</button>
+          <button class="gs-modal-action-btn" id="gsModalJournalNote">Journal Note</button>
+          <button class="gs-modal-action-btn primary" id="gsModalAskAI">Ask Grey Sankore</button>
         </div>
       </div>
     </div>
@@ -2276,6 +2140,313 @@
     <div class="toast-container" id="toastContainer"></div>
 
   </main>
+</div>
+
+<!-- SLIDE-OUT SETTINGS PANEL -->
+<div class="sp-backdrop" id="spBackdrop"></div>
+<button class="sp-expand-tab" id="spExpandTab" title="Open settings">
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+</button>
+<div class="settings-panel-slideout" id="settingsPanelSlideout">
+  <!-- Collapse/expand arrow tab on right edge -->
+  <button class="sp-collapse-btn" id="spCollapseBtn" title="Close settings panel">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+  </button>
+  <div class="sp-inner">
+    <!-- Tab bar (vertical, left side) -->
+    <div class="sp-tabs">
+      <button class="sp-tab active" data-sp-tab="profile" title="Profile">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      </button>
+      <button class="sp-tab" data-sp-tab="portfolio" title="Portfolio">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 12V7H5a2 2 0 010-4h14v4"/><path d="M3 5v14a2 2 0 002 2h16v-5"/><path d="M18 12a2 2 0 000 4h4v-4h-4z"/></svg>
+      </button>
+      <button class="sp-tab" data-sp-tab="connections" title="Connections">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+      </button>
+      <button class="sp-tab" data-sp-tab="preferences" title="Preferences">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      </button>
+    </div>
+
+    <!-- Tab content area -->
+    <div class="sp-content">
+      <!-- PROFILE TAB -->
+      <div class="sp-tab-content active" id="spTabProfile">
+        <h3 class="sp-section-title">Profile</h3>
+        <div class="sp-avatar-row">
+          <div class="sp-avatar" id="spAvatarDisplay">GS</div>
+          <div class="sp-avatar-info">
+            <span class="sp-avatar-name" id="spDisplayNameShow">Greystone User</span>
+            <span class="sp-avatar-email" id="spEmailShow">user@example.com</span>
+          </div>
+        </div>
+        <div class="sp-field">
+          <label>Display Name</label>
+          <input type="text" class="setting-input sp-wide-input" id="spDisplayName" placeholder="Your name">
+        </div>
+        <div class="sp-field">
+          <label>Email</label>
+          <input type="email" class="setting-input sp-wide-input" id="spEmail" placeholder="you@example.com" readonly>
+        </div>
+        <div class="sp-field">
+          <label>Trading Experience</label>
+          <select class="setting-select sp-wide-input" id="spExperienceLevel">
+            <option value="beginner">Beginner</option>
+            <option value="intermediate">Intermediate</option>
+            <option value="advanced">Advanced</option>
+            <option value="professional">Professional</option>
+          </select>
+        </div>
+        <div class="sp-field">
+          <label>Trading Style</label>
+          <div class="sp-checkbox-group">
+            <label class="sp-checkbox"><input type="checkbox" id="spStyleDay" value="day"> Day Trading</label>
+            <label class="sp-checkbox"><input type="checkbox" id="spStyleSwing" value="swing"> Swing Trading</label>
+            <label class="sp-checkbox"><input type="checkbox" id="spStylePosition" value="position"> Position Trading</label>
+            <label class="sp-checkbox"><input type="checkbox" id="spStyleScalp" value="scalp"> Scalping</label>
+          </div>
+        </div>
+        <div class="sp-field">
+          <label>Account Created</label>
+          <span class="sp-read-only" id="spAccountCreated">-</span>
+        </div>
+        <button class="btn-primary sp-save-btn" id="spSaveProfile">Save Profile</button>
+      </div>
+
+      <!-- PORTFOLIO TAB -->
+      <div class="sp-tab-content" id="spTabPortfolio">
+        <h3 class="sp-section-title">My Holdings</h3>
+        <div class="sp-holdings-add">
+          <input type="text" class="setting-input" id="spAddSymbol" placeholder="SYM" maxlength="6" style="width:60px;text-transform:uppercase;">
+          <input type="number" class="setting-input" id="spAddShares" placeholder="Shares" style="width:65px;" min="0" step="1">
+          <input type="number" class="setting-input" id="spAddCost" placeholder="Avg $" style="width:70px;" min="0" step="0.01">
+          <button class="sp-add-btn" id="spAddPositionBtn" title="Add Position">+</button>
+        </div>
+        <div class="sp-holdings-table" id="spHoldingsTable">
+          <div class="sp-holdings-header">
+            <span>Symbol</span><span>Shares</span><span>Avg Cost</span><span>Current</span><span>P&L</span><span></span>
+          </div>
+          <div class="sp-holdings-body" id="spHoldingsBody">
+            <div class="sp-holdings-empty">No positions yet</div>
+          </div>
+        </div>
+        <h3 class="sp-section-title" style="margin-top:20px;">My Watchlist</h3>
+        <div class="sp-watchlist-add">
+          <input type="text" class="setting-input" id="spAddWatchTicker" placeholder="Add ticker..." maxlength="6" style="width:100px;text-transform:uppercase;">
+          <button class="sp-add-btn" id="spAddWatchBtn" title="Add to Watchlist">+</button>
+        </div>
+        <div class="sp-watchlist-chips" id="spWatchlistChips"></div>
+      </div>
+
+      <!-- CONNECTIONS TAB -->
+      <div class="sp-tab-content" id="spTabConnections">
+        <h3 class="sp-section-title">Alpaca Trading</h3>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Trading Mode</span>
+            <span class="setting-desc">Paper trading uses simulated money. ALWAYS start with paper.</span>
+          </div>
+          <select class="setting-select" id="settingAlpacaMode">
+            <option value="paper" selected>Paper Trading (Simulated)</option>
+            <option value="live">Live Trading (Real Money)</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Alpaca API Key</span>
+            <span class="setting-desc">From your Alpaca dashboard (paper or live)</span>
+          </div>
+          <input type="password" class="setting-input" id="settingAlpacaKey" placeholder="PK...">
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Alpaca API Secret</span>
+            <span class="setting-desc">Keep this private. Stored in browser localStorage.</span>
+          </div>
+          <input type="password" class="setting-input" id="settingAlpacaSecret" placeholder="Secret key...">
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Connection Status</span>
+            <span class="setting-desc" id="alpacaStatusDesc">Not connected</span>
+          </div>
+          <button class="agent-btn start" id="testAlpacaBtn" style="min-width:120px">Test Connection</button>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info"><span class="setting-name"></span></div>
+          <button class="btn-primary" id="saveAlpacaBtn" style="min-width:140px">Save Alpaca Settings</button>
+        </div>
+
+        <h3 class="sp-section-title" style="margin-top:20px;">API Connections</h3>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Market Data Provider</span>
+            <span class="setting-desc">Real-time equity and options data feed</span>
+          </div>
+          <select class="setting-select">
+            <option>Polygon.io</option>
+            <option>Alpha Vantage</option>
+            <option>IEX Cloud</option>
+            <option>Unusual Whales</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Broker Connection</span>
+            <span class="setting-desc">For live and paper trading execution</span>
+          </div>
+          <select class="setting-select">
+            <option>Alpaca (Paper)</option>
+            <option>Alpaca (Live)</option>
+            <option>Interactive Brokers</option>
+            <option>TD Ameritrade</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">AI Model</span>
+            <span class="setting-desc">Grey Sankore analysis engine</span>
+          </div>
+          <select class="setting-select">
+            <option>Claude Opus 4.6</option>
+            <option>Claude Sonnet 4.6</option>
+            <option>GPT-4o</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Anthropic API Key</span>
+            <span class="setting-desc">Required for live Grey Sankore AI analysis</span>
+          </div>
+          <div class="setting-api-key-group">
+            <input type="password" class="setting-input" id="anthropicApiKeyInput" placeholder="sk-ant-..." autocomplete="off" style="flex: 1;">
+            <button class="setting-api-btn" id="saveApiKeyBtn">Save</button>
+          </div>
+        </div>
+        <div class="setting-row" id="apiKeyStatusRow" style="border-top: none; padding-top: 0;">
+          <div class="setting-info">
+            <span class="setting-name" style="font-size: 0.75rem;"></span>
+            <span class="setting-desc" id="apiKeyStatus" style="font-size: 0.8rem;">Checking connection...</span>
+          </div>
+          <div id="apiKeyStatusIndicator" class="api-status-indicator"></div>
+        </div>
+
+        <h3 class="sp-section-title" style="margin-top:20px;">BigData.com Premium Data</h3>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">BigData.com API Key</span>
+            <span class="setting-desc">Institutional-grade flow, dark pool, sentiment, and insider data</span>
+          </div>
+          <div class="setting-api-key-group">
+            <input type="password" class="setting-input" id="bigdataApiKeyInput" placeholder="bd-..." autocomplete="off" style="flex: 1;">
+            <button class="setting-api-btn" id="saveBigdataKeyBtn">Save</button>
+          </div>
+        </div>
+        <div class="setting-row" id="bigdataKeyStatusRow" style="border-top: none; padding-top: 0;">
+          <div class="setting-info">
+            <span class="setting-name" style="font-size: 0.75rem;"></span>
+            <span class="setting-desc" id="bigdataKeyStatus" style="font-size: 0.8rem;">Checking connection...</span>
+          </div>
+          <div id="bigdataKeyStatusIndicator" class="api-status-indicator"></div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Premium Features</span>
+            <span class="setting-desc">When connected, BigData.com provides real options flow, dark pool prints, sentiment scores, insider trading data, institutional ownership, and sector performance.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- PREFERENCES TAB -->
+      <div class="sp-tab-content" id="spTabPreferences">
+        <h3 class="sp-section-title">Theme</h3>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Appearance</span>
+            <span class="setting-desc">Visual theme for the platform</span>
+          </div>
+          <div class="theme-option-group">
+            <button class="theme-option active" id="themeDark" data-theme="dark">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+              Dark Terminal
+            </button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Accent Color</span>
+            <span class="setting-desc">Primary accent used across the UI</span>
+          </div>
+          <div class="accent-swatches">
+            <span class="accent-swatch active" data-color="gold" style="background:#F59E0B;" title="Gold"></span>
+            <span class="accent-swatch" data-color="blue" style="background:#3B82F6;" title="Blue"></span>
+            <span class="accent-swatch" data-color="teal" style="background:#14B8A6;" title="Teal"></span>
+            <span class="accent-swatch" data-color="purple" style="background:#8B5CF6;" title="Purple"></span>
+          </div>
+        </div>
+
+        <h3 class="sp-section-title" style="margin-top:20px;">Data Preferences</h3>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Refresh Interval</span>
+            <span class="setting-desc">How often market data auto-refreshes</span>
+          </div>
+          <select class="setting-select" id="settingRefreshInterval">
+            <option value="5000">5 seconds</option>
+            <option value="10000" selected>10 seconds</option>
+            <option value="15000">15 seconds</option>
+            <option value="30000">30 seconds</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Default Chart Timeframe</span>
+            <span class="setting-desc">Initial timeframe when opening a chart</span>
+          </div>
+          <select class="setting-select" id="settingDefaultTimeframe">
+            <option value="1m">1 Minute</option>
+            <option value="5m">5 Minutes</option>
+            <option value="15m" selected>15 Minutes</option>
+            <option value="1H">1 Hour</option>
+            <option value="4H">4 Hours</option>
+            <option value="1D">1 Day</option>
+            <option value="1W">1 Week</option>
+          </select>
+        </div>
+
+        <h3 class="sp-section-title" style="margin-top:20px;">Risk Guardrails</h3>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Max Position Size</span>
+            <span class="setting-desc">Maximum allocation per single position</span>
+          </div>
+          <input type="text" class="setting-input" id="settingMaxPosition" value="$50,000">
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Daily Loss Limit</span>
+            <span class="setting-desc">Auto-pause all agents when reached</span>
+          </div>
+          <input type="text" class="setting-input" id="settingDailyLoss" value="$5,000">
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Max Concurrent Agents</span>
+            <span class="setting-desc">Number of agents running simultaneously</span>
+          </div>
+          <input type="text" class="setting-input" id="settingMaxAgents" value="4">
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Max Order Quantity</span>
+            <span class="setting-desc">Maximum shares per single order</span>
+          </div>
+          <input type="text" class="setting-input" id="settingMaxOrderQty" value="500">
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Keyboard Shortcut Overlay -->
@@ -2343,45 +2514,81 @@
 
 <!-- Deploy New Agent Modal -->
 <div class="modal-overlay" id="deployAgentModal">
-  <div class="modal-content">
+  <div class="modal-content" style="max-width: 520px;">
     <div class="modal-header">
       <h2>Deploy New Agent</h2>
       <button class="modal-close" onclick="closeModal('deployAgentModal')">&times;</button>
     </div>
     <div class="modal-body">
-      <div class="deploy-strategies">
-        <div class="deploy-strategy-card" data-strategy="ArbitrageHunter">
-          <h3>Arbitrage Hunter</h3>
-          <p>Cross-pair price discrepancy detection. Trades correlated pairs when spread exceeds threshold.</p>
-          <div class="deploy-meta">
-            <span>Tick: 3s</span>
-            <span>Risk: Low-Medium</span>
+      <div class="deploy-form">
+        <div class="deploy-field">
+          <label class="deploy-label">Agent Name</label>
+          <input type="text" class="setting-input" id="deployAgentName" placeholder="e.g. My Breakout Bot">
+        </div>
+        <div class="deploy-field">
+          <label class="deploy-label">Strategy Type</label>
+          <select class="setting-input" id="deployStrategyType">
+            <option value="Momentum">Momentum</option>
+            <option value="Mean Reversion">Mean Reversion</option>
+            <option value="Breakout">Breakout</option>
+            <option value="Value">Value</option>
+            <option value="Options">Options</option>
+            <option value="AI Signal">AI Signal</option>
+          </select>
+        </div>
+        <div class="deploy-field">
+          <label class="deploy-label">Universe (Cap Size)</label>
+          <select class="setting-input" id="deployUniverse">
+            <option value="Large">Large Cap</option>
+            <option value="Mid">Mid Cap</option>
+            <option value="Small">Small Cap</option>
+            <option value="Micro">Micro Cap</option>
+            <option value="All" selected>All</option>
+          </select>
+        </div>
+        <div class="deploy-row-2col">
+          <div class="deploy-field">
+            <label class="deploy-label">Position Sizing</label>
+            <select class="setting-input" id="deployPosSizing">
+              <option value="fixed">Fixed $ Amount</option>
+              <option value="percent">% of Portfolio</option>
+            </select>
+          </div>
+          <div class="deploy-field">
+            <label class="deploy-label">Size Value</label>
+            <input type="number" class="setting-input" id="deployPosSize" value="10000" placeholder="10000">
           </div>
         </div>
-        <div class="deploy-strategy-card" data-strategy="SwingMomentum">
-          <h3>Swing Momentum</h3>
-          <p>RSI + MACD + Volume multi-day swing entries. Targets 2:1 R:R minimum with trailing stops.</p>
-          <div class="deploy-meta">
-            <span>Tick: 10s</span>
-            <span>Risk: Medium</span>
+        <div class="deploy-row-2col">
+          <div class="deploy-field">
+            <label class="deploy-label">Max Concurrent Positions</label>
+            <input type="number" class="setting-input" id="deployMaxPos" value="5" min="1" max="10">
+          </div>
+          <div class="deploy-field">
+            <label class="deploy-label">Stop Loss %</label>
+            <input type="number" class="setting-input" id="deployStopLoss" value="5" step="0.5">
           </div>
         </div>
-        <div class="deploy-strategy-card" data-strategy="GammaScalper">
-          <h3>Gamma Scalper</h3>
-          <p>Delta-neutral options strategy. Profits from gamma by rebalancing when underlying moves.</p>
-          <div class="deploy-meta">
-            <span>Tick: 5s</span>
-            <span>Risk: Medium-High</span>
+        <div class="deploy-row-2col">
+          <div class="deploy-field">
+            <label class="deploy-label">Take Profit %</label>
+            <input type="number" class="setting-input" id="deployTakeProfit" value="15" step="0.5">
+          </div>
+          <div class="deploy-field">
+            <label class="deploy-label">Mode</label>
+            <div class="deploy-toggle-wrap">
+              <label class="deploy-toggle">
+                <input type="checkbox" id="deployPaperMode" checked>
+                <span class="deploy-toggle-slider"></span>
+              </label>
+              <span class="deploy-toggle-label" id="deployModeLabel">PAPER</span>
+            </div>
           </div>
         </div>
-        <div class="deploy-strategy-card" data-strategy="MeanReversion">
-          <h3>Mean Reversion</h3>
-          <p>Z-score + Bollinger Band extremes. Enters on deviation, exits on mean normalization.</p>
-          <div class="deploy-meta">
-            <span>Tick: 8s</span>
-            <span>Risk: Medium</span>
-          </div>
-        </div>
+        <button class="btn-primary deploy-submit-btn" id="deploySubmitBtn" style="width:100%; margin-top:12px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+          Deploy Agent
+        </button>
       </div>
     </div>
   </div>
@@ -2453,7 +2660,7 @@
 
 <!-- Trade Journal Entry Modal -->
 <div class="modal-overlay" id="journalEntryModal">
-  <div class="modal-content" style="max-width:600px; max-height:90vh;">
+  <div class="modal-content" style="max-width:640px; max-height:90vh;">
     <div class="modal-header">
       <h2 id="journalModalTitle">New Trade Entry</h2>
       <button class="modal-close" onclick="closeModal('journalEntryModal')">&times;</button>
@@ -2483,7 +2690,7 @@
             <input type="number" id="journalEntryPrice" placeholder="0.00" class="setting-input" step="0.01">
           </div>
           <div class="journal-form-field">
-            <label>Exit Price (optional)</label>
+            <label>Exit Price</label>
             <input type="number" id="journalExitPrice" placeholder="0.00" class="setting-input" step="0.01">
           </div>
           <div class="journal-form-field">
@@ -2493,7 +2700,11 @@
         </div>
         <div class="journal-form-row">
           <div class="journal-form-field">
-            <label>Strategy</label>
+            <label>Stop Loss</label>
+            <input type="number" id="journalEntryStopLoss" placeholder="0.00" class="setting-input" step="0.01">
+          </div>
+          <div class="journal-form-field">
+            <label>Setup / Strategy</label>
             <select id="journalEntryStrategy" class="setting-select">
               <option value="Momentum">Momentum</option>
               <option value="Value">Value</option>
@@ -2505,33 +2716,43 @@
             </select>
           </div>
           <div class="journal-form-field">
-            <label>Outcome</label>
-            <select id="journalEntryOutcome" class="setting-select">
-              <option value="Open">Open</option>
-              <option value="Win">Win</option>
-              <option value="Loss">Loss</option>
-            </select>
+            <label>Hold Time</label>
+            <input type="text" id="journalEntryHoldTime" placeholder="2h 15m" class="setting-input">
+          </div>
+        </div>
+        <div class="journal-form-row" style="grid-template-columns: 1fr 1fr;">
+          <div class="journal-form-field">
+            <label>R-Multiple</label>
+            <span class="journal-calc-display" id="journalRMultipleDisplay">--</span>
+          </div>
+          <div class="journal-form-field">
+            <label>Calculated P&L</label>
+            <span class="journal-calc-display" id="journalPnlDisplay">--</span>
           </div>
         </div>
         <div class="journal-form-field" style="margin-top:8px;">
-          <label>Thesis / Notes</label>
-          <textarea id="journalEntryNotes" class="setting-input" placeholder="Why did you take this trade?" rows="3" style="resize:vertical;font-family:var(--font-sans);"></textarea>
+          <label>Self Rating</label>
+          <div class="journal-star-rating" id="journalStarRating">
+            <span class="journal-star" data-star="1">&#9733;</span>
+            <span class="journal-star" data-star="2">&#9733;</span>
+            <span class="journal-star" data-star="3">&#9733;</span>
+            <span class="journal-star" data-star="4">&#9733;</span>
+            <span class="journal-star" data-star="5">&#9733;</span>
+          </div>
         </div>
         <div class="journal-form-field" style="margin-top:8px;">
-          <label>Lessons Learned</label>
-          <textarea id="journalEntryLessons" class="setting-input" placeholder="What did you learn?" rows="2" style="resize:vertical;font-family:var(--font-sans);"></textarea>
+          <label>Emotional State</label>
+          <div class="journal-emotion-tags" id="journalEmotionTags">
+            <button type="button" class="journal-emotion-tag" data-emotion="Confident">Confident</button>
+            <button type="button" class="journal-emotion-tag" data-emotion="Fearful">Fearful</button>
+            <button type="button" class="journal-emotion-tag" data-emotion="FOMO">FOMO</button>
+            <button type="button" class="journal-emotion-tag" data-emotion="Revenge">Revenge</button>
+            <button type="button" class="journal-emotion-tag" data-emotion="Disciplined">Disciplined</button>
+          </div>
         </div>
         <div class="journal-form-field" style="margin-top:8px;">
-          <label>Screenshot (optional)</label>
-          <div class="journal-screenshot-area" id="journalScreenshotArea">
-            <input type="file" id="journalScreenshotInput" accept="image/*" style="display:none;">
-            <button class="agent-btn" id="journalScreenshotBtn" type="button">Choose Image</button>
-            <span class="journal-screenshot-name" id="journalScreenshotName">No file selected</span>
-          </div>
-          <div class="journal-screenshot-preview" id="journalScreenshotPreview" style="display:none;">
-            <img id="journalScreenshotImg" src="" alt="Screenshot">
-            <button class="journal-screenshot-remove" id="journalScreenshotRemove" title="Remove">&times;</button>
-          </div>
+          <label>Notes</label>
+          <textarea id="journalEntryNotes" class="setting-input" placeholder="Trade thesis, observations, lessons learned..." rows="3" style="resize:vertical;font-family:var(--font-sans);"></textarea>
         </div>
       </div>
     </div>

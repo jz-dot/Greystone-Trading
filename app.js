@@ -12,12 +12,12 @@
   // Spawn floating particles
   const particleContainer = document.getElementById('landingParticles');
   if (particleContainer) {
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 80; i++) {
       const p = document.createElement('div');
       p.className = 'landing-particle';
       p.style.left = Math.random() * 100 + '%';
-      p.style.animationDelay = Math.random() * 8 + 's';
-      p.style.animationDuration = (6 + Math.random() * 6) + 's';
+      p.style.animationDelay = Math.random() * 6 + 's';
+      p.style.animationDuration = (4 + Math.random() * 5) + 's';
       particleContainer.appendChild(p);
     }
   }
@@ -2487,10 +2487,11 @@ function stopFlowIntervals() {
 startFlowIntervals();
 
 // ---- DASHBOARD STATE ----
+let activeIndicators = {};
 let currentChartSymbol = 'AAPL';
 let currentChartType = 'candlestick'; // 'candlestick' | 'line' | 'area'
-let currentTimeframe = '15m';
-let currentTimeframeRange = '1d';
+let currentTimeframe = '1Y';
+let currentTimeframeRange = '1y';
 let currentChartCandles = null; // cached candle data for redraws
 let currentCapSize = 'large';
 let currentWatchlistTab = 'favorites';
@@ -2516,6 +2517,11 @@ const TIMEFRAME_MAP = {
   '4H':  { interval: '60m', range: '1mo' },
   '1D':  { interval: '1d',  range: '6mo' },
   '1W':  { interval: '1wk', range: '2y' },
+  '1Y':  { interval: '1d',  range: '1y' },
+  '2Y':  { interval: '1wk', range: '2y' },
+  '3Y':  { interval: '1wk', range: '3y' },
+  '5Y':  { interval: '1wk', range: '5y' },
+  'MAX': { interval: '1mo', range: 'max' },
 };
 
 // ---- CHART DATA FETCHING ----
@@ -2601,6 +2607,11 @@ function drawChartWithType(candles, chartType) {
 
   const barWidth = chartW / candles.length;
 
+  // For large datasets, auto-switch to area chart since candles get too compressed
+  if (candles.length > 120 && chartType === 'candlestick') {
+    chartType = 'area';
+  }
+
   // Grid lines
   ctx.strokeStyle = '#1A1A24';
   ctx.lineWidth = 0.5;
@@ -2616,40 +2627,6 @@ function drawChartWithType(candles, chartType) {
     ctx.textAlign = 'left';
     ctx.fillText(price.toFixed(2), canvas.width - padding.right + 5, y + 3);
   }
-
-  // SMA line
-  ctx.strokeStyle = 'rgba(59, 130, 246, 0.5)';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  const smaData = [];
-  for (let i = 0; i < candles.length; i++) {
-    const start = Math.max(0, i - 19);
-    const slice = candles.slice(start, i + 1);
-    const avg = slice.reduce((s, c) => s + c.close, 0) / slice.length;
-    smaData.push(avg);
-    const x = padding.left + i * barWidth + barWidth / 2;
-    const y = padding.top + ((max - avg) / (max - min)) * chartH;
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
-
-  // Bollinger Bands
-  ctx.strokeStyle = 'rgba(139, 92, 246, 0.2)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let i = 0; i < candles.length; i++) {
-    const x = padding.left + i * barWidth + barWidth / 2;
-    const y = padding.top + ((max - (smaData[i] + range * 0.15)) / (max - min)) * chartH;
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
-  ctx.beginPath();
-  for (let i = 0; i < candles.length; i++) {
-    const x = padding.left + i * barWidth + barWidth / 2;
-    const y = padding.top + ((max - (smaData[i] - range * 0.15)) / (max - min)) * chartH;
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
 
   if (chartType === 'candlestick') {
     // Draw candles
@@ -2739,6 +2716,25 @@ function drawChartWithType(candles, chartType) {
   ctx.font = 'bold 10px JetBrains Mono';
   ctx.textAlign = 'left';
   ctx.fillText(lastClose.toFixed(2), canvas.width - padding.right + 4, priceY + 3);
+
+  // Draw indicator overlays (SMA, EMA, BB, VWAP)
+  if (typeof drawIndicatorOverlays === 'function' && typeof activeIndicators !== 'undefined') {
+    drawIndicatorOverlays(ctx, candles, padding, chartW, chartH, min, max, barWidth);
+  }
+
+  // Draw RSI/MACD sub-panels if active
+  if (typeof activeIndicators !== 'undefined') {
+    if (activeIndicators.rsi) {
+      const rsiPanel = document.getElementById('rsiPanel');
+      if (rsiPanel) rsiPanel.style.display = 'block';
+      if (typeof drawRSIPanel === 'function') drawRSIPanel(candles);
+    }
+    if (activeIndicators.macd) {
+      const macdPanel = document.getElementById('macdPanel');
+      if (macdPanel) macdPanel.style.display = 'block';
+      if (typeof drawMACDPanel === 'function') drawMACDPanel(candles);
+    }
+  }
 }
 
 // ---- CROSSHAIR OVERLAY ----
@@ -2865,7 +2861,7 @@ function onCrosshairMove(e) {
     const mins = d.getMinutes().toString().padStart(2, '0');
     timeLabel = hours + ':' + mins;
     // If daily+ timeframe, show date instead
-    if (currentTimeframe === '1D' || currentTimeframe === '1W') {
+    if (['1D','1W','1Y','2Y','3Y','5Y','MAX'].includes(currentTimeframe)) {
       const mon = (d.getMonth() + 1).toString().padStart(2, '0');
       const day = d.getDate().toString().padStart(2, '0');
       timeLabel = mon + '/' + day;
@@ -2998,6 +2994,9 @@ function setupWatchlistClickToChart() {
       // Update chart
       currentChartSymbol = ticker;
       fetchAndDrawChart(ticker, currentTimeframe);
+      if (typeof fetchAndDisplayFundamentals === 'function') fetchAndDisplayFundamentals(ticker);
+      // Clear metric card active state
+      document.querySelectorAll('.metric-card').forEach(c => c.classList.remove('metric-active'));
     });
   });
 }
@@ -3162,90 +3161,230 @@ function updateHeatmapWithRealData(sectors) {
   });
 }
 
-// ---- TICKER SEARCH ----
+// ---- TICKER SEARCH (with autocomplete) ----
 function setupTickerSearch() {
   const input = document.getElementById('tickerSearch');
+  const dropdown = document.getElementById('searchDropdown');
   if (!input) return;
 
-  input.addEventListener('keydown', async (e) => {
-    if (e.key === 'Enter') {
-      const ticker = input.value.trim().toUpperCase();
-      if (!ticker || ticker.length > 5) return;
+  let searchTimeout = null;
+  let highlightIdx = -1;
+  let currentResults = [];
 
-      // Check if ticker already in watchlist
-      let existingRow = document.querySelector(`.wl-row[data-ticker="${ticker}"]`);
-      if (!existingRow) {
-        // Add to watchlist
-        const tableEl = document.querySelector('.watchlist-table');
-        if (tableEl) {
-          const row = document.createElement('div');
-          row.className = 'wl-row';
-          row.setAttribute('data-ticker', ticker);
-          row.innerHTML = `
-            <span class="wl-ticker">${ticker}</span>
-            <span class="wl-price">--</span>
-            <span class="wl-change">--</span>
-            <span class="wl-vol">--</span>
-          `;
-          tableEl.appendChild(row);
-          setupWatchlistClickToChart(); // re-attach handlers
+  function closeDropdown() {
+    if (dropdown) {
+      dropdown.classList.remove('visible');
+      dropdown.innerHTML = '';
+    }
+    highlightIdx = -1;
+    currentResults = [];
+  }
 
-          // Fetch quote for new ticker
-          try {
-            const resp = await fetch('/api/quotes?symbols=' + encodeURIComponent(ticker));
-            if (resp.ok) {
-              const quotes = await resp.json();
-              const q = quotes[ticker];
-              if (q) {
-                const priceEl = row.querySelector('.wl-price');
-                const changeEl = row.querySelector('.wl-change');
-                if (priceEl) priceEl.textContent = q.price.toFixed(2);
-                if (changeEl) {
-                  const isUp = q.changePct >= 0;
-                  changeEl.textContent = (isUp ? '+' : '') + q.changePct.toFixed(2) + '%';
-                  changeEl.className = 'wl-change ' + (isUp ? 'profit' : 'loss');
-                }
-                row.classList.add(q.changePct >= 0 ? 'profit' : 'loss');
-              }
+  function selectTicker(ticker) {
+    ticker = ticker.toUpperCase().trim();
+    if (!ticker) return;
+    closeDropdown();
+    input.value = '';
+
+    // Show all watchlist rows again
+    document.querySelectorAll('.wl-row[data-ticker]').forEach(row => { row.style.display = ''; });
+
+    // Add to watchlist if not present
+    let existingRow = document.querySelector('.wl-row[data-ticker="' + ticker + '"]');
+    if (!existingRow) {
+      const tableEl = document.querySelector('.watchlist-table');
+      if (tableEl) {
+        const row = document.createElement('div');
+        row.className = 'wl-row';
+        row.setAttribute('data-ticker', ticker);
+        row.innerHTML =
+          '<span class="wl-ticker">' + ticker + '</span>' +
+          '<span class="wl-price">--</span>' +
+          '<span class="wl-change">--</span>' +
+          '<span class="wl-vol">--</span>';
+        tableEl.appendChild(row);
+        if (typeof setupWatchlistClickToChart === 'function') setupWatchlistClickToChart();
+
+        // Fetch quote
+        fetch('/api/quotes?symbols=' + encodeURIComponent(ticker))
+          .then(function(r) { return r.ok ? r.json() : null; })
+          .then(function(quotes) {
+            if (!quotes) return;
+            var q = quotes[ticker];
+            if (!q) return;
+            var priceEl = row.querySelector('.wl-price');
+            var changeEl = row.querySelector('.wl-change');
+            if (priceEl) priceEl.textContent = q.price.toFixed(2);
+            if (changeEl) {
+              var isUp = q.changePct >= 0;
+              changeEl.textContent = (isUp ? '+' : '') + q.changePct.toFixed(2) + '%';
+              changeEl.className = 'wl-change ' + (isUp ? 'profit' : 'loss');
             }
-          } catch (err) { /* ignore */ }
+            row.classList.add(q.changePct >= 0 ? 'profit' : 'loss');
+          })
+          .catch(function() {});
 
-          existingRow = row;
+        existingRow = row;
+      }
+    }
+
+    // Highlight in watchlist
+    document.querySelectorAll('.wl-row').forEach(function(r) {
+      r.style.background = '';
+      r.classList.remove('wl-active');
+    });
+    if (existingRow) {
+      existingRow.style.background = 'var(--bg-tertiary)';
+      existingRow.classList.add('wl-active');
+    }
+    currentChartSymbol = ticker;
+    fetchAndDrawChart(ticker, currentTimeframe);
+    if (typeof fetchAndDisplayFundamentals === 'function') fetchAndDisplayFundamentals(ticker);
+    document.querySelectorAll('.metric-card').forEach(c => c.classList.remove('metric-active'));
+  }
+
+  function renderDropdown(results) {
+    if (!dropdown) return;
+    currentResults = results;
+    highlightIdx = -1;
+    if (!results || results.length === 0) {
+      dropdown.innerHTML = '<div class="search-dropdown-empty">No results found</div>';
+      dropdown.classList.add('visible');
+      return;
+    }
+    dropdown.innerHTML = results.map(function(r, i) {
+      return '<div class="search-dropdown-item" data-idx="' + i + '">' +
+        '<span class="search-dd-ticker">' + (r.symbol || r.ticker || '') + '</span>' +
+        '<span class="search-dd-name">' + (r.shortname || r.longname || r.name || '') + '</span>' +
+        '<span class="search-dd-type">' + (r.quoteType || r.type || 'Equity') + '</span>' +
+        '</div>';
+    }).join('');
+    dropdown.classList.add('visible');
+
+    // Click handlers
+    dropdown.querySelectorAll('.search-dropdown-item').forEach(function(item) {
+      item.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        var idx = parseInt(item.dataset.idx);
+        var r = currentResults[idx];
+        if (r) selectTicker(r.symbol || r.ticker);
+      });
+    });
+  }
+
+  function updateHighlight() {
+    var items = dropdown ? dropdown.querySelectorAll('.search-dropdown-item') : [];
+    items.forEach(function(el, i) {
+      el.classList.toggle('highlighted', i === highlightIdx);
+    });
+    if (items[highlightIdx]) {
+      items[highlightIdx].scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  async function doSearch(query) {
+    if (!dropdown) return;
+    dropdown.innerHTML = '<div class="search-dropdown-loading">Searching...</div>';
+    dropdown.classList.add('visible');
+
+    try {
+      // Try Yahoo Finance search API through our proxy
+      var resp = await fetch('/api/search?q=' + encodeURIComponent(query));
+      if (resp.ok) {
+        var data = await resp.json();
+        var results = data.quotes || data.results || data;
+        if (Array.isArray(results) && results.length > 0) {
+          renderDropdown(results.slice(0, 8));
+          return;
         }
       }
+    } catch(e) { /* fallback below */ }
 
-      // Select the ticker and load chart
-      if (existingRow) {
-        document.querySelectorAll('.wl-row').forEach(r => {
-          r.style.background = '';
-          r.classList.remove('wl-active');
-        });
-        existingRow.style.background = 'var(--bg-tertiary)';
-        existingRow.classList.add('wl-active');
+    // Fallback: search local watchlist + known tickers
+    var q = query.toUpperCase();
+    var nameMap = (typeof PortfolioManager !== 'undefined') ? {
+      AAPL:'Apple Inc.', NVDA:'NVIDIA Corp.', MSFT:'Microsoft Corp.', TSLA:'Tesla Inc.',
+      AMZN:'Amazon.com', GOOGL:'Alphabet Inc.', META:'Meta Platforms', AMD:'AMD Inc.',
+      PLTR:'Palantir Tech', AI:'C3.ai Inc.', SOUN:'SoundHound AI', IONQ:'IonQ Inc.',
+      JPM:'JPMorgan Chase', GS:'Goldman Sachs', BAC:'Bank of America', V:'Visa Inc.',
+      MA:'Mastercard', SQ:'Block Inc.', COIN:'Coinbase', MARA:'Marathon Digital',
+      RIOT:'Riot Platforms', MSTR:'MicroStrategy', SPY:'SPDR S&P 500', QQQ:'Invesco QQQ',
+      IWM:'iShares Russell', DIA:'SPDR Dow Jones', GLD:'SPDR Gold', TLT:'iShares 20+ Yr'
+    } : {};
+    var matches = Object.keys(nameMap).filter(function(sym) {
+      return sym.includes(q) || nameMap[sym].toUpperCase().includes(q);
+    }).map(function(sym) {
+      return { symbol: sym, shortname: nameMap[sym], quoteType: 'Equity' };
+    });
+    if (matches.length > 0) {
+      renderDropdown(matches.slice(0, 8));
+    } else if (q.length >= 1 && q.length <= 5 && /^[A-Z]+$/.test(q)) {
+      // Show the raw ticker as a direct option
+      renderDropdown([{ symbol: q, shortname: 'Search for ' + q, quoteType: 'Ticker' }]);
+    } else {
+      renderDropdown([]);
+    }
+  }
+
+  // Input handler - autocomplete after 2 chars
+  input.addEventListener('input', function() {
+    var query = input.value.trim();
+    if (searchTimeout) clearTimeout(searchTimeout);
+
+    // Also filter watchlist while typing
+    var q = query.toUpperCase();
+    document.querySelectorAll('.wl-row[data-ticker]').forEach(function(row) {
+      var ticker = row.dataset.ticker;
+      row.style.display = (!q || ticker.includes(q)) ? '' : 'none';
+    });
+
+    if (query.length < 2) {
+      closeDropdown();
+      return;
+    }
+    searchTimeout = setTimeout(function() { doSearch(query); }, 300);
+  });
+
+  // Keyboard navigation
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      closeDropdown();
+      input.blur();
+      // Restore watchlist
+      document.querySelectorAll('.wl-row[data-ticker]').forEach(function(row) { row.style.display = ''; });
+      return;
+    }
+
+    var items = dropdown ? dropdown.querySelectorAll('.search-dropdown-item') : [];
+    if (e.key === 'ArrowDown' && items.length > 0) {
+      e.preventDefault();
+      highlightIdx = Math.min(highlightIdx + 1, items.length - 1);
+      updateHighlight();
+      return;
+    }
+    if (e.key === 'ArrowUp' && items.length > 0) {
+      e.preventDefault();
+      highlightIdx = Math.max(highlightIdx - 1, 0);
+      updateHighlight();
+      return;
+    }
+
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (highlightIdx >= 0 && currentResults[highlightIdx]) {
+        selectTicker(currentResults[highlightIdx].symbol || currentResults[highlightIdx].ticker);
+      } else {
+        var ticker = input.value.trim().toUpperCase();
+        if (ticker && ticker.length <= 6) {
+          selectTicker(ticker);
+        }
       }
-      currentChartSymbol = ticker;
-      fetchAndDrawChart(ticker, currentTimeframe);
-      input.value = '';
     }
   });
 
-  // Basic filter on typing
-  input.addEventListener('input', () => {
-    const query = input.value.trim().toUpperCase();
-    document.querySelectorAll('.wl-row[data-ticker]').forEach(row => {
-      const ticker = row.dataset.ticker;
-      if (!query || ticker.includes(query)) {
-        row.style.display = '';
-      } else {
-        row.style.display = 'none';
-      }
-    });
-    // If empty, show all
-    if (!query) {
-      document.querySelectorAll('.wl-row[data-ticker]').forEach(row => {
-        row.style.display = '';
-      });
-    }
+  // Close on blur
+  input.addEventListener('blur', function() {
+    setTimeout(closeDropdown, 200);
   });
 }
 
@@ -3376,6 +3515,454 @@ function simulatePriceUpdate() {
 }
 setInterval(simulatePriceUpdate, 1500);
 
+// ---- CLICKABLE METRIC CARDS ----
+function setupMetricCardClicks() {
+  document.querySelectorAll('.metric-card[data-symbol]').forEach(card => {
+    card.addEventListener('click', () => {
+      const symbol = card.dataset.symbol;
+      if (!symbol) return;
+      // Highlight active card
+      document.querySelectorAll('.metric-card').forEach(c => c.classList.remove('metric-active'));
+      card.classList.add('metric-active');
+      // Update chart
+      currentChartSymbol = symbol;
+      fetchAndDrawChart(symbol, currentTimeframe);
+      fetchAndDisplayFundamentals(symbol);
+    });
+  });
+}
+
+// ---- FUNDAMENTALS STRIP ----
+function formatMarketCap(val) {
+  if (val == null) return '--';
+  if (val >= 1e12) return '$' + (val / 1e12).toFixed(2) + 'T';
+  if (val >= 1e9) return '$' + (val / 1e9).toFixed(1) + 'B';
+  if (val >= 1e6) return '$' + (val / 1e6).toFixed(0) + 'M';
+  return '$' + val.toLocaleString();
+}
+
+function formatVolume(val) {
+  if (val == null) return '--';
+  if (val >= 1e9) return (val / 1e9).toFixed(1) + 'B';
+  if (val >= 1e6) return (val / 1e6).toFixed(1) + 'M';
+  if (val >= 1e3) return (val / 1e3).toFixed(1) + 'K';
+  return val.toString();
+}
+
+function formatPrice(val) {
+  if (val == null) return '--';
+  return '$' + val.toFixed(2);
+}
+
+async function fetchAndDisplayFundamentals(symbol) {
+  const ids = {
+    fundMktCap: '--', fund52H: '--', fund52L: '--', fundOpen: '--',
+    fundPrevClose: '--', fundVolume: '--', fundAvgVol: '--',
+    fundPE: '--', fundEPS: '--', fundYield: '--', fundBeta: '--'
+  };
+  // Set loading state
+  Object.keys(ids).forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = '...';
+  });
+
+  try {
+    const resp = await fetch('/api/fundamentals/' + encodeURIComponent(symbol));
+    if (!resp.ok) throw new Error('API returned ' + resp.status);
+    const d = await resp.json();
+
+    const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    setVal('fundMktCap', formatMarketCap(d.marketCap));
+    setVal('fund52H', formatPrice(d.fiftyTwoWeekHigh));
+    setVal('fund52L', formatPrice(d.fiftyTwoWeekLow));
+    setVal('fundOpen', formatPrice(d.open));
+    setVal('fundPrevClose', formatPrice(d.previousClose));
+    setVal('fundVolume', formatVolume(d.volume));
+    setVal('fundAvgVol', formatVolume(d.averageVolume));
+    setVal('fundPE', d.trailingPE != null ? d.trailingPE.toFixed(1) + 'x' : '--');
+    setVal('fundEPS', d.eps != null ? '$' + d.eps.toFixed(2) : '--');
+    setVal('fundYield', d.dividendYield != null ? (d.dividendYield * 100).toFixed(2) + '%' : '--');
+    setVal('fundBeta', d.beta != null ? d.beta.toFixed(2) : '--');
+  } catch (err) {
+    console.warn('[Fundamentals] Failed for ' + symbol + ':', err.message);
+    Object.keys(ids).forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = '--';
+    });
+  }
+}
+
+// ---- INDICATORS SYSTEM ----
+
+function loadIndicatorPrefs() {
+  try {
+    const saved = localStorage.getItem('greystone_indicators');
+    if (saved) activeIndicators = JSON.parse(saved);
+  } catch (e) { activeIndicators = {}; }
+}
+
+function saveIndicatorPrefs() {
+  try {
+    localStorage.setItem('greystone_indicators', JSON.stringify(activeIndicators));
+  } catch (e) {}
+}
+
+function setupIndicatorDropdown() {
+  const btn = document.getElementById('indicatorToggleBtn');
+  const dropdown = document.getElementById('indicatorDropdown');
+  if (!btn || !dropdown) return;
+
+  // Load saved prefs and set checkboxes
+  loadIndicatorPrefs();
+  dropdown.querySelectorAll('input[data-indicator]').forEach(cb => {
+    cb.checked = !!activeIndicators[cb.dataset.indicator];
+  });
+
+  // Set initial visibility of sub-panels
+  const rsiPanel = document.getElementById('rsiPanel');
+  const macdPanel = document.getElementById('macdPanel');
+  if (rsiPanel) rsiPanel.style.display = activeIndicators.rsi ? 'block' : 'none';
+  if (macdPanel) macdPanel.style.display = activeIndicators.macd ? 'block' : 'none';
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropdown.classList.toggle('open');
+  });
+
+  // Close on outside click
+  document.addEventListener('click', (e) => {
+    if (!dropdown.contains(e.target) && e.target !== btn) {
+      dropdown.classList.remove('open');
+    }
+  });
+
+  // Handle checkbox toggles
+  dropdown.querySelectorAll('input[data-indicator]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      activeIndicators[cb.dataset.indicator] = cb.checked;
+      saveIndicatorPrefs();
+      // Redraw chart with indicators
+      if (currentChartCandles) {
+        drawChartWithType(currentChartCandles, currentChartType);
+        drawVolumeChartFromCandles(currentChartCandles);
+      }
+      // Show/hide RSI and MACD sub-panels
+      const rsiPanel = document.getElementById('rsiPanel');
+      const macdPanel = document.getElementById('macdPanel');
+      if (rsiPanel) rsiPanel.style.display = activeIndicators.rsi ? 'block' : 'none';
+      if (macdPanel) macdPanel.style.display = activeIndicators.macd ? 'block' : 'none';
+      if (activeIndicators.rsi && currentChartCandles) drawRSIPanel(currentChartCandles);
+      if (activeIndicators.macd && currentChartCandles) drawMACDPanel(currentChartCandles);
+    });
+  });
+}
+
+// ---- INDICATOR CALCULATIONS ----
+function calcSMA(candles, period) {
+  const result = [];
+  for (let i = 0; i < candles.length; i++) {
+    if (i < period - 1) { result.push(null); continue; }
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += candles[j].close;
+    result.push(sum / period);
+  }
+  return result;
+}
+
+function calcEMA(candles, period) {
+  const result = [];
+  const k = 2 / (period + 1);
+  let ema = null;
+  for (let i = 0; i < candles.length; i++) {
+    if (i < period - 1) { result.push(null); continue; }
+    if (ema === null) {
+      let sum = 0;
+      for (let j = i - period + 1; j <= i; j++) sum += candles[j].close;
+      ema = sum / period;
+    } else {
+      ema = candles[i].close * k + ema * (1 - k);
+    }
+    result.push(ema);
+  }
+  return result;
+}
+
+function calcRSI(candles, period) {
+  const result = [];
+  if (candles.length < period + 1) return candles.map(() => null);
+  let avgGain = 0, avgLoss = 0;
+  for (let i = 1; i <= period; i++) {
+    const diff = candles[i].close - candles[i - 1].close;
+    if (diff > 0) avgGain += diff; else avgLoss += Math.abs(diff);
+  }
+  avgGain /= period;
+  avgLoss /= period;
+  for (let i = 0; i < period; i++) result.push(null);
+  const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+  result.push(100 - 100 / (1 + rs));
+  for (let i = period + 1; i < candles.length; i++) {
+    const diff = candles[i].close - candles[i - 1].close;
+    const gain = diff > 0 ? diff : 0;
+    const loss = diff < 0 ? Math.abs(diff) : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+    const r = avgLoss === 0 ? 100 : avgGain / avgLoss;
+    result.push(100 - 100 / (1 + r));
+  }
+  return result;
+}
+
+function calcMACD(candles) {
+  const ema12 = calcEMA(candles, 12);
+  const ema26 = calcEMA(candles, 26);
+  const macdLine = [];
+  for (let i = 0; i < candles.length; i++) {
+    if (ema12[i] == null || ema26[i] == null) { macdLine.push(null); continue; }
+    macdLine.push(ema12[i] - ema26[i]);
+  }
+  // Signal line (9-period EMA of MACD)
+  const signal = [];
+  const k = 2 / 10;
+  let sigEma = null;
+  for (let i = 0; i < macdLine.length; i++) {
+    if (macdLine[i] == null) { signal.push(null); continue; }
+    if (sigEma === null) { sigEma = macdLine[i]; }
+    else { sigEma = macdLine[i] * k + sigEma * (1 - k); }
+    signal.push(sigEma);
+  }
+  const histogram = [];
+  for (let i = 0; i < macdLine.length; i++) {
+    if (macdLine[i] == null || signal[i] == null) { histogram.push(null); continue; }
+    histogram.push(macdLine[i] - signal[i]);
+  }
+  return { macdLine, signal, histogram };
+}
+
+function calcVWAP(candles) {
+  const result = [];
+  let cumTPV = 0, cumVol = 0;
+  for (let i = 0; i < candles.length; i++) {
+    const tp = (candles[i].high + candles[i].low + candles[i].close) / 3;
+    const vol = candles[i].volume || 0;
+    cumTPV += tp * vol;
+    cumVol += vol;
+    result.push(cumVol > 0 ? cumTPV / cumVol : null);
+  }
+  return result;
+}
+
+function drawIndicatorOverlays(ctx, candles, padding, chartW, chartH, min, max, barWidth) {
+  const indicators = activeIndicators;
+  const drawLine = (data, color, lineWidth) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth || 1.5;
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < data.length; i++) {
+      if (data[i] == null) continue;
+      const x = padding.left + i * barWidth + barWidth / 2;
+      const y = padding.top + ((max - data[i]) / (max - min)) * chartH;
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  };
+
+  if (indicators.sma20) drawLine(calcSMA(candles, 20), 'rgba(59, 130, 246, 0.7)');
+  if (indicators.sma50) drawLine(calcSMA(candles, 50), 'rgba(249, 115, 22, 0.7)');
+  if (indicators.sma200) drawLine(calcSMA(candles, 200), 'rgba(239, 68, 68, 0.7)');
+  if (indicators.ema9) drawLine(calcEMA(candles, 9), 'rgba(6, 182, 212, 0.7)');
+  if (indicators.ema21) drawLine(calcEMA(candles, 21), 'rgba(217, 70, 239, 0.7)');
+  if (indicators.vwap) drawLine(calcVWAP(candles), 'rgba(148, 163, 184, 0.7)');
+
+  // Bollinger Bands
+  if (indicators.bb) {
+    const sma20 = calcSMA(candles, 20);
+    // Calculate standard deviation
+    const upper = [], lower = [];
+    for (let i = 0; i < candles.length; i++) {
+      if (sma20[i] == null || i < 19) { upper.push(null); lower.push(null); continue; }
+      let sumSq = 0;
+      for (let j = i - 19; j <= i; j++) {
+        sumSq += Math.pow(candles[j].close - sma20[i], 2);
+      }
+      const stdDev = Math.sqrt(sumSq / 20);
+      upper.push(sma20[i] + 2 * stdDev);
+      lower.push(sma20[i] - 2 * stdDev);
+    }
+    drawLine(upper, 'rgba(139, 92, 246, 0.3)');
+    drawLine(lower, 'rgba(139, 92, 246, 0.3)');
+    // Fill between bands
+    ctx.fillStyle = 'rgba(139, 92, 246, 0.04)';
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < upper.length; i++) {
+      if (upper[i] == null) continue;
+      const x = padding.left + i * barWidth + barWidth / 2;
+      const y = padding.top + ((max - upper[i]) / (max - min)) * chartH;
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+    for (let i = lower.length - 1; i >= 0; i--) {
+      if (lower[i] == null) continue;
+      const x = padding.left + i * barWidth + barWidth / 2;
+      const y = padding.top + ((max - lower[i]) / (max - min)) * chartH;
+      ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Update indicator overlay tags
+  updateIndicatorTags(candles);
+}
+
+function updateIndicatorTags(candles) {
+  const overlay = document.querySelector('.chart-indicators-overlay');
+  if (!overlay) return;
+  overlay.innerHTML = '';
+  const last = candles[candles.length - 1];
+  if (!last) return;
+  const tags = [];
+  if (activeIndicators.sma20) { const v = calcSMA(candles, 20); tags.push('SMA(20): ' + (v[v.length-1] || 0).toFixed(2)); }
+  if (activeIndicators.sma50) { const v = calcSMA(candles, 50); const val = v[v.length-1]; if (val) tags.push('SMA(50): ' + val.toFixed(2)); }
+  if (activeIndicators.sma200) { const v = calcSMA(candles, 200); const val = v[v.length-1]; if (val) tags.push('SMA(200): ' + val.toFixed(2)); }
+  if (activeIndicators.ema9) { const v = calcEMA(candles, 9); const val = v[v.length-1]; if (val) tags.push('EMA(9): ' + val.toFixed(2)); }
+  if (activeIndicators.ema21) { const v = calcEMA(candles, 21); const val = v[v.length-1]; if (val) tags.push('EMA(21): ' + val.toFixed(2)); }
+  if (activeIndicators.rsi) { const v = calcRSI(candles, 14); const val = v[v.length-1]; if (val) tags.push('RSI(14): ' + val.toFixed(1)); }
+  if (activeIndicators.macd) { const m = calcMACD(candles); const val = m.macdLine[m.macdLine.length-1]; if (val) tags.push('MACD: ' + val.toFixed(2)); }
+  if (activeIndicators.bb) { const s = calcSMA(candles, 20); if (s[s.length-1]) tags.push('BB: ' + (s[s.length-1] - 10).toFixed(1) + ' / ' + (s[s.length-1] + 10).toFixed(1)); }
+  if (activeIndicators.vwap) { const v = calcVWAP(candles); const val = v[v.length-1]; if (val) tags.push('VWAP: ' + val.toFixed(2)); }
+
+  tags.forEach(t => {
+    const span = document.createElement('span');
+    span.className = 'ind-tag';
+    span.textContent = t;
+    overlay.appendChild(span);
+  });
+}
+
+function drawRSIPanel(candles) {
+  const canvas = document.getElementById('rsiCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width;
+  canvas.height = rect.height;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const rsi = calcRSI(candles, 14);
+  const pad = { left: 10, right: 60, top: 4, bottom: 4 };
+  const w = canvas.width - pad.left - pad.right;
+  const h = canvas.height - pad.top - pad.bottom;
+
+  // Reference lines at 30 and 70
+  [30, 70].forEach(level => {
+    const y = pad.top + ((100 - level) / 100) * h;
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.15)';
+    ctx.lineWidth = 0.5;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(canvas.width - pad.right, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#5C5C6E';
+    ctx.font = '9px JetBrains Mono';
+    ctx.textAlign = 'left';
+    ctx.fillText(level.toString(), canvas.width - pad.right + 4, y + 3);
+  });
+
+  // Draw RSI line
+  const barWidth = w / candles.length;
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.8)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  let started = false;
+  rsi.forEach((val, i) => {
+    if (val == null) return;
+    const x = pad.left + i * barWidth + barWidth / 2;
+    const y = pad.top + ((100 - val) / 100) * h;
+    if (!started) { ctx.moveTo(x, y); started = true; }
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+}
+
+function drawMACDPanel(candles) {
+  const canvas = document.getElementById('macdCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width;
+  canvas.height = rect.height;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const { macdLine, signal, histogram } = calcMACD(candles);
+  const pad = { left: 10, right: 60, top: 4, bottom: 4 };
+  const w = canvas.width - pad.left - pad.right;
+  const h = canvas.height - pad.top - pad.bottom;
+
+  // Find min/max for scaling
+  let mn = Infinity, mx = -Infinity;
+  macdLine.forEach(v => { if (v != null) { mn = Math.min(mn, v); mx = Math.max(mx, v); } });
+  signal.forEach(v => { if (v != null) { mn = Math.min(mn, v); mx = Math.max(mx, v); } });
+  histogram.forEach(v => { if (v != null) { mn = Math.min(mn, v); mx = Math.max(mx, v); } });
+  if (mn === Infinity) return;
+  const range = mx - mn || 1;
+  mn -= range * 0.1;
+  mx += range * 0.1;
+
+  const barWidth = w / candles.length;
+
+  // Zero line
+  const zeroY = pad.top + ((mx - 0) / (mx - mn)) * h;
+  ctx.strokeStyle = 'rgba(92, 92, 110, 0.3)';
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(pad.left, zeroY);
+  ctx.lineTo(canvas.width - pad.right, zeroY);
+  ctx.stroke();
+
+  // Histogram bars
+  histogram.forEach((val, i) => {
+    if (val == null) return;
+    const x = pad.left + i * barWidth;
+    const barH = (Math.abs(val) / (mx - mn)) * h;
+    const y = val >= 0 ? zeroY - barH : zeroY;
+    ctx.fillStyle = val >= 0 ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)';
+    ctx.fillRect(x + 1, y, barWidth - 2, barH);
+  });
+
+  // MACD line
+  ctx.strokeStyle = 'rgba(59, 130, 246, 0.8)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  let started = false;
+  macdLine.forEach((val, i) => {
+    if (val == null) return;
+    const x = pad.left + i * barWidth + barWidth / 2;
+    const y = pad.top + ((mx - val) / (mx - mn)) * h;
+    if (!started) { ctx.moveTo(x, y); started = true; }
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Signal line
+  ctx.strokeStyle = 'rgba(249, 115, 22, 0.8)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  started = false;
+  signal.forEach((val, i) => {
+    if (val == null) return;
+    const x = pad.left + i * barWidth + barWidth / 2;
+    const y = pad.top + ((mx - val) / (mx - mn)) * h;
+    if (!started) { ctx.moveTo(x, y); started = true; }
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+}
+
 // ---- INIT ----
 function init() {
   // Set up all dashboard interactivity
@@ -3386,12 +3973,15 @@ function init() {
   setupWatchlistTabs();
   setupHeatmapPeriodButtons();
   setupTickerSearch();
+  setupMetricCardClicks();
+  setupIndicatorDropdown();
 
   // Set up crosshair overlay
   setupCrosshair();
 
   // Draw charts with real data (fallback to generated)
   fetchAndDrawChart(currentChartSymbol, currentTimeframe);
+  fetchAndDisplayFundamentals(currentChartSymbol);
   drawSparklinesReal();
 
   // Options, flow, agents
@@ -3445,7 +4035,7 @@ if (document.readyState !== 'loading') init();
 
 /* ============================================
    TRADING AGENT UI INTEGRATION
-   Wires up agent cards, modals, settings
+   Signal Queue, Agent Cards, Execution Log, Perf Chart
    ============================================ */
 
 // --- Modal helpers ---
@@ -3457,12 +4047,351 @@ function closeModal(id) {
   const modal = document.getElementById(id);
   if (modal) modal.classList.remove('active');
 }
-// Close modal on overlay click
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) overlay.classList.remove('active');
   });
 });
+
+/* ============================================
+   SIGNAL QUEUE SYSTEM
+   ============================================ */
+
+const SignalQueue = {
+  signals: [],
+  executionLog: [],
+  _filterAgent: 'all',
+
+  init() {
+    this.signals = this._generateSampleSignals();
+    this.executionLog = this._generateSampleExecutions();
+    this.render();
+    this.renderExecutionLog();
+    this._startFreshnessTimer();
+    this._wireEvents();
+  },
+
+  _generateSampleSignals() {
+    const now = Date.now();
+    return [
+      {
+        id: 's_1', ticker: 'NVDA', direction: 'BUY', entry: 878.50, stop: 865.00, target: 920.00,
+        confidence: 82, thesis: 'Breakout above consolidation with volume confirmation. AI flow analysis shows institutional accumulation.',
+        timestamp: now - 1800000, agent: 'Momentum Alpha', status: 'pending'
+      },
+      {
+        id: 's_2', ticker: 'TSLA', direction: 'SELL', entry: 262.30, stop: 275.00, target: 240.00,
+        confidence: 67, thesis: 'Bearish engulfing at resistance with declining momentum. Options flow heavily skewed to puts.',
+        timestamp: now - 3600000, agent: 'Swing Trader', status: 'pending'
+      },
+      {
+        id: 's_3', ticker: 'AAPL', direction: 'BUY', entry: 218.40, stop: 212.00, target: 235.00,
+        confidence: 74, thesis: 'Mean reversion setup after 3-day pullback to 50-day MA. RSI at 35 with bullish divergence.',
+        timestamp: now - 900000, agent: 'Value Scanner', status: 'pending'
+      },
+      {
+        id: 's_4', ticker: 'META', direction: 'BUY', entry: 495.20, stop: 480.00, target: 530.00,
+        confidence: 88, thesis: 'Strong earnings beat catalyst with raised guidance. Multiple analyst upgrades today.',
+        timestamp: now - 300000, agent: 'Momentum Alpha', status: 'pending'
+      },
+      {
+        id: 's_5', ticker: 'AMD', direction: 'SELL', entry: 172.80, stop: 180.00, target: 158.00,
+        confidence: 59, thesis: 'Head and shoulders pattern completion. Volume declining on rallies, increasing on drops.',
+        timestamp: now - 7200000, agent: 'Swing Trader', status: 'pending'
+      }
+    ];
+  },
+
+  _generateSampleExecutions() {
+    const now = Date.now();
+    return [
+      { id: 'e_1', timestamp: now - 180000, agent: 'Momentum Alpha', action: 'ENTRY', ticker: 'MSFT', direction: 'BUY', price: 425.30, shares: 50, pnl: null },
+      { id: 'e_2', timestamp: now - 600000, agent: 'Swing Trader', action: 'TARGET HIT', ticker: 'GOOGL', direction: 'BUY', price: 178.50, shares: 80, pnl: 1240 },
+      { id: 'e_3', timestamp: now - 1200000, agent: 'Value Scanner', action: 'ENTRY', ticker: 'AMZN', direction: 'BUY', price: 185.20, shares: 60, pnl: null },
+      { id: 'e_4', timestamp: now - 1800000, agent: 'Momentum Alpha', action: 'EXIT', ticker: 'NFLX', direction: 'SELL', price: 892.00, shares: 25, pnl: -380 },
+      { id: 'e_5', timestamp: now - 2400000, agent: 'Swing Trader', action: 'STOP HIT', ticker: 'COIN', direction: 'BUY', price: 245.80, shares: 40, pnl: -720 },
+      { id: 'e_6', timestamp: now - 3000000, agent: 'Value Scanner', action: 'TARGET HIT', ticker: 'JPM', direction: 'BUY', price: 202.40, shares: 100, pnl: 1850 },
+      { id: 'e_7', timestamp: now - 3600000, agent: 'Momentum Alpha', action: 'ENTRY', ticker: 'PLTR', direction: 'BUY', price: 23.42, shares: 200, pnl: null },
+      { id: 'e_8', timestamp: now - 5400000, agent: 'Swing Trader', action: 'EXIT', ticker: 'ROKU', direction: 'SELL', price: 78.30, shares: 60, pnl: 540 },
+      { id: 'e_9', timestamp: now - 7200000, agent: 'Value Scanner', action: 'ENTRY', ticker: 'DIS', direction: 'BUY', price: 112.50, shares: 90, pnl: null },
+      { id: 'e_10', timestamp: now - 9000000, agent: 'Momentum Alpha', action: 'TARGET HIT', ticker: 'SMCI', direction: 'BUY', price: 920.00, shares: 15, pnl: 2100 },
+      { id: 'e_11', timestamp: now - 10800000, agent: 'Swing Trader', action: 'STOP HIT', ticker: 'RIVN', direction: 'BUY', price: 14.20, shares: 300, pnl: -450 },
+      { id: 'e_12', timestamp: now - 14400000, agent: 'Value Scanner', action: 'EXIT', ticker: 'V', direction: 'BUY', price: 282.90, shares: 45, pnl: 675 },
+      { id: 'e_13', timestamp: now - 18000000, agent: 'Momentum Alpha', action: 'ENTRY', ticker: 'CRM', direction: 'BUY', price: 298.50, shares: 35, pnl: null },
+      { id: 'e_14', timestamp: now - 21600000, agent: 'Swing Trader', action: 'TARGET HIT', ticker: 'UBER', direction: 'BUY', price: 78.90, shares: 120, pnl: 960 },
+    ];
+  },
+
+  _wireEvents() {
+    const agentFilter = document.getElementById('signalAgentFilter');
+    if (agentFilter) {
+      agentFilter.addEventListener('change', () => {
+        this._filterAgent = agentFilter.value;
+        this.render();
+      });
+    }
+    const clearBtn = document.getElementById('signalClearExpired');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        this.signals = this.signals.filter(s => s.status !== 'expired');
+        this.render();
+      });
+    }
+    // Execution log filter
+    const execFilter = document.getElementById('execLogAgentFilter');
+    if (execFilter) {
+      execFilter.addEventListener('change', () => this.renderExecutionLog());
+    }
+    // Collapse toggle
+    const collapseBtn = document.getElementById('execLogCollapseBtn');
+    const logBody = document.getElementById('executionLogBody');
+    if (collapseBtn && logBody) {
+      collapseBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        collapseBtn.classList.toggle('collapsed');
+        logBody.classList.toggle('collapsed');
+      });
+    }
+    // Also allow header click to collapse
+    const logHeader = document.getElementById('executionLogHeader');
+    if (logHeader) {
+      logHeader.addEventListener('click', () => {
+        if (collapseBtn) collapseBtn.classList.toggle('collapsed');
+        if (logBody) logBody.classList.toggle('collapsed');
+      });
+    }
+  },
+
+  _startFreshnessTimer() {
+    setInterval(() => {
+      // Update freshness bars and expire old signals
+      this.signals.forEach(s => {
+        if (s.status !== 'pending') return;
+        const age = Date.now() - s.timestamp;
+        if (age > 14400000) { // 4 hours
+          s.status = 'expired';
+        }
+      });
+      // Update DOM freshness without full re-render
+      document.querySelectorAll('.signal-row[data-signal-id]').forEach(row => {
+        const sig = this.signals.find(s => s.id === row.dataset.signalId);
+        if (!sig || sig.status !== 'pending') return;
+        const bar = row.querySelector('.signal-freshness-bar');
+        const timeEl = row.querySelector('.signal-time');
+        if (bar) {
+          const age = Date.now() - sig.timestamp;
+          const pct = Math.max(0, 100 - (age / 14400000) * 100);
+          bar.style.width = pct + '%';
+          bar.className = 'signal-freshness-bar ' + (pct > 60 ? 'fresh' : pct > 30 ? 'aging' : pct > 0 ? 'stale' : 'expired');
+        }
+        if (timeEl) timeEl.textContent = this._formatAge(sig.timestamp);
+      });
+    }, 5000);
+  },
+
+  _formatAge(ts) {
+    const diff = Date.now() - ts;
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return mins + 'm ago';
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return hrs + 'h ' + (mins % 60) + 'm';
+    return Math.floor(hrs / 24) + 'd ago';
+  },
+
+  _getConfidenceClass(conf) {
+    if (conf >= 75) return 'high';
+    if (conf >= 55) return 'medium';
+    return 'low';
+  },
+
+  approveSignal(id) {
+    const sig = this.signals.find(s => s.id === id);
+    if (!sig) return;
+    sig.status = 'approved';
+    // Add to execution log
+    this.executionLog.unshift({
+      id: 'e_' + Date.now(),
+      timestamp: Date.now(),
+      agent: sig.agent,
+      action: 'ENTRY',
+      ticker: sig.ticker,
+      direction: sig.direction,
+      price: sig.entry,
+      shares: Math.floor(10000 / sig.entry),
+      pnl: null
+    });
+    // Animate out
+    const row = document.querySelector(`[data-signal-id="${id}"]`);
+    if (row) {
+      row.classList.add('signal-approved');
+      setTimeout(() => this.render(), 400);
+    }
+    this.renderExecutionLog();
+  },
+
+  rejectSignal(id) {
+    const sig = this.signals.find(s => s.id === id);
+    if (!sig) return;
+    sig.status = 'rejected';
+    const row = document.querySelector(`[data-signal-id="${id}"]`);
+    if (row) {
+      row.classList.add('signal-rejected');
+      setTimeout(() => this.render(), 400);
+    }
+  },
+
+  modifySignal(id) {
+    const sig = this.signals.find(s => s.id === id);
+    if (!sig) return;
+    // Simple inline modify: prompt for new entry price
+    const newEntry = prompt(`Modify entry price for ${sig.ticker} (current: $${sig.entry.toFixed(2)}):`, sig.entry.toFixed(2));
+    if (newEntry && !isNaN(parseFloat(newEntry))) {
+      sig.entry = parseFloat(newEntry);
+      this.render();
+    }
+  },
+
+  filterByAgent(agentName) {
+    this._filterAgent = agentName;
+    const select = document.getElementById('signalAgentFilter');
+    if (select) select.value = agentName;
+    this.render();
+  },
+
+  render() {
+    const body = document.getElementById('signalQueueBody');
+    const countEl = document.getElementById('signalQueueCount');
+    if (!body) return;
+
+    const pending = this.signals.filter(s => s.status === 'pending');
+    const filtered = this._filterAgent === 'all'
+      ? pending
+      : pending.filter(s => s.agent === this._filterAgent);
+
+    if (countEl) countEl.textContent = pending.length + ' pending';
+
+    // Update agent filter dropdown
+    const select = document.getElementById('signalAgentFilter');
+    if (select) {
+      const agents = [...new Set(this.signals.map(s => s.agent))];
+      const currentVal = select.value;
+      select.innerHTML = '<option value="all">All Agents</option>';
+      agents.forEach(a => {
+        select.innerHTML += `<option value="${a}"${currentVal === a ? ' selected' : ''}>${a}</option>`;
+      });
+    }
+
+    if (filtered.length === 0) {
+      body.innerHTML = '<div class="signal-queue-empty">No pending signals. Agents are scanning for opportunities.</div>';
+      return;
+    }
+
+    body.innerHTML = filtered.map(sig => {
+      const age = Date.now() - sig.timestamp;
+      const freshPct = Math.max(0, 100 - (age / 14400000) * 100);
+      const freshClass = freshPct > 60 ? 'fresh' : freshPct > 30 ? 'aging' : freshPct > 0 ? 'stale' : 'expired';
+      const confClass = this._getConfidenceClass(sig.confidence);
+      const dirClass = sig.direction.toLowerCase();
+
+      return `<div class="signal-row direction-${dirClass}" data-signal-id="${sig.id}">
+        <span class="signal-ticker">${sig.ticker}</span>
+        <span class="signal-direction ${dirClass}">${sig.direction}</span>
+        <span class="signal-price">$${sig.entry.toFixed(2)}</span>
+        <span class="signal-stop">$${sig.stop.toFixed(2)}</span>
+        <span class="signal-target">$${sig.target.toFixed(2)}</span>
+        <span class="signal-confidence-badge ${confClass}">${sig.confidence}%</span>
+        <span class="signal-thesis" title="${sig.thesis}">${sig.thesis}</span>
+        <span class="signal-meta">
+          <span class="signal-time">${this._formatAge(sig.timestamp)}</span>
+          <span class="signal-freshness"><span class="signal-freshness-bar ${freshClass}" style="width:${freshPct}%"></span></span>
+        </span>
+        <span class="signal-actions">
+          <button class="signal-action-btn approve" onclick="SignalQueue.approveSignal('${sig.id}')">Approve</button>
+          <button class="signal-action-btn reject" onclick="SignalQueue.rejectSignal('${sig.id}')">Reject</button>
+          <button class="signal-action-btn modify" onclick="SignalQueue.modifySignal('${sig.id}')">Modify</button>
+        </span>
+      </div>`;
+    }).join('');
+  },
+
+  renderExecutionLog() {
+    const rows = document.getElementById('execLogRows');
+    const countEl = document.getElementById('execLogCount');
+    const filterVal = document.getElementById('execLogAgentFilter')?.value || 'all';
+    if (!rows) return;
+
+    // Update exec filter dropdown
+    const execSelect = document.getElementById('execLogAgentFilter');
+    if (execSelect) {
+      const agents = [...new Set(this.executionLog.map(e => e.agent))];
+      const currentVal = execSelect.value;
+      execSelect.innerHTML = '<option value="all">All Agents</option>';
+      agents.forEach(a => {
+        execSelect.innerHTML += `<option value="${a}"${currentVal === a ? ' selected' : ''}>${a}</option>`;
+      });
+    }
+
+    let entries = this.executionLog;
+    if (filterVal !== 'all') {
+      entries = entries.filter(e => e.agent === filterVal);
+    }
+    entries = entries.slice(0, 50);
+
+    if (countEl) countEl.textContent = entries.length + ' entries';
+
+    if (entries.length === 0) {
+      rows.innerHTML = '<div class="signal-queue-empty">No execution history yet.</div>';
+      return;
+    }
+
+    rows.innerHTML = entries.map(e => {
+      const actionClass = e.action === 'ENTRY' ? 'entry' :
+                           e.action === 'STOP HIT' ? 'stop-hit' :
+                           e.action === 'TARGET HIT' ? 'target-hit' : 'exit';
+      const pnlClass = e.pnl === null ? 'neutral' : e.pnl >= 0 ? 'profit' : 'loss';
+      const pnlText = e.pnl === null ? '-' : (e.pnl >= 0 ? '+' : '') + '$' + Math.abs(e.pnl).toLocaleString();
+      const time = new Date(e.timestamp);
+      const timeStr = time.getHours().toString().padStart(2, '0') + ':' +
+                      time.getMinutes().toString().padStart(2, '0') + ':' +
+                      time.getSeconds().toString().padStart(2, '0');
+
+      return `<div class="exec-log-row">
+        <span class="el-time">${timeStr}</span>
+        <span class="el-agent">${e.agent}</span>
+        <span class="el-action ${actionClass}">${e.action}</span>
+        <span class="el-ticker">${e.ticker}</span>
+        <span class="el-dir">${e.direction}</span>
+        <span class="el-price">$${e.price.toFixed(2)}</span>
+        <span class="el-shares">${e.shares}</span>
+        <span class="el-pnl ${pnlClass}">${pnlText}</span>
+      </div>`;
+    }).join('');
+  }
+};
+
+/* ============================================
+   DEFAULT AGENTS (enhanced with signal counts)
+   ============================================ */
+
+const DEFAULT_AGENTS_DATA = [
+  { id: 'agent_momentum', name: 'Momentum Alpha', strategy: 'Momentum', status: 'running', todayPnl: 1250, totalPnl: 18420, winRate: 62, tradesToday: 3, maxDrawdown: -4200, signals: 12 },
+  { id: 'agent_swing', name: 'Swing Trader', strategy: 'Mean Reversion', status: 'running', todayPnl: -380, totalPnl: 8750, winRate: 55, tradesToday: 1, maxDrawdown: -2800, signals: 5 },
+  { id: 'agent_gamma', name: 'Gamma Scalper', strategy: 'Options', status: 'paused', todayPnl: 0, totalPnl: 5200, winRate: 71, tradesToday: 0, maxDrawdown: -1500, signals: 0 },
+  { id: 'agent_value', name: 'Value Scanner', strategy: 'Value', status: 'running', todayPnl: 420, totalPnl: 12100, winRate: 58, tradesToday: 2, maxDrawdown: -3100, signals: 8 }
+];
+
+// In-memory store for standalone agent data (used when AgentManager is not loaded)
+let _standaloneAgents = [];
+
+function getAgentsList() {
+  // Try AgentManager first, fall back to standalone
+  if (typeof AgentManager !== 'undefined') {
+    const managed = AgentManager.getAll();
+    if (managed.length > 0) return { source: 'manager', agents: managed };
+  }
+  return { source: 'standalone', agents: _standaloneAgents };
+}
 
 // --- Default agent instances ---
 const defaultAgents = {
@@ -3473,28 +4402,40 @@ const defaultAgents = {
 };
 
 function initDefaultAgents() {
-  if (typeof ArbitrageHunter === 'undefined') return; // Guard: strategies not loaded
-  defaultAgents.arb = new ArbitrageHunter({ id: 'arb-hunter' });
-  defaultAgents.swing = new SwingMomentum({ id: 'swing-momentum' });
-  defaultAgents.gamma = new GammaScalper({ id: 'gamma-scalper' });
-  defaultAgents.meanrev = new MeanReversion({ id: 'mean-reversion' });
+  if (typeof ArbitrageHunter !== 'undefined') {
+    defaultAgents.arb = new ArbitrageHunter({ id: 'arb-hunter' });
+    defaultAgents.swing = new SwingMomentum({ id: 'swing-momentum' });
+    defaultAgents.gamma = new GammaScalper({ id: 'gamma-scalper' });
+    defaultAgents.meanrev = new MeanReversion({ id: 'mean-reversion' });
 
-  AgentManager.register(defaultAgents.arb);
-  AgentManager.register(defaultAgents.swing);
-  AgentManager.register(defaultAgents.gamma);
-  AgentManager.register(defaultAgents.meanrev);
+    AgentManager.register(defaultAgents.arb);
+    AgentManager.register(defaultAgents.swing);
+    AgentManager.register(defaultAgents.gamma);
+    AgentManager.register(defaultAgents.meanrev);
+  }
+  // Always init standalone agents from default data
+  const saved = localStorage.getItem('gst_custom_agents');
+  const customAgents = saved ? JSON.parse(saved) : [];
+  _standaloneAgents = [...DEFAULT_AGENTS_DATA, ...customAgents];
 }
 
 // --- Render agent cards ---
 function renderAgentCards() {
   const grid = document.getElementById('agentsGrid');
-  if (!grid || typeof AgentManager === 'undefined') return;
+  if (!grid) return;
   grid.innerHTML = '';
 
-  const agents = AgentManager.getAll();
-  agents.forEach(agent => {
-    grid.appendChild(createAgentCard(agent));
-  });
+  const { source, agents } = getAgentsList();
+
+  if (source === 'manager') {
+    agents.forEach(agent => {
+      grid.appendChild(createAgentCard(agent));
+    });
+  } else {
+    agents.forEach(agent => {
+      grid.appendChild(createStandaloneAgentCard(agent));
+    });
+  }
 
   // Deploy new agent card
   const deployCard = document.createElement('div');
@@ -3503,17 +4444,109 @@ function renderAgentCards() {
     <div class="new-agent-inner">
       <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M12 5v14M5 12h14"/></svg>
       <h3>Deploy New Agent</h3>
-      <p>Choose from pre-built strategies or configure a custom agent</p>
+      <p>Configure strategy, sizing, and risk parameters</p>
       <div class="new-agent-templates">
-        <span class="template-tag">Arbitrage Hunter</span>
-        <span class="template-tag">Swing Momentum</span>
-        <span class="template-tag">Gamma Scalper</span>
+        <span class="template-tag">Momentum</span>
         <span class="template-tag">Mean Reversion</span>
+        <span class="template-tag">Breakout</span>
+        <span class="template-tag">Value</span>
+        <span class="template-tag">Options</span>
+        <span class="template-tag">AI Signal</span>
       </div>
     </div>
   `;
   deployCard.addEventListener('click', () => openModal('deployAgentModal'));
   grid.appendChild(deployCard);
+}
+
+function createStandaloneAgentCard(agent) {
+  const isRunning = agent.status === 'running';
+  const isPaused = agent.status === 'paused';
+  const isStopped = agent.status === 'stopped';
+  const stateClass = isRunning ? 'running' : isPaused ? 'paused' : 'stopped';
+  const stateLabel = isRunning ? 'RUNNING' : isPaused ? 'PAUSED' : 'STOPPED';
+
+  const card = document.createElement('div');
+  card.className = `agent-card${isRunning ? ' active' : ''}`;
+  card.id = `card-${agent.id}`;
+
+  const todayClass = agent.todayPnl >= 0 ? 'profit' : 'loss';
+  const todaySign = agent.todayPnl >= 0 ? '+' : '';
+  const totalClass = agent.totalPnl >= 0 ? 'profit' : 'loss';
+  const totalSign = agent.totalPnl >= 0 ? '+' : '';
+  const ddClass = agent.maxDrawdown < 0 ? 'loss' : '';
+
+  card.innerHTML = `
+    <div class="agent-header">
+      <div class="agent-status-dot ${stateClass}"></div>
+      <h3 class="agent-name">${agent.name}</h3>
+      ${agent.signals > 0 ? `<span class="agent-signals-count">${agent.signals} signals</span>` : ''}
+      <span class="agent-badge ${stateClass}">${stateLabel}</span>
+    </div>
+    <div class="agent-stats">
+      <div class="agent-stat">
+        <span class="as-label">Strategy</span>
+        <span class="as-value">${agent.strategy}</span>
+      </div>
+      <div class="agent-stat">
+        <span class="as-label">Today's P&L</span>
+        <span class="as-value ${todayClass}">${todaySign}$${Math.abs(agent.todayPnl).toLocaleString()}</span>
+      </div>
+      <div class="agent-stat">
+        <span class="as-label">Total P&L</span>
+        <span class="as-value ${totalClass}">${totalSign}$${Math.abs(agent.totalPnl).toLocaleString()}</span>
+      </div>
+      <div class="agent-stat">
+        <span class="as-label">Win Rate</span>
+        <span class="as-value">${agent.winRate}%</span>
+      </div>
+      <div class="agent-stat">
+        <span class="as-label">Trades Today</span>
+        <span class="as-value">${agent.tradesToday}</span>
+      </div>
+      <div class="agent-stat">
+        <span class="as-label">Max Drawdown</span>
+        <span class="as-value ${ddClass}">$${Math.abs(agent.maxDrawdown).toLocaleString()}</span>
+      </div>
+    </div>
+    <div class="agent-controls">
+      ${isRunning
+        ? `<button class="agent-btn pause" data-action="toggle" data-agent="${agent.id}">Pause</button>`
+        : `<button class="agent-btn start" data-action="toggle" data-agent="${agent.id}">${isPaused ? 'Resume' : 'Start'}</button>`
+      }
+      ${agent.signals > 0 ? `<button class="agent-btn agent-view-signals-btn" data-action="viewSignals" data-agent-name="${agent.name}">View Signals</button>` : ''}
+      <button class="agent-btn" data-action="configure" data-agent="${agent.id}">Configure</button>
+      <button class="agent-btn" data-action="logs" data-agent="${agent.id}">Logs</button>
+    </div>
+  `;
+
+  card.querySelectorAll('[data-action]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const action = btn.dataset.action;
+      if (action === 'toggle') {
+        agent.status = isRunning ? 'paused' : 'running';
+        renderAgentCards();
+      } else if (action === 'viewSignals') {
+        SignalQueue.filterByAgent(btn.dataset.agentName);
+        document.querySelector('.signal-queue-panel')?.scrollIntoView({ behavior: 'smooth' });
+      } else if (action === 'configure') {
+        if (typeof AgentManager !== 'undefined') {
+          const managed = AgentManager.get(agent.id);
+          if (managed) { openConfigModal(managed); return; }
+        }
+        alert('Agent configuration: ' + agent.name + ' - ' + agent.strategy);
+      } else if (action === 'logs') {
+        if (typeof AgentManager !== 'undefined') {
+          const managed = AgentManager.get(agent.id);
+          if (managed) { openLogsModal(managed); return; }
+        }
+        alert('Agent logs for ' + agent.name + ' - no log data in standalone mode.');
+      }
+    });
+  });
+
+  return card;
 }
 
 function createAgentCard(agent) {
@@ -3533,7 +4566,6 @@ function createAgentCard(agent) {
   const pnlClass = pnl.total >= 0 ? 'profit' : 'loss';
   const pnlSign = pnl.total >= 0 ? '+' : '';
 
-  // Build positions HTML if any
   let positionsHtml = '';
   const positions = agent.getPositions();
   if (positions.length > 0) {
@@ -3555,10 +4587,14 @@ function createAgentCard(agent) {
     positionsHtml += '</div>';
   }
 
+  // Count signals for this agent
+  const agentSignals = SignalQueue.signals.filter(s => s.agent === agent.name && s.status === 'pending').length;
+
   card.innerHTML = `
     <div class="agent-header">
       <div class="agent-status-dot ${stateClass}"></div>
       <h3 class="agent-name">${agent.name}</h3>
+      ${agentSignals > 0 ? `<span class="agent-signals-count">${agentSignals} signals</span>` : ''}
       <span class="agent-badge ${stateClass}">${stateLabel}${simLabel}</span>
     </div>
     <div class="agent-desc">${agent.description}</div>
@@ -3594,17 +4630,23 @@ function createAgentCard(agent) {
         ? `<button class="agent-btn pause" data-action="pause" data-agent="${agent.id}">Pause</button>`
         : `<button class="agent-btn start" data-action="start" data-agent="${agent.id}">${isPaused ? 'Resume' : 'Start'}</button>`
       }
+      ${agentSignals > 0 ? `<button class="agent-btn agent-view-signals-btn" data-action="viewSignals" data-agent-name="${agent.name}">View Signals</button>` : ''}
       <button class="agent-btn" data-action="configure" data-agent="${agent.id}">Configure</button>
       <button class="agent-btn" data-action="logs" data-agent="${agent.id}">Logs</button>
       ${isStopped ? `<button class="agent-btn" data-action="remove" data-agent="${agent.id}" style="color:var(--loss)">Remove</button>` : ''}
     </div>
   `;
 
-  // Wire up button events
   card.querySelectorAll('[data-action]').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      handleAgentAction(btn.dataset.action, btn.dataset.agent);
+      const action = btn.dataset.action;
+      if (action === 'viewSignals') {
+        SignalQueue.filterByAgent(btn.dataset.agentName);
+        document.querySelector('.signal-queue-panel')?.scrollIntoView({ behavior: 'smooth' });
+      } else {
+        handleAgentAction(action, btn.dataset.agent);
+      }
     });
   });
 
@@ -3612,16 +4654,14 @@ function createAgentCard(agent) {
 }
 
 function handleAgentAction(action, agentId) {
+  if (typeof AgentManager === 'undefined') return;
   const agent = AgentManager.get(agentId);
   if (!agent) return;
 
   switch (action) {
     case 'start':
-      if (agent.state === AgentState.PAUSED) {
-        agent.resume();
-      } else {
-        agent.start();
-      }
+      if (agent.state === AgentState.PAUSED) agent.resume();
+      else agent.start();
       break;
     case 'pause':
       agent.pause();
@@ -3649,7 +4689,6 @@ function openLogsModal(agent) {
   const title = document.getElementById('logsModalTitle');
   if (title) title.textContent = `${agent.name} - Logs`;
 
-  // Wire filter buttons
   document.querySelectorAll('.log-filter-btn').forEach(btn => {
     btn.onclick = () => {
       document.querySelectorAll('.log-filter-btn').forEach(b => b.classList.remove('active'));
@@ -3661,7 +4700,6 @@ function openLogsModal(agent) {
   renderLogs('all');
   openModal('agentLogsModal');
 
-  // Auto-refresh logs
   if (_logsRefreshTimer) clearInterval(_logsRefreshTimer);
   _logsRefreshTimer = setInterval(() => {
     if (!document.getElementById('agentLogsModal').classList.contains('active')) {
@@ -3751,37 +4789,72 @@ function openConfigModal(agent) {
   openModal('agentConfigModal');
 }
 
-// --- Deploy Agent Modal ---
-document.querySelectorAll('.deploy-strategy-card').forEach(card => {
-  card.addEventListener('click', () => {
-    if (typeof AgentManager === 'undefined') return;
-    const strategy = card.dataset.strategy;
-    let agent;
-    const id = `${strategy.toLowerCase()}-${Date.now()}`;
-    switch (strategy) {
-      case 'ArbitrageHunter':
-        agent = new ArbitrageHunter({ id });
-        break;
-      case 'SwingMomentum':
-        agent = new SwingMomentum({ id });
-        break;
-      case 'GammaScalper':
-        agent = new GammaScalper({ id });
-        break;
-      case 'MeanReversion':
-        agent = new MeanReversion({ id });
-        break;
-      default: return;
-    }
-    AgentManager.register(agent);
-    closeModal('deployAgentModal');
-    renderAgentCards();
-  });
-});
-
-// "Deploy New Agent" button in header
+// --- Deploy Agent Modal (enhanced form) ---
 document.getElementById('newAgentBtn')?.addEventListener('click', () => {
   openModal('deployAgentModal');
+});
+
+// Paper/Live toggle label
+document.getElementById('deployPaperMode')?.addEventListener('change', function() {
+  const label = document.getElementById('deployModeLabel');
+  if (label) {
+    label.textContent = this.checked ? 'PAPER' : 'LIVE';
+    label.style.color = this.checked ? 'var(--profit)' : 'var(--loss)';
+  }
+});
+
+document.getElementById('deploySubmitBtn')?.addEventListener('click', () => {
+  const name = document.getElementById('deployAgentName')?.value?.trim() || ('Agent ' + Date.now());
+  const strategy = document.getElementById('deployStrategyType')?.value || 'Momentum';
+  const universe = document.getElementById('deployUniverse')?.value || 'All';
+  const posSizing = document.getElementById('deployPosSizing')?.value || 'fixed';
+  const posSize = parseInt(document.getElementById('deployPosSize')?.value) || 10000;
+  const maxPos = parseInt(document.getElementById('deployMaxPos')?.value) || 5;
+  const stopLoss = parseFloat(document.getElementById('deployStopLoss')?.value) || 5;
+  const takeProfit = parseFloat(document.getElementById('deployTakeProfit')?.value) || 15;
+  const paperMode = document.getElementById('deployPaperMode')?.checked !== false;
+
+  const newAgent = {
+    id: 'agent_' + Date.now(),
+    name: name,
+    strategy: strategy,
+    status: 'paused',
+    todayPnl: 0,
+    totalPnl: 0,
+    winRate: 0,
+    tradesToday: 0,
+    maxDrawdown: 0,
+    signals: 0,
+    config: { universe, posSizing, posSize, maxPos, stopLoss, takeProfit, paperMode }
+  };
+
+  _standaloneAgents.push(newAgent);
+
+  // Save custom agents to localStorage
+  const customAgents = _standaloneAgents.filter(a => !DEFAULT_AGENTS_DATA.find(d => d.id === a.id));
+  localStorage.setItem('gst_custom_agents', JSON.stringify(customAgents));
+
+  // Also try to register with AgentManager if available
+  if (typeof AgentManager !== 'undefined' && typeof ArbitrageHunter !== 'undefined') {
+    let agentInstance;
+    const id = newAgent.id;
+    switch (strategy) {
+      case 'Momentum': case 'Breakout': case 'AI Signal':
+        agentInstance = new SwingMomentum({ id, name }); break;
+      case 'Mean Reversion':
+        agentInstance = new MeanReversion({ id, name }); break;
+      case 'Options':
+        agentInstance = new GammaScalper({ id, name }); break;
+      case 'Value':
+        agentInstance = new ArbitrageHunter({ id, name }); break;
+      default:
+        agentInstance = new SwingMomentum({ id, name }); break;
+    }
+    AgentManager.register(agentInstance);
+  }
+
+  closeModal('deployAgentModal');
+  renderAgentCards();
 });
 
 // --- Settings: Alpaca ---
@@ -3818,7 +4891,6 @@ document.getElementById('saveAlpacaBtn')?.addEventListener('click', () => {
   const secret = document.getElementById('settingAlpacaSecret')?.value?.trim() || '';
   const mode = document.getElementById('settingAlpacaMode')?.value || 'paper';
 
-  // Live mode confirmation
   if (mode === 'live') {
     openModal('liveTradeConfirmModal');
     const check = document.getElementById('liveTradeConfirmCheck');
@@ -3924,35 +4996,60 @@ function startAgentUIUpdates() {
 // --- Agent perf chart with real data ---
 function drawAgentPerfChartLive() {
   const canvas = document.getElementById('agentPerfCanvas');
-  if (!canvas || typeof AgentManager === 'undefined') return;
+  if (!canvas) return;
   const ctx = canvas.getContext('2d');
   const rect = canvas.parentElement.getBoundingClientRect();
   canvas.width = rect.width;
   canvas.height = rect.height;
 
-  const padding = { top: 20, right: 20, bottom: 30, left: 60 };
+  const padding = { top: 20, right: 20, bottom: 40, left: 60 };
   const w = canvas.width - padding.left - padding.right;
   const h = canvas.height - padding.top - padding.bottom;
 
-  const agents = AgentManager.getAll();
-  const colors = ['#3B82F6', '#10B981', '#8B5CF6', '#F59E0B', '#EF4444', '#14B8A6'];
+  const agentColors = ['#F59E0B', '#3B82F6', '#10B981', '#8B5CF6', '#EF4444', '#14B8A6'];
+  const agentNames = ['Momentum Alpha', 'Swing Trader', 'Gamma Scalper', 'Value Scanner'];
 
-  const agentData = agents.map((agent, i) => {
-    if (agent.dailyPnLHistory && agent.dailyPnLHistory.length > 1) {
-      const cum = [0];
-      agent.dailyPnLHistory.forEach(d => cum.push(cum[cum.length - 1] + d));
-      return { color: colors[i % colors.length], data: cum };
-    }
-    return { color: colors[i % colors.length], data: generateCumPnL(30, 100 + i * 30, 0.55 + i * 0.03) };
-  });
+  // Use AgentManager data if available, otherwise generate sample
+  let agentData = [];
+  if (typeof AgentManager !== 'undefined') {
+    const agents = AgentManager.getAll();
+    agentData = agents.map((agent, i) => {
+      if (agent.dailyPnLHistory && agent.dailyPnLHistory.length > 1) {
+        const cum = [0];
+        agent.dailyPnLHistory.forEach(d => cum.push(cum[cum.length - 1] + d));
+        return { color: agentColors[i % agentColors.length], data: cum, name: agent.name };
+      }
+      return { color: agentColors[i % agentColors.length], data: generateCumPnL(30, 100 + i * 30, 0.55 + i * 0.03), name: agent.name };
+    });
+  }
 
-  const days = Math.max(30, ...agentData.map(a => a.data.length));
+  if (agentData.length === 0) {
+    // Generate sample equity curves for each default agent
+    agentData = DEFAULT_AGENTS_DATA.map((agent, i) => {
+      const seed = agent.totalPnl / 30;
+      const wr = agent.winRate / 100;
+      return {
+        color: agentColors[i % agentColors.length],
+        data: generateCumPnL(30, seed, wr),
+        name: agent.name
+      };
+    });
+  }
+
+  // Update legend
+  const legendEl = document.getElementById('agentPerfLegend');
+  if (legendEl) {
+    legendEl.innerHTML = agentData.map(a =>
+      `<span class="legend-item"><span class="legend-dot" style="background: ${a.color}"></span>${a.name}</span>`
+    ).join('');
+  }
 
   let min = 0, max = 0;
   agentData.forEach(a => { a.data.forEach(v => { min = Math.min(min, v); max = Math.max(max, v); }); });
-  max *= 1.1 || 1;
+  max = max * 1.1 || 100;
   min = Math.min(min, -max * 0.1);
 
+  // Grid lines
   ctx.strokeStyle = '#1A1A24';
   ctx.lineWidth = 0.5;
   for (let i = 0; i <= 4; i++) {
@@ -3968,6 +5065,16 @@ function drawAgentPerfChartLive() {
     ctx.fillText('$' + val.toFixed(0), padding.left - 8, y + 3);
   }
 
+  // X-axis labels (days)
+  ctx.fillStyle = '#3A3A48';
+  ctx.font = '9px JetBrains Mono';
+  ctx.textAlign = 'center';
+  for (let d = 0; d <= 30; d += 5) {
+    const x = padding.left + (d / 30) * w;
+    ctx.fillText('D' + (d - 30 || '0'), x, canvas.height - 8);
+  }
+
+  // Zero line
   const zeroY = padding.top + (max / (max - min)) * h;
   ctx.strokeStyle = '#2A2A38';
   ctx.lineWidth = 1;
@@ -3976,6 +5083,7 @@ function drawAgentPerfChartLive() {
   ctx.lineTo(canvas.width - padding.right, zeroY);
   ctx.stroke();
 
+  // Draw lines
   agentData.forEach(agentLine => {
     const lineLen = agentLine.data.length;
     ctx.beginPath();
@@ -3988,6 +5096,7 @@ function drawAgentPerfChartLive() {
     ctx.lineWidth = 2;
     ctx.stroke();
 
+    // Fill under curve
     const lastX = padding.left + w;
     ctx.lineTo(lastX, zeroY);
     ctx.lineTo(padding.left, zeroY);
@@ -4002,11 +5111,11 @@ function drawAgentPerfChartLive() {
 
 // --- Initialize agent system on load ---
 function initAgentSystem() {
-  if (typeof AgentManager === 'undefined') return;
   initDefaultAgents();
   loadAlpacaSettings();
   renderAgentCards();
   startAgentUIUpdates();
+  SignalQueue.init();
 
   setInterval(() => {
     if (document.querySelector('[data-view="agents"]')?.classList?.contains('active') ||
@@ -4015,10 +5124,15 @@ function initAgentSystem() {
     }
   }, 5000);
 
-  AgentManager.getAll().forEach(agent => {
-    agent.on('stateChange', () => renderAgentCards());
-    agent.on('guardrailTriggered', () => renderAgentCards());
-  });
+  if (typeof AgentManager !== 'undefined') {
+    AgentManager.getAll().forEach(agent => {
+      agent.on('stateChange', () => renderAgentCards());
+      agent.on('guardrailTriggered', () => renderAgentCards());
+    });
+  }
+
+  // Draw initial chart
+  setTimeout(() => drawAgentPerfChartLive(), 500);
 }
 
 /* ============================================
@@ -4026,53 +5140,147 @@ function initAgentSystem() {
    Populates Risk View with simulated portfolio data
    ============================================ */
 
+/* ---- TICKER BETAS ---- */
+var TICKER_BETAS = {
+  AAPL: 1.2, NVDA: 1.7, MSFT: 1.1, AMZN: 1.3, GOOGL: 1.1, META: 1.4, TSLA: 2.0,
+  JPM: 1.1, JNJ: 0.6, V: 0.9, PLTR: 1.8, COIN: 2.5, SOFI: 1.6, IONQ: 2.2,
+  SOUN: 2.5, RKLB: 2.3, SPY: 1.0, QQQ: 1.2, AMD: 1.65, DIS: 0.95, GS: 1.3,
+  BAC: 1.2, MA: 0.95, SQ: 1.8, MARA: 2.8, RIOT: 2.7, MSTR: 2.4
+};
+
+var DEFAULT_PORTFOLIO = [
+  { symbol: 'NVDA', shares: 50, avgCost: 875.00 },
+  { symbol: 'AAPL', shares: 100, avgCost: 142.50 },
+  { symbol: 'MSFT', shares: 75, avgCost: 410.00 },
+  { symbol: 'TSLA', shares: 30, avgCost: 245.00 },
+  { symbol: 'JPM', shares: 60, avgCost: 198.50 },
+  { symbol: 'PLTR', shares: 200, avgCost: 22.50 }
+];
+
+/* Ensure default portfolio exists in localStorage */
+(function initDefaultPortfolio() {
+  var existing = null;
+  try { existing = JSON.parse(localStorage.getItem('gs_portfolio')); } catch(e) {}
+  if (!existing || !Array.isArray(existing) || existing.length === 0) {
+    localStorage.setItem('gs_portfolio', JSON.stringify(DEFAULT_PORTFOLIO));
+  }
+})();
+
+/* Generate or retrieve equity curve for drawdown chart */
+function getEquityCurve() {
+  var key = 'gs_equity_curve';
+  var existing = null;
+  try { existing = JSON.parse(localStorage.getItem(key)); } catch(e) {}
+  if (existing && Array.isArray(existing) && existing.length > 0) return existing;
+
+  // Generate 90-day simulated equity curve
+  var curve = [];
+  var startVal = 100000;
+  var val = startVal;
+  var now = Date.now();
+  var dayMs = 86400000;
+  for (var i = 89; i >= 0; i--) {
+    var date = new Date(now - i * dayMs);
+    // Create realistic drawdown periods
+    var dayNum = 90 - i;
+    var dailyReturn;
+    if (dayNum > 15 && dayNum < 30) {
+      dailyReturn = -0.005 + Math.random() * 0.003; // drawdown period 1
+    } else if (dayNum > 55 && dayNum < 68) {
+      dailyReturn = -0.008 + Math.random() * 0.005; // drawdown period 2 (deeper)
+    } else {
+      dailyReturn = 0.001 + (Math.random() - 0.4) * 0.012; // slight upward bias
+    }
+    val = val * (1 + dailyReturn);
+    curve.push({
+      date: date.toISOString().split('T')[0],
+      value: Math.round(val * 100) / 100
+    });
+  }
+  localStorage.setItem(key, JSON.stringify(curve));
+  return curve;
+}
+
 function getRiskPortfolioData() {
-  const watchlistPrices = {};
-  document.querySelectorAll('.wl-row').forEach(row => {
-    const sym = row.querySelector('.wl-sym')?.textContent;
-    const price = parseFloat(row.querySelector('.wl-price')?.textContent);
-    if (sym && !isNaN(price)) watchlistPrices[sym] = price;
+  // Load portfolio from localStorage
+  var stored = null;
+  try { stored = JSON.parse(localStorage.getItem('gs_portfolio')); } catch(e) {}
+  if (!stored || !Array.isArray(stored) || stored.length === 0) {
+    stored = DEFAULT_PORTFOLIO;
+  }
+
+  // Get watchlist prices for live price lookup
+  var watchlistPrices = {};
+  document.querySelectorAll('.wl-row').forEach(function(row) {
+    var sym = row.querySelector('.wl-sym');
+    var price = row.querySelector('.wl-price');
+    if (sym && price) {
+      var s = sym.textContent;
+      var p = parseFloat(price.textContent);
+      if (s && !isNaN(p)) watchlistPrices[s] = p;
+    }
   });
 
-  const positions = [
-    { symbol: 'NVDA', qty: 50, avgCost: 875.00, beta: 1.72 },
-    { symbol: 'AAPL', qty: 120, avgCost: 218.50, beta: 1.18 },
-    { symbol: 'MSFT', qty: 80, avgCost: 425.00, beta: 1.05 },
-    { symbol: 'AMZN', qty: 65, avgCost: 178.20, beta: 1.28 },
-    { symbol: 'TSLA', qty: 40, avgCost: 262.30, beta: 1.95 },
-    { symbol: 'META', qty: 35, avgCost: 495.00, beta: 1.32 },
-    { symbol: 'GOOGL', qty: 90, avgCost: 162.10, beta: 1.08 },
-    { symbol: 'JPM', qty: 55, avgCost: 205.00, beta: 0.87 },
-    { symbol: 'AMD', qty: 70, avgCost: 165.00, beta: 1.65 },
-    { symbol: 'COIN', qty: 25, avgCost: 245.00, beta: 2.40 },
-    { symbol: 'DIS', qty: 60, avgCost: 118.00, beta: 0.95 },
-    { symbol: 'PLTR', qty: 200, avgCost: 21.50, beta: 1.85 },
-  ];
+  var positions = stored.map(function(item) {
+    var sym = item.symbol || item.ticker;
+    var qty = item.shares || item.qty || 0;
+    var avg = item.avgCost || item.avg_cost || item.costBasis || 0;
+    var beta = TICKER_BETAS[sym] || 1.0;
+    return { symbol: sym, qty: qty, avgCost: avg, beta: beta };
+  });
 
-  let totalValue = 0;
-  positions.forEach(p => {
-    p.current = watchlistPrices[p.symbol] || p.avgCost * (1 + (Math.random() * 0.1 - 0.03));
+  var totalValue = 0;
+  var totalCost = 0;
+  positions.forEach(function(p) {
+    p.current = watchlistPrices[p.symbol] || p.avgCost * (1 + (Math.random() * 0.08 - 0.02));
     p.marketValue = p.qty * p.current;
     p.costBasis = p.qty * p.avgCost;
     p.pnl = p.marketValue - p.costBasis;
-    p.pnlPct = ((p.current - p.avgCost) / p.avgCost) * 100;
+    p.pnlPct = p.avgCost > 0 ? ((p.current - p.avgCost) / p.avgCost) * 100 : 0;
     totalValue += p.marketValue;
+    totalCost += p.costBasis;
   });
 
-  positions.forEach(p => {
-    p.weight = (p.marketValue / totalValue) * 100;
+  positions.forEach(function(p) {
+    p.weight = totalValue > 0 ? (p.marketValue / totalValue) * 100 : 0;
     p.deltaContrib = p.marketValue * p.beta;
   });
 
-  const weightedBeta = positions.reduce((s, p) => s + (p.weight / 100) * p.beta, 0);
-  const netDelta = positions.reduce((s, p) => s + p.marketValue, 0);
-  const betaWeightedDelta = positions.reduce((s, p) => s + p.deltaContrib, 0);
-  const dailyVol = 0.015;
-  const var95 = totalValue * dailyVol * 1.645;
-  const maxDrawdown = -8.4;
-  const netGamma = totalValue * 0.0003;
+  var weightedBeta = positions.reduce(function(s, p) { return s + (p.weight / 100) * p.beta; }, 0);
+  var netDelta = positions.reduce(function(s, p) { return s + p.marketValue; }, 0);
+  var betaWeightedDelta = positions.reduce(function(s, p) { return s + p.deltaContrib; }, 0);
+  var dailyVol = 0.015 * weightedBeta;
+  var var95 = totalValue * dailyVol * 1.645;
 
-  return { positions, totalValue, weightedBeta, netDelta, netGamma, betaWeightedDelta, var95, maxDrawdown };
+  // Calculate max drawdown from equity curve
+  var curve = getEquityCurve();
+  var maxDD = 0;
+  var peak = 0;
+  curve.forEach(function(pt) {
+    if (pt.value > peak) peak = pt.value;
+    var dd = ((pt.value - peak) / peak) * 100;
+    if (dd < maxDD) maxDD = dd;
+  });
+
+  // Sharpe ratio: (portfolio return - risk free) / std dev
+  var portfolioReturn = totalCost > 0 ? (totalValue - totalCost) / totalCost : 0;
+  var annualReturn = portfolioReturn * (252 / 90); // annualized estimate
+  var riskFree = 0.05; // 5% risk-free rate
+  var annualVol = dailyVol * Math.sqrt(252);
+  var sharpe = annualVol > 0 ? (annualReturn - riskFree) / annualVol : 0;
+
+  return {
+    positions: positions,
+    totalValue: totalValue,
+    totalCost: totalCost,
+    weightedBeta: weightedBeta,
+    netDelta: netDelta,
+    betaWeightedDelta: betaWeightedDelta,
+    var95: var95,
+    maxDrawdown: maxDD,
+    sharpe: sharpe,
+    dailyVol: dailyVol
+  };
 }
 
 function riskFormatCurrency(val, decimals) {
@@ -4088,19 +5296,40 @@ function populateRiskSummary(data) {
   var el = function(id, val) { var e = document.getElementById(id); if (e) e.textContent = val; };
   el('riskTotalExposure', riskFormatCurrency(data.totalValue));
   el('riskNetDelta', riskFormatCurrency(data.netDelta));
-  el('riskNetGamma', riskFormatCurrency(data.netGamma));
-  el('riskBetaDelta', riskFormatCurrency(data.betaWeightedDelta));
+  el('riskPortBeta', data.weightedBeta.toFixed(2));
+  el('riskSharpe', data.sharpe.toFixed(2));
   el('riskVaR', '-' + riskFormatCurrency(data.var95));
   el('riskMaxDD', data.maxDrawdown.toFixed(1) + '%');
 }
 
+/* ---- RISK POSITION TABLE SORT STATE ---- */
+var riskTableSortKey = 'weight';
+var riskTableSortAsc = false;
+var riskTableLastData = null;
+
 function populatePositionTable(data) {
+  riskTableLastData = data;
   var tbody = document.getElementById('riskPositionBody');
   if (!tbody) return;
   tbody.innerHTML = '';
-  data.positions.forEach(function(p) {
+
+  // Sort positions
+  var sorted = data.positions.slice().sort(function(a, b) {
+    var va = a[riskTableSortKey];
+    var vb = b[riskTableSortKey];
+    if (typeof va === 'string') {
+      return riskTableSortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+    }
+    return riskTableSortAsc ? va - vb : vb - va;
+  });
+
+  // Find max weight for bar scaling
+  var maxWeight = Math.max.apply(null, sorted.map(function(p) { return p.weight; }));
+
+  sorted.forEach(function(p) {
     var tr = document.createElement('tr');
     tr.className = p.pnl >= 0 ? 'row-profit' : 'row-loss';
+    var barWidth = maxWeight > 0 ? (p.weight / maxWeight) * 100 : 0;
     tr.innerHTML =
       '<td>' + p.symbol + '</td>' +
       '<td>' + p.qty + '</td>' +
@@ -4109,9 +5338,27 @@ function populatePositionTable(data) {
       '<td>' + (p.pnl >= 0 ? '+' : '') + riskFormatCurrency(p.pnl) + '</td>' +
       '<td>' + (p.pnlPct >= 0 ? '+' : '') + p.pnlPct.toFixed(2) + '%</td>' +
       '<td>' + p.weight.toFixed(1) + '%</td>' +
+      '<td><div class="weight-bar-cell"><div class="weight-bar-track"><div class="weight-bar-fill" style="width:' + barWidth + '%"></div></div><span class="weight-bar-label">' + p.weight.toFixed(1) + '%</span></div></td>' +
       '<td>' + p.beta.toFixed(2) + '</td>' +
       '<td>' + riskFormatCurrency(p.deltaContrib) + '</td>';
     tbody.appendChild(tr);
+  });
+
+  // Update sort indicators on headers
+  document.querySelectorAll('.risk-position-table thead th[data-sort]').forEach(function(th) {
+    th.classList.remove('sort-active');
+    var arrow = th.querySelector('.sort-arrow');
+    if (!arrow) {
+      arrow = document.createElement('span');
+      arrow.className = 'sort-arrow';
+      th.appendChild(arrow);
+    }
+    if (th.dataset.sort === riskTableSortKey) {
+      th.classList.add('sort-active');
+      arrow.textContent = riskTableSortAsc ? ' \u25B2' : ' \u25BC';
+    } else {
+      arrow.textContent = '';
+    }
   });
 }
 
@@ -4216,17 +5463,21 @@ function populateStressTests(data) {
   var grid = document.getElementById('stressTestGrid');
   if (!grid) return;
 
-  var techSymbols = ['NVDA', 'AAPL', 'MSFT', 'AMZN', 'META', 'GOOGL', 'AMD', 'PLTR'];
+  var techSymbols = ['NVDA', 'AAPL', 'MSFT', 'AMZN', 'META', 'GOOGL', 'AMD', 'PLTR', 'IONQ', 'SOUN', 'RKLB'];
+  var growthSymbols = ['NVDA', 'TSLA', 'PLTR', 'COIN', 'IONQ', 'SOUN', 'RKLB', 'SOFI', 'AMD', 'META'];
   var techWeight = data.positions
     .filter(function(p) { return techSymbols.indexOf(p.symbol) !== -1; })
     .reduce(function(sum, p) { return sum + p.weight; }, 0) / 100;
+  var growthWeight = data.positions
+    .filter(function(p) { return growthSymbols.indexOf(p.symbol) !== -1; })
+    .reduce(function(sum, p) { return sum + p.weight; }, 0) / 100;
 
   var scenarios = [
-    { icon: '&#x1F4C9;', title: 'Market Crash -10%', factor: -0.10, detail: 'Broad equity selloff', useBeta: true },
-    { icon: '&#x1F4C8;', title: 'Rate Hike +200bp', factor: -0.045, detail: 'Fed tightening shock', useBeta: false },
-    { icon: '&#x26A1;', title: 'VIX Spike to 40', factor: -0.065, detail: 'Volatility regime change', useBeta: true },
-    { icon: '&#x1F4BB;', title: 'Tech Sector -15%', factor: -0.15, detail: 'Sector rotation / crash', useTech: true },
-    { icon: '&#x1F4B5;', title: 'Dollar +5%', factor: -0.025, detail: 'DXY appreciation', useBeta: false }
+    { icon: '&#x1F4C9;', title: 'Market Crash -20%', factor: -0.20, detail: 'Broad equity selloff', useBeta: true, severity: 'severe' },
+    { icon: '&#x1F4C8;', title: 'Rate Hike +100bp', factor: -0.06, detail: 'Growth stocks hit harder', useGrowth: true, severity: 'high' },
+    { icon: '&#x26A1;', title: 'VIX Spike to 40', factor: -0.08, detail: 'Volatility regime change', useBeta: true, severity: 'high' },
+    { icon: '&#x1F4BB;', title: 'Tech Crash -30%', factor: -0.30, detail: 'Tech sector rotation', useTech: true, severity: 'severe' },
+    { icon: '&#x1F4B5;', title: 'Dollar Surge +10%', factor: -0.015, detail: 'Minimal domestic impact', useBeta: false, severity: 'low' }
   ];
 
   grid.innerHTML = '';
@@ -4234,23 +5485,254 @@ function populateStressTests(data) {
     var impact;
     if (s.useTech) {
       impact = data.totalValue * s.factor * techWeight;
+    } else if (s.useGrowth) {
+      impact = data.totalValue * s.factor * growthWeight;
     } else if (s.useBeta) {
       impact = data.totalValue * s.factor * data.weightedBeta;
     } else {
       impact = data.totalValue * s.factor;
     }
 
+    var impactPct = data.totalValue > 0 ? (impact / data.totalValue) * 100 : 0;
     var isLoss = impact < 0;
     var card = document.createElement('div');
-    card.className = 'stress-card';
+    card.className = 'stress-card severity-' + s.severity;
     card.innerHTML =
       '<div class="stress-card-icon">' + s.icon + '</div>' +
       '<div class="stress-card-title">' + s.title + '</div>' +
       '<div class="stress-card-impact ' + (isLoss ? 'loss' : 'profit') + '">' + (impact >= 0 ? '+' : '') + riskFormatCurrency(impact) + '</div>' +
+      '<div class="stress-card-pct">' + (impactPct >= 0 ? '+' : '') + impactPct.toFixed(1) + '% portfolio</div>' +
       '<div class="stress-card-detail">' + s.detail + '</div>';
     grid.appendChild(card);
   });
 }
+
+/* ---- DRAWDOWN CHART ---- */
+function renderDrawdownChart() {
+  var canvas = document.getElementById('drawdownCanvas');
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var wrap = canvas.parentElement;
+
+  // Set canvas size for sharp rendering
+  var dpr = window.devicePixelRatio || 1;
+  var w = wrap.clientWidth;
+  var h = wrap.clientHeight;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  ctx.scale(dpr, dpr);
+
+  var curve = getEquityCurve();
+  if (curve.length < 2) return;
+
+  // Compute drawdown series
+  var peak = 0;
+  var ddSeries = [];
+  var maxDD = 0;
+  var maxDDIdx = 0;
+  curve.forEach(function(pt, i) {
+    if (pt.value > peak) peak = pt.value;
+    var dd = ((pt.value - peak) / peak) * 100;
+    ddSeries.push({ date: pt.date, dd: dd });
+    if (dd < maxDD) { maxDD = dd; maxDDIdx = i; }
+  });
+
+  var currentDD = ddSeries[ddSeries.length - 1].dd;
+
+  // Update header label
+  var label = document.getElementById('drawdownCurrentLabel');
+  if (label) {
+    label.textContent = 'Current: ' + currentDD.toFixed(2) + '% | Max: ' + maxDD.toFixed(2) + '%';
+    label.style.color = currentDD < -3 ? '#EF4444' : currentDD < -1 ? '#F59E0B' : '#10B981';
+  }
+
+  // Chart dimensions
+  var padL = 50, padR = 16, padT = 16, padB = 28;
+  var chartW = w - padL - padR;
+  var chartH = h - padT - padB;
+  var minDD = Math.min(maxDD * 1.1, -1);
+
+  function xPos(i) { return padL + (i / (ddSeries.length - 1)) * chartW; }
+  function yPos(dd) { return padT + (dd / minDD) * chartH; }
+
+  // Clear
+  ctx.clearRect(0, 0, w, h);
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(42,42,58,0.5)';
+  ctx.lineWidth = 0.5;
+  var gridSteps = [0, minDD * 0.25, minDD * 0.5, minDD * 0.75, minDD];
+  gridSteps.forEach(function(val) {
+    var y = yPos(val);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    // Y-axis label
+    ctx.fillStyle = '#6B7280';
+    ctx.font = '10px JetBrains Mono, monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(val.toFixed(1) + '%', padL - 6, y + 3);
+  });
+
+  // Zero line
+  ctx.strokeStyle = 'rgba(107,114,128,0.4)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(w - padR, padT); ctx.stroke();
+
+  // Fill gradient
+  var grad = ctx.createLinearGradient(0, padT, 0, padT + chartH);
+  grad.addColorStop(0, 'rgba(239, 68, 68, 0.05)');
+  grad.addColorStop(1, 'rgba(239, 68, 68, 0.35)');
+
+  // Draw filled area
+  ctx.beginPath();
+  ctx.moveTo(xPos(0), padT); // start at 0% line
+  ddSeries.forEach(function(pt, i) { ctx.lineTo(xPos(i), yPos(pt.dd)); });
+  ctx.lineTo(xPos(ddSeries.length - 1), padT);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Draw line
+  ctx.beginPath();
+  ddSeries.forEach(function(pt, i) {
+    if (i === 0) ctx.moveTo(xPos(i), yPos(pt.dd));
+    else ctx.lineTo(xPos(i), yPos(pt.dd));
+  });
+  ctx.strokeStyle = '#EF4444';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Max drawdown point marker
+  if (maxDDIdx > 0) {
+    var mx = xPos(maxDDIdx);
+    var my = yPos(maxDD);
+    ctx.beginPath();
+    ctx.arc(mx, my, 4, 0, Math.PI * 2);
+    ctx.fillStyle = '#EF4444';
+    ctx.fill();
+    ctx.strokeStyle = '#1A1A24';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Label
+    ctx.fillStyle = '#EF4444';
+    ctx.font = 'bold 10px JetBrains Mono, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Max: ' + maxDD.toFixed(1) + '%', mx, my + 14);
+  }
+
+  // Current drawdown marker
+  var cx = xPos(ddSeries.length - 1);
+  var cy = yPos(currentDD);
+  ctx.beginPath();
+  ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+  ctx.fillStyle = '#F59E0B';
+  ctx.fill();
+  ctx.strokeStyle = '#1A1A24';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = '#F59E0B';
+  ctx.font = 'bold 10px JetBrains Mono, monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('Now: ' + currentDD.toFixed(1) + '%', cx - 8, cy - 8);
+
+  // X-axis date labels
+  ctx.fillStyle = '#6B7280';
+  ctx.font = '9px JetBrains Mono, monospace';
+  ctx.textAlign = 'center';
+  var labelCount = 6;
+  for (var li = 0; li < labelCount; li++) {
+    var idx = Math.round(li * (ddSeries.length - 1) / (labelCount - 1));
+    var dateStr = ddSeries[idx].date.substring(5); // MM-DD
+    ctx.fillText(dateStr, xPos(idx), h - 6);
+  }
+}
+
+/* ---- POSITION SIZING CALCULATOR ---- */
+function setupPositionSizer() {
+  var calcBtn = document.getElementById('sizerCalcBtn');
+  if (!calcBtn) return;
+
+  function calculate() {
+    var account = parseFloat(document.getElementById('sizerAccount').value) || 0;
+    var riskPct = parseFloat(document.getElementById('sizerRiskPct').value) || 0;
+    var entry = parseFloat(document.getElementById('sizerEntry').value) || 0;
+    var stop = parseFloat(document.getElementById('sizerStop').value) || 0;
+    var target = parseFloat(document.getElementById('sizerTarget').value) || 0;
+
+    var sharesEl = document.getElementById('sizerShares');
+    var valueEl = document.getElementById('sizerValue');
+    var dollarRiskEl = document.getElementById('sizerDollarRisk');
+    var pctPortEl = document.getElementById('sizerPctPort');
+    var rrCard = document.getElementById('sizerRRCard');
+    var rrEl = document.getElementById('sizerRR');
+    var rrBarRisk = document.getElementById('sizerRRBarRisk');
+    var rrBarReward = document.getElementById('sizerRRBarReward');
+
+    if (account <= 0 || entry <= 0 || stop <= 0 || riskPct <= 0) {
+      if (sharesEl) sharesEl.textContent = '--';
+      if (valueEl) valueEl.textContent = '--';
+      if (dollarRiskEl) dollarRiskEl.textContent = '--';
+      if (pctPortEl) pctPortEl.textContent = '--';
+      if (rrCard) rrCard.style.display = 'none';
+      return;
+    }
+
+    var dollarRisk = account * (riskPct / 100);
+    var riskPerShare = Math.abs(entry - stop);
+    if (riskPerShare <= 0) return;
+
+    var shares = Math.floor(dollarRisk / riskPerShare);
+    var posValue = shares * entry;
+    var pctOfPort = (posValue / account) * 100;
+
+    if (sharesEl) sharesEl.textContent = shares.toLocaleString();
+    if (valueEl) valueEl.textContent = riskFormatCurrency(posValue);
+    if (dollarRiskEl) dollarRiskEl.textContent = '-' + riskFormatCurrency(dollarRisk);
+    if (pctPortEl) pctPortEl.textContent = pctOfPort.toFixed(1) + '%';
+
+    // Risk/Reward
+    if (target > 0 && rrCard) {
+      var reward = Math.abs(target - entry);
+      var rr = riskPerShare > 0 ? reward / riskPerShare : 0;
+      rrCard.style.display = '';
+      if (rrEl) {
+        rrEl.textContent = '1 : ' + rr.toFixed(1);
+        rrEl.style.color = rr >= 2 ? '#10B981' : rr >= 1 ? '#F59E0B' : '#EF4444';
+      }
+      var total = riskPerShare + reward;
+      if (rrBarRisk) rrBarRisk.style.width = ((riskPerShare / total) * 100) + '%';
+      if (rrBarReward) rrBarReward.style.width = ((reward / total) * 100) + '%';
+    } else if (rrCard) {
+      rrCard.style.display = 'none';
+    }
+  }
+
+  calcBtn.addEventListener('click', calculate);
+
+  // Auto-calculate on input change
+  ['sizerAccount', 'sizerRiskPct', 'sizerEntry', 'sizerStop', 'sizerTarget'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('input', calculate);
+  });
+}
+
+/* ---- TABLE SORT HANDLER ---- */
+(function setupRiskTableSort() {
+  document.addEventListener('click', function(e) {
+    var th = e.target.closest('.risk-position-table thead th[data-sort]');
+    if (!th) return;
+    var key = th.dataset.sort;
+    if (riskTableSortKey === key) {
+      riskTableSortAsc = !riskTableSortAsc;
+    } else {
+      riskTableSortKey = key;
+      riskTableSortAsc = key === 'symbol'; // alpha ascending by default
+    }
+    if (riskTableLastData) populatePositionTable(riskTableLastData);
+  });
+})();
 
 function loadRiskView() {
   var data = getRiskPortfolioData();
@@ -4260,6 +5742,8 @@ function loadRiskView() {
   populateConcentrationChart(data);
   populateCorrelationHeatmap(data);
   populateStressTests(data);
+  renderDrawdownChart();
+  setupPositionSizer();
 }
 
 /* ============================================
@@ -5414,12 +6898,18 @@ if (document.readyState === 'loading') {
 })();
 
 /* ============================================
-   FEATURE 4: TRADE JOURNAL
+   FEATURE 4: TRADE JOURNAL (Full Implementation)
    ============================================ */
 
 (function initTradeJournal() {
-  var STORAGE_KEY = 'greystone_trade_journal';
+  var STORAGE_KEY = 'gs_journal_entries';
   var entries = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+
+  // Seed sample data on first load
+  if (entries.length === 0) {
+    entries = generateSampleEntries();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+  }
 
   var newEntryBtn = document.getElementById('newJournalEntryBtn');
   var saveBtn = document.getElementById('saveJournalEntryBtn');
@@ -5427,61 +6917,75 @@ if (document.readyState === 'loading') {
   var filterOutcome = document.getElementById('journalFilterOutcome');
   var filterStrategy = document.getElementById('journalFilterStrategy');
 
-  var editingIndex = -1;
-  var screenshotData = null;
+  var editingId = null;
+  var selectedRating = 0;
+  var selectedEmotion = '';
+  var calYear = 2026;
+  var calMonth = 2; // 0-indexed, March=2
+  var calFilterDate = null; // YYYY-MM-DD string to filter trade log
+  var sortColumn = 'date';
+  var sortDesc = true;
 
   if (!newEntryBtn) return;
 
-  function saveEntries() {
+  function saveEntriesToStorage() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
   }
 
-  function calcPnL(entry) {
-    if (!entry.exitPrice || !entry.entryPrice || !entry.shares) return null;
-    var diff = entry.direction === 'Long'
-      ? (entry.exitPrice - entry.entryPrice)
-      : (entry.entryPrice - entry.exitPrice);
-    return diff * entry.shares;
+  function calcPnL(e) {
+    if (!e.exit || !e.entry || !e.shares) return null;
+    var diff = (e.direction === 'long' || e.direction === 'Long')
+      ? (e.exit - e.entry) : (e.entry - e.exit);
+    return diff * e.shares;
   }
 
-  // Stats
-  function updateStats() {
+  function calcRMultiple(e) {
+    if (!e.exit || !e.entry || !e.stopLoss) return null;
+    var risk = (e.direction === 'long' || e.direction === 'Long')
+      ? (e.entry - e.stopLoss) : (e.stopLoss - e.entry);
+    if (risk <= 0) return null;
+    var reward = (e.direction === 'long' || e.direction === 'Long')
+      ? (e.exit - e.entry) : (e.entry - e.exit);
+    return reward / risk;
+  }
+
+  function fmtPnl(pnl) {
+    if (pnl === null || pnl === undefined) return '--';
+    return pnl >= 0 ? '+$' + Math.abs(pnl).toLocaleString('en-US', {maximumFractionDigits:0}) : '-$' + Math.abs(pnl).toLocaleString('en-US', {maximumFractionDigits:0});
+  }
+
+  // ---- STATS ----
+  function updateJournalStats() {
     var wins = 0, losses = 0, totalWin = 0, totalLoss = 0;
     var best = -Infinity, worst = Infinity;
     var monthlyPnl = {};
 
     entries.forEach(function(e) {
-      var pnl = calcPnL(e);
+      var pnl = e.pnl !== undefined ? e.pnl : calcPnL(e);
       if (pnl === null) return;
-      if (e.outcome === 'Win' || pnl > 0) {
-        wins++;
-        totalWin += Math.abs(pnl);
-        if (pnl > best) best = pnl;
-      }
-      if (e.outcome === 'Loss' || pnl < 0) {
-        losses++;
-        totalLoss += Math.abs(pnl);
-        if (pnl < worst) worst = pnl;
-      }
+      if (pnl > 0) { wins++; totalWin += pnl; if (pnl > best) best = pnl; }
+      if (pnl < 0) { losses++; totalLoss += Math.abs(pnl); if (pnl < worst) worst = pnl; }
+      if (pnl === 0) { wins++; } // breakeven = win
       var month = e.date ? e.date.substring(0, 7) : 'Unknown';
       monthlyPnl[month] = (monthlyPnl[month] || 0) + pnl;
     });
 
     var total = wins + losses;
     var winRate = total > 0 ? ((wins / total) * 100).toFixed(1) + '%' : '--%';
-    var avgWin = wins > 0 ? '$' + (totalWin / wins).toFixed(0) : '--';
-    var avgLoss = losses > 0 ? '-$' + (totalLoss / losses).toFixed(0) : '--';
+    var winRateNum = total > 0 ? (wins / total) : 0;
+    var avgWin = wins > 0 ? '$' + (totalWin / wins).toLocaleString('en-US', {maximumFractionDigits:0}) : '--';
+    var avgLoss = losses > 0 ? '-$' + (totalLoss / losses).toLocaleString('en-US', {maximumFractionDigits:0}) : '--';
     var profitFactor = totalLoss > 0 ? (totalWin / totalLoss).toFixed(2) : '--';
-    var bestStr = best > -Infinity ? '+$' + best.toFixed(0) : '--';
-    var worstStr = worst < Infinity ? '-$' + Math.abs(worst).toFixed(0) : '--';
+    var bestStr = best > -Infinity ? '+$' + best.toLocaleString('en-US', {maximumFractionDigits:0}) : '--';
+    var worstStr = worst < Infinity ? '-$' + Math.abs(worst).toLocaleString('en-US', {maximumFractionDigits:0}) : '--';
 
-    // Current month P&L
     var now = new Date();
     var curMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
     var curPnl = monthlyPnl[curMonth] || 0;
-    var monthlyStr = curPnl >= 0 ? '+$' + curPnl.toFixed(0) : '-$' + Math.abs(curPnl).toFixed(0);
 
     setText('journalWinRate', winRate);
+    var wrEl = document.getElementById('journalWinRate');
+    if (wrEl) wrEl.className = 'journal-stat-value ' + (winRateNum >= 0.5 ? 'profit' : 'loss');
     setText('journalAvgWin', avgWin);
     setText('journalAvgLoss', avgLoss);
     setText('journalProfitFactor', profitFactor);
@@ -5490,13 +6994,13 @@ if (document.readyState === 'loading') {
     setText('journalTotalTrades', entries.length.toString());
     var monthEl = document.getElementById('journalMonthlyPnl');
     if (monthEl) {
-      monthEl.textContent = monthlyStr;
+      monthEl.textContent = fmtPnl(curPnl);
       monthEl.className = 'journal-stat-value ' + (curPnl >= 0 ? 'profit' : 'loss');
     }
 
-    // Strategy breakdown
     renderStrategyBreakdown();
-    renderMonthlyTable(monthlyPnl);
+    renderMonthlyPnlBars(monthlyPnl);
+    renderCalendarHeatmap();
   }
 
   function setText(id, val) {
@@ -5504,38 +7008,55 @@ if (document.readyState === 'loading') {
     if (el) el.textContent = val;
   }
 
+  // ---- STRATEGY BREAKDOWN (win rate bars) ----
   function renderStrategyBreakdown() {
-    var stratCounts = {};
+    var stratData = {};
     entries.forEach(function(e) {
-      var s = e.strategy || 'Other';
-      stratCounts[s] = (stratCounts[s] || 0) + 1;
+      var s = e.setup || e.strategy || 'Other';
+      if (!stratData[s]) stratData[s] = { wins: 0, total: 0 };
+      var pnl = e.pnl !== undefined ? e.pnl : calcPnL(e);
+      if (pnl === null) return;
+      stratData[s].total++;
+      if (pnl >= 0) stratData[s].wins++;
     });
     var container = document.getElementById('journalStrategyBars');
     if (!container) return;
 
-    var keys = Object.keys(stratCounts);
+    var keys = Object.keys(stratData);
     if (keys.length === 0) {
       container.innerHTML = '<div class="journal-strategy-empty">No trade data yet.</div>';
       return;
     }
 
-    var max = Math.max.apply(null, keys.map(function(k) { return stratCounts[k]; }));
+    keys.sort(function(a, b) { return stratData[b].total - stratData[a].total; });
     var html = '';
-    keys.sort(function(a, b) { return stratCounts[b] - stratCounts[a]; });
     keys.forEach(function(k) {
-      var pct = (stratCounts[k] / max * 100).toFixed(0);
+      var d = stratData[k];
+      var wr = d.total > 0 ? (d.wins / d.total * 100) : 0;
+      var barClass = wr > 55 ? 'win-high' : (wr < 45 ? 'win-low' : 'win-neutral');
       html += '<div class="journal-strategy-row">';
       html += '<span class="journal-strategy-name">' + k + '</span>';
-      html += '<div class="journal-strategy-bar-wrap"><div class="journal-strategy-bar" style="width:' + pct + '%"></div></div>';
-      html += '<span class="journal-strategy-count">' + stratCounts[k] + '</span>';
+      html += '<div class="journal-strategy-bar-wrap"><div class="journal-strategy-bar ' + barClass + '" style="width:' + wr.toFixed(0) + '%"></div></div>';
+      html += '<span class="journal-strategy-winrate" style="color:' + (wr >= 50 ? 'var(--profit)' : 'var(--loss)') + '">' + wr.toFixed(0) + '%</span>';
+      html += '<span class="journal-strategy-count">' + d.total + ' trades</span>';
       html += '</div>';
     });
     container.innerHTML = html;
   }
 
-  function renderMonthlyTable(monthlyPnl) {
+  // ---- MONTHLY P&L BARS ----
+  function renderMonthlyPnlBars(monthlyPnl) {
     var container = document.getElementById('journalMonthlyTable');
     if (!container) return;
+    if (!monthlyPnl) {
+      monthlyPnl = {};
+      entries.forEach(function(e) {
+        var pnl = e.pnl !== undefined ? e.pnl : calcPnL(e);
+        if (pnl === null) return;
+        var month = e.date ? e.date.substring(0, 7) : 'Unknown';
+        monthlyPnl[month] = (monthlyPnl[month] || 0) + pnl;
+      });
+    }
 
     var months = Object.keys(monthlyPnl).sort().reverse();
     if (months.length === 0) {
@@ -5549,72 +7070,276 @@ if (document.readyState === 'loading') {
       var pnl = monthlyPnl[m];
       var pct = maxAbs > 0 ? (Math.abs(pnl) / maxAbs * 100).toFixed(0) : 0;
       var cls = pnl >= 0 ? 'profit' : 'loss';
-      var sign = pnl >= 0 ? '+$' : '-$';
       html += '<div class="journal-monthly-row">';
       html += '<span class="journal-monthly-month">' + m + '</span>';
       html += '<div class="journal-monthly-bar-wrap"><div class="journal-monthly-bar ' + cls + '" style="width:' + pct + '%"></div></div>';
-      html += '<span class="journal-monthly-pnl ' + cls + '">' + sign + Math.abs(pnl).toFixed(0) + '</span>';
+      html += '<span class="journal-monthly-pnl ' + cls + '">' + fmtPnl(pnl) + '</span>';
       html += '</div>';
     });
     container.innerHTML = html;
   }
 
-  function renderEntries() {
-    var outcomeFilter = filterOutcome ? filterOutcome.value : 'all';
-    var strategyFilter = filterStrategy ? filterStrategy.value : 'all';
+  // ---- CALENDAR HEATMAP ----
+  function renderCalendarHeatmap() {
+    var container = document.getElementById('journalCalendarGrid');
+    var monthLabel = document.getElementById('journalCalMonth');
+    var totalLabel = document.getElementById('journalCalTotal');
+    if (!container) return;
 
-    var filtered = entries.filter(function(e) {
-      if (outcomeFilter !== 'all') {
-        var pnl = calcPnL(e);
-        if (outcomeFilter === 'win' && e.outcome !== 'Win' && !(pnl !== null && pnl > 0)) return false;
-        if (outcomeFilter === 'loss' && e.outcome !== 'Loss' && !(pnl !== null && pnl < 0)) return false;
-        if (outcomeFilter === 'open' && e.outcome !== 'Open') return false;
-      }
-      if (strategyFilter !== 'all' && e.strategy !== strategyFilter) return false;
-      return true;
+    var monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    if (monthLabel) monthLabel.textContent = monthNames[calMonth] + ' ' + calYear;
+
+    // Aggregate daily P&L for this month
+    var prefix = calYear + '-' + String(calMonth + 1).padStart(2, '0');
+    var dailyPnl = {};
+    var monthTotal = 0;
+    entries.forEach(function(e) {
+      if (!e.date || !e.date.startsWith(prefix)) return;
+      var pnl = e.pnl !== undefined ? e.pnl : calcPnL(e);
+      if (pnl === null) return;
+      var day = parseInt(e.date.substring(8, 10));
+      dailyPnl[day] = (dailyPnl[day] || 0) + pnl;
+      monthTotal += pnl;
     });
 
+    if (totalLabel) {
+      totalLabel.textContent = fmtPnl(monthTotal);
+      totalLabel.className = 'journal-cal-total ' + (monthTotal >= 0 ? 'profit' : 'loss');
+    }
+
+    // Determine max absolute for color scaling
+    var vals = Object.values(dailyPnl);
+    var maxAbs = vals.length > 0 ? Math.max.apply(null, vals.map(function(v) { return Math.abs(v); })) : 1;
+
+    var firstDay = new Date(calYear, calMonth, 1).getDay(); // 0=Sun
+    var daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+
+    var html = '';
+    var dayLabels = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    dayLabels.forEach(function(d) {
+      html += '<div class="journal-cal-header">' + d + '</div>';
+    });
+
+    // Empty cells before first day
+    for (var i = 0; i < firstDay; i++) {
+      html += '<div class="journal-cal-cell empty"></div>';
+    }
+
+    for (var d = 1; d <= daysInMonth; d++) {
+      var pnl = dailyPnl[d];
+      var dateStr = prefix + '-' + String(d).padStart(2, '0');
+      var cls = 'journal-cal-cell';
+      var pnlLabel = '';
+      if (pnl !== undefined) {
+        cls += ' has-trades';
+        var intensity = Math.min(Math.abs(pnl) / maxAbs, 1);
+        var level = intensity < 0.33 ? 1 : (intensity < 0.66 ? 2 : 3);
+        cls += pnl >= 0 ? ' cal-profit-' + level : ' cal-loss-' + level;
+        pnlLabel = '<span class="cal-pnl">' + fmtPnl(pnl) + '</span>';
+        if (calFilterDate === dateStr) cls += ' selected';
+      }
+      html += '<div class="' + cls + '" data-cal-date="' + dateStr + '">';
+      html += '<span class="cal-day">' + d + '</span>';
+      html += pnlLabel;
+      html += '</div>';
+    }
+
+    container.innerHTML = html;
+  }
+
+  // Calendar navigation
+  var calPrev = document.getElementById('journalCalPrev');
+  var calNext = document.getElementById('journalCalNext');
+  if (calPrev) calPrev.addEventListener('click', function() {
+    calMonth--;
+    if (calMonth < 0) { calMonth = 11; calYear--; }
+    renderCalendarHeatmap();
+  });
+  if (calNext) calNext.addEventListener('click', function() {
+    calMonth++;
+    if (calMonth > 11) { calMonth = 0; calYear++; }
+    renderCalendarHeatmap();
+  });
+
+  // Calendar click to filter
+  var calGrid = document.getElementById('journalCalendarGrid');
+  if (calGrid) calGrid.addEventListener('click', function(ev) {
+    var cell = ev.target.closest('.journal-cal-cell.has-trades');
+    if (!cell) return;
+    var dateStr = cell.dataset.calDate;
+    if (calFilterDate === dateStr) {
+      calFilterDate = null; // toggle off
+    } else {
+      calFilterDate = dateStr;
+    }
+    renderCalendarHeatmap();
+    renderJournalTable();
+  });
+
+  // ---- TRADE LOG TABLE ----
+  function filterEntries() {
+    var outcomeVal = filterOutcome ? filterOutcome.value : 'all';
+    var strategyVal = filterStrategy ? filterStrategy.value : 'all';
+
+    return entries.filter(function(e) {
+      // Calendar date filter
+      if (calFilterDate && e.date !== calFilterDate) return false;
+
+      // Outcome filter
+      if (outcomeVal !== 'all') {
+        var pnl = e.pnl !== undefined ? e.pnl : calcPnL(e);
+        if (outcomeVal === 'win' && (pnl === null || pnl <= 0)) return false;
+        if (outcomeVal === 'loss' && (pnl === null || pnl >= 0)) return false;
+        if (outcomeVal === 'open' && pnl !== null) return false;
+      }
+      // Strategy filter
+      var setup = e.setup || e.strategy || 'Other';
+      if (strategyVal !== 'all' && setup !== strategyVal) return false;
+      return true;
+    });
+  }
+
+  function sortEntries(arr) {
+    var col = sortColumn;
+    var desc = sortDesc;
+    arr.sort(function(a, b) {
+      var va, vb;
+      switch (col) {
+        case 'date': va = a.date || ''; vb = b.date || ''; break;
+        case 'ticker': va = a.ticker || ''; vb = b.ticker || ''; break;
+        case 'direction': va = a.direction || ''; vb = b.direction || ''; break;
+        case 'entry': va = a.entry || 0; vb = b.entry || 0; break;
+        case 'exit': va = a.exit || 0; vb = b.exit || 0; break;
+        case 'shares': va = a.shares || 0; vb = b.shares || 0; break;
+        case 'pnl': va = (a.pnl !== undefined ? a.pnl : calcPnL(a)) || 0; vb = (b.pnl !== undefined ? b.pnl : calcPnL(b)) || 0; break;
+        case 'rMultiple': va = a.rMultiple || calcRMultiple(a) || 0; vb = b.rMultiple || calcRMultiple(b) || 0; break;
+        case 'holdTime': va = a.holdTime || ''; vb = b.holdTime || ''; break;
+        case 'setup': va = a.setup || a.strategy || ''; vb = b.setup || b.strategy || ''; break;
+        case 'rating': va = a.rating || 0; vb = b.rating || 0; break;
+        default: va = a.date || ''; vb = b.date || '';
+      }
+      if (typeof va === 'string') {
+        var cmp = va.localeCompare(vb);
+        return desc ? -cmp : cmp;
+      }
+      return desc ? (vb - va) : (va - vb);
+    });
+    return arr;
+  }
+
+  function renderJournalTable() {
+    if (!entriesList) return;
+    var filtered = filterEntries();
+    filtered = sortEntries(filtered);
+
     if (filtered.length === 0) {
-      entriesList.innerHTML = '<div class="journal-entries-empty">No journal entries match your filters.</div>';
+      var msg = calFilterDate ? 'No trades on ' + calFilterDate + '.' : 'No journal entries match your filters.';
+      entriesList.innerHTML = '<div class="journal-entries-empty">' + msg + '</div>';
       return;
     }
 
-    // Sort newest first
-    filtered.sort(function(a, b) { return (b.date || '').localeCompare(a.date || ''); });
+    var columns = [
+      { key: 'date', label: 'Date' },
+      { key: 'ticker', label: 'Ticker' },
+      { key: 'direction', label: 'Dir' },
+      { key: 'entry', label: 'Entry' },
+      { key: 'exit', label: 'Exit' },
+      { key: 'shares', label: 'Size' },
+      { key: 'pnl', label: 'P&L ($)' },
+      { key: 'rMultiple', label: 'P&L (R)' },
+      { key: 'holdTime', label: 'Hold' },
+      { key: 'setup', label: 'Setup' },
+      { key: 'rating', label: 'Rating' },
+      { key: 'notes', label: 'Notes' }
+    ];
 
     var html = '<div class="journal-entries-header">';
-    html += '<span>Date</span><span>Ticker</span><span>Dir</span><span>Entry</span><span>Exit</span><span>P&L</span><span>Strategy</span><span>Notes</span><span>Result</span>';
+    columns.forEach(function(c) {
+      var cls = sortColumn === c.key ? 'sort-active' + (sortDesc ? ' sort-desc' : '') : '';
+      html += '<span class="' + cls + '" data-sort-col="' + c.key + '">' + c.label + '</span>';
+    });
     html += '</div>';
 
-    filtered.forEach(function(e, i) {
-      var pnl = calcPnL(e);
-      var pnlStr = '--';
-      var pnlClass = '';
-      if (pnl !== null) {
-        pnlStr = pnl >= 0 ? '+$' + pnl.toFixed(0) : '-$' + Math.abs(pnl).toFixed(0);
-        pnlClass = pnl >= 0 ? 'profit' : 'loss';
+    filtered.forEach(function(e) {
+      var pnl = e.pnl !== undefined ? e.pnl : calcPnL(e);
+      var pnlStr = fmtPnl(pnl);
+      var pnlClass = pnl !== null ? (pnl >= 0 ? 'profit' : 'loss') : '';
+
+      var rMult = e.rMultiple !== undefined ? e.rMultiple : calcRMultiple(e);
+      var rStr = rMult !== null ? (rMult >= 0 ? '+' : '') + rMult.toFixed(2) + 'R' : '--';
+
+      var dir = e.direction || '--';
+      var dirDisplay = dir.charAt(0).toUpperCase() + dir.slice(1).toLowerCase();
+      var dirClass = (dir.toLowerCase() === 'long') ? 'Long' : 'Short';
+
+      var stars = '';
+      for (var s = 1; s <= 5; s++) {
+        stars += '<span class="' + (s <= (e.rating || 0) ? 'star-filled' : '') + '">&#9733;</span>';
       }
 
-      html += '<div class="journal-entry-row" data-entry-index="' + entries.indexOf(e) + '">';
+      html += '<div class="journal-entry-row" data-entry-id="' + e.id + '">';
       html += '<span class="journal-entry-date">' + (e.date || '--') + '</span>';
       html += '<span class="journal-entry-ticker">' + (e.ticker || '--') + '</span>';
-      html += '<span class="journal-entry-dir ' + (e.direction || '') + '">' + (e.direction || '--') + '</span>';
-      html += '<span class="journal-entry-price">$' + (e.entryPrice ? e.entryPrice.toFixed(2) : '--') + '</span>';
-      html += '<span class="journal-entry-price">$' + (e.exitPrice ? e.exitPrice.toFixed(2) : '--') + '</span>';
+      html += '<span class="journal-entry-dir ' + dirClass + '">' + dirDisplay + '</span>';
+      html += '<span class="journal-entry-price">$' + (e.entry ? e.entry.toFixed(2) : '--') + '</span>';
+      html += '<span class="journal-entry-price">$' + (e.exit ? e.exit.toFixed(2) : '--') + '</span>';
+      html += '<span class="journal-entry-size">' + (e.shares || '--') + '</span>';
       html += '<span class="journal-entry-pnl ' + pnlClass + '">' + pnlStr + '</span>';
-      html += '<span class="journal-entry-tag">' + (e.strategy || '--') + '</span>';
-      html += '<span class="journal-entry-notes">' + (e.notes || '') + '</span>';
-      html += '<span class="journal-entry-outcome ' + (e.outcome || '') + '">' + (e.outcome || '--') + '</span>';
+      html += '<span class="journal-entry-rmult">' + rStr + '</span>';
+      html += '<span class="journal-entry-holdtime">' + (e.holdTime || '--') + '</span>';
+      html += '<span class="journal-entry-tag">' + (e.setup || e.strategy || '--') + '</span>';
+      html += '<span class="journal-entry-stars">' + stars + '</span>';
+      html += '<span class="journal-entry-notes-cell">' + (e.notes || '').substring(0, 50) + '</span>';
+      html += '</div>';
+
+      // Expandable detail row
+      html += '<div class="journal-entry-detail" data-detail-id="' + e.id + '">';
+      html += '<div class="journal-detail-grid">';
+      html += '<div><span class="journal-detail-label">Ticker</span><span class="journal-detail-value">' + (e.ticker || '--') + '</span></div>';
+      html += '<div><span class="journal-detail-label">Direction</span><span class="journal-detail-value">' + dirDisplay + '</span></div>';
+      html += '<div><span class="journal-detail-label">Stop Loss</span><span class="journal-detail-value">' + (e.stopLoss ? '$' + e.stopLoss.toFixed(2) : '--') + '</span></div>';
+      html += '<div><span class="journal-detail-label">R-Multiple</span><span class="journal-detail-value">' + rStr + '</span></div>';
+      html += '</div>';
+      if (e.emotion) {
+        html += '<div class="journal-detail-emotion"><span class="journal-emotion-tag selected">' + e.emotion + '</span></div>';
+      }
+      if (e.notes) {
+        html += '<div class="journal-detail-notes">' + e.notes + '</div>';
+      }
       html += '</div>';
     });
 
     entriesList.innerHTML = html;
   }
 
-  // Open new entry modal
-  newEntryBtn.addEventListener('click', function() {
-    editingIndex = -1;
-    screenshotData = null;
+  // Sort by column click
+  if (entriesList) {
+    entriesList.addEventListener('click', function(ev) {
+      var headerSpan = ev.target.closest('.journal-entries-header span[data-sort-col]');
+      if (headerSpan) {
+        var col = headerSpan.dataset.sortCol;
+        if (sortColumn === col) { sortDesc = !sortDesc; }
+        else { sortColumn = col; sortDesc = true; }
+        renderJournalTable();
+        return;
+      }
+
+      // Toggle detail row
+      var row = ev.target.closest('.journal-entry-row');
+      if (!row) return;
+      var id = row.dataset.entryId;
+      var detail = entriesList.querySelector('.journal-entry-detail[data-detail-id="' + id + '"]');
+      if (detail) {
+        detail.classList.toggle('active');
+      }
+    });
+  }
+
+  // ---- MODAL: New Entry ----
+  function resetModal() {
+    editingId = null;
+    selectedRating = 0;
+    selectedEmotion = '';
     var today = new Date().toISOString().split('T')[0];
     document.getElementById('journalEntryDate').value = today;
     document.getElementById('journalEntryTicker').value = '';
@@ -5622,147 +7347,246 @@ if (document.readyState === 'loading') {
     document.getElementById('journalEntryPrice').value = '';
     document.getElementById('journalExitPrice').value = '';
     document.getElementById('journalEntryShares').value = '';
+    document.getElementById('journalEntryStopLoss').value = '';
     document.getElementById('journalEntryStrategy').value = 'Momentum';
-    document.getElementById('journalEntryOutcome').value = 'Open';
+    document.getElementById('journalEntryHoldTime').value = '';
     document.getElementById('journalEntryNotes').value = '';
-    document.getElementById('journalEntryLessons').value = '';
-    document.getElementById('journalScreenshotName').textContent = 'No file selected';
-    document.getElementById('journalScreenshotPreview').style.display = 'none';
     document.getElementById('journalModalTitle').textContent = 'New Trade Entry';
-    document.getElementById('alertConfigModal'); // just a reference check
+    updateStarDisplay();
+    updateEmotionDisplay();
+    recalcModal();
+  }
+
+  newEntryBtn.addEventListener('click', function() {
+    resetModal();
     var modal = document.getElementById('journalEntryModal');
     if (modal) modal.classList.add('active');
   });
 
-  // Screenshot handling
-  var screenshotBtn = document.getElementById('journalScreenshotBtn');
-  var screenshotInput = document.getElementById('journalScreenshotInput');
-  var screenshotRemove = document.getElementById('journalScreenshotRemove');
-
-  if (screenshotBtn) {
-    screenshotBtn.addEventListener('click', function() {
-      screenshotInput.click();
+  // Star rating
+  var starContainer = document.getElementById('journalStarRating');
+  if (starContainer) {
+    starContainer.addEventListener('click', function(ev) {
+      var star = ev.target.closest('.journal-star');
+      if (!star) return;
+      selectedRating = parseInt(star.dataset.star);
+      updateStarDisplay();
+    });
+    starContainer.addEventListener('mouseover', function(ev) {
+      var star = ev.target.closest('.journal-star');
+      if (!star) return;
+      var val = parseInt(star.dataset.star);
+      starContainer.querySelectorAll('.journal-star').forEach(function(s) {
+        s.classList.toggle('hovered', parseInt(s.dataset.star) <= val);
+      });
+    });
+    starContainer.addEventListener('mouseout', function() {
+      starContainer.querySelectorAll('.journal-star').forEach(function(s) {
+        s.classList.remove('hovered');
+      });
     });
   }
 
-  if (screenshotInput) {
-    screenshotInput.addEventListener('change', function() {
-      var file = screenshotInput.files[0];
-      if (!file) return;
-      document.getElementById('journalScreenshotName').textContent = file.name;
-      var reader = new FileReader();
-      reader.onload = function(e) {
-        screenshotData = e.target.result;
-        document.getElementById('journalScreenshotImg').src = screenshotData;
-        document.getElementById('journalScreenshotPreview').style.display = 'block';
-      };
-      reader.readAsDataURL(file);
+  function updateStarDisplay() {
+    if (!starContainer) return;
+    starContainer.querySelectorAll('.journal-star').forEach(function(s) {
+      s.classList.toggle('active', parseInt(s.dataset.star) <= selectedRating);
     });
   }
 
-  if (screenshotRemove) {
-    screenshotRemove.addEventListener('click', function() {
-      screenshotData = null;
-      document.getElementById('journalScreenshotPreview').style.display = 'none';
-      document.getElementById('journalScreenshotName').textContent = 'No file selected';
-      screenshotInput.value = '';
+  // Emotion tags
+  var emotionContainer = document.getElementById('journalEmotionTags');
+  if (emotionContainer) {
+    emotionContainer.addEventListener('click', function(ev) {
+      var tag = ev.target.closest('.journal-emotion-tag');
+      if (!tag) return;
+      var emotion = tag.dataset.emotion;
+      selectedEmotion = (selectedEmotion === emotion) ? '' : emotion;
+      updateEmotionDisplay();
     });
   }
+
+  function updateEmotionDisplay() {
+    if (!emotionContainer) return;
+    emotionContainer.querySelectorAll('.journal-emotion-tag').forEach(function(t) {
+      t.classList.toggle('selected', t.dataset.emotion === selectedEmotion);
+    });
+  }
+
+  // Auto-calculate R-Multiple and P&L in modal
+  function recalcModal() {
+    var entryPrice = parseFloat(document.getElementById('journalEntryPrice').value);
+    var exitPrice = parseFloat(document.getElementById('journalExitPrice').value);
+    var stopLoss = parseFloat(document.getElementById('journalEntryStopLoss').value);
+    var shares = parseInt(document.getElementById('journalEntryShares').value) || 0;
+    var direction = document.getElementById('journalEntryDirection').value;
+
+    var rDisplay = document.getElementById('journalRMultipleDisplay');
+    var pnlDisplay = document.getElementById('journalPnlDisplay');
+
+    if (rDisplay) {
+      if (!isNaN(entryPrice) && !isNaN(exitPrice) && !isNaN(stopLoss) && stopLoss > 0) {
+        var isLong = direction === 'Long';
+        var risk = isLong ? (entryPrice - stopLoss) : (stopLoss - entryPrice);
+        if (risk > 0) {
+          var reward = isLong ? (exitPrice - entryPrice) : (entryPrice - exitPrice);
+          var rMult = reward / risk;
+          rDisplay.textContent = (rMult >= 0 ? '+' : '') + rMult.toFixed(2) + 'R';
+          rDisplay.className = 'journal-calc-display ' + (rMult >= 0 ? 'profit' : 'loss');
+        } else {
+          rDisplay.textContent = '--';
+          rDisplay.className = 'journal-calc-display';
+        }
+      } else {
+        rDisplay.textContent = '--';
+        rDisplay.className = 'journal-calc-display';
+      }
+    }
+
+    if (pnlDisplay) {
+      if (!isNaN(entryPrice) && !isNaN(exitPrice) && shares > 0) {
+        var isLong2 = direction === 'Long';
+        var diff = isLong2 ? (exitPrice - entryPrice) : (entryPrice - exitPrice);
+        var pnl = diff * shares;
+        pnlDisplay.textContent = fmtPnl(pnl);
+        pnlDisplay.className = 'journal-calc-display ' + (pnl >= 0 ? 'profit' : 'loss');
+      } else {
+        pnlDisplay.textContent = '--';
+        pnlDisplay.className = 'journal-calc-display';
+      }
+    }
+  }
+
+  // Attach recalc listeners
+  ['journalEntryPrice', 'journalExitPrice', 'journalEntryStopLoss', 'journalEntryShares', 'journalEntryDirection'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('input', recalcModal);
+    if (el) el.addEventListener('change', recalcModal);
+  });
 
   // Save entry
   if (saveBtn) {
     saveBtn.addEventListener('click', function() {
       var date = document.getElementById('journalEntryDate').value;
       var ticker = (document.getElementById('journalEntryTicker').value || '').toUpperCase().trim();
-      var direction = document.getElementById('journalEntryDirection').value;
+      var direction = document.getElementById('journalEntryDirection').value.toLowerCase();
       var entryPrice = parseFloat(document.getElementById('journalEntryPrice').value);
       var exitPrice = parseFloat(document.getElementById('journalExitPrice').value) || null;
       var shares = parseInt(document.getElementById('journalEntryShares').value) || 0;
+      var stopLoss = parseFloat(document.getElementById('journalEntryStopLoss').value) || null;
       var strategy = document.getElementById('journalEntryStrategy').value;
-      var outcome = document.getElementById('journalEntryOutcome').value;
+      var holdTime = document.getElementById('journalEntryHoldTime').value || '';
       var notes = document.getElementById('journalEntryNotes').value;
-      var lessons = document.getElementById('journalEntryLessons').value;
 
       if (!ticker || isNaN(entryPrice)) {
         showToast('Please fill in ticker and entry price', 'error');
         return;
       }
 
+      var pnl = null;
+      var rMultiple = null;
+      if (exitPrice && shares) {
+        var diff = direction === 'long' ? (exitPrice - entryPrice) : (entryPrice - exitPrice);
+        pnl = diff * shares;
+      }
+      if (exitPrice && stopLoss) {
+        var risk = direction === 'long' ? (entryPrice - stopLoss) : (stopLoss - entryPrice);
+        if (risk > 0) {
+          var reward = direction === 'long' ? (exitPrice - entryPrice) : (entryPrice - exitPrice);
+          rMultiple = parseFloat((reward / risk).toFixed(2));
+        }
+      }
+
       var entry = {
-        id: editingIndex >= 0 ? entries[editingIndex].id : Date.now(),
+        id: editingId || ('j_' + Date.now()),
         date: date,
         ticker: ticker,
         direction: direction,
-        entryPrice: entryPrice,
-        exitPrice: exitPrice,
+        entry: entryPrice,
+        exit: exitPrice,
         shares: shares,
-        strategy: strategy,
-        outcome: outcome,
+        stopLoss: stopLoss,
+        pnl: pnl,
+        rMultiple: rMultiple,
+        holdTime: holdTime,
+        setup: strategy,
+        rating: selectedRating,
         notes: notes,
-        lessons: lessons,
-        screenshot: screenshotData
+        emotion: selectedEmotion || null
       };
 
-      if (editingIndex >= 0) {
-        entries[editingIndex] = entry;
+      if (editingId) {
+        var idx = entries.findIndex(function(e) { return e.id === editingId; });
+        if (idx >= 0) entries[idx] = entry;
+        else entries.push(entry);
       } else {
         entries.push(entry);
       }
 
-      saveEntries();
-      updateStats();
-      renderEntries();
+      saveEntriesToStorage();
+      updateJournalStats();
+      renderJournalTable();
       closeModal('journalEntryModal');
       showToast('Trade entry saved for ' + ticker, 'success');
     });
   }
 
-  // Click on entry row to edit
-  if (entriesList) {
-    entriesList.addEventListener('click', function(e) {
-      var row = e.target.closest('.journal-entry-row');
-      if (!row) return;
-      var idx = parseInt(row.dataset.entryIndex);
-      if (isNaN(idx) || !entries[idx]) return;
+  // Filters
+  if (filterOutcome) filterOutcome.addEventListener('change', renderJournalTable);
+  if (filterStrategy) filterStrategy.addEventListener('change', renderJournalTable);
 
-      editingIndex = idx;
-      var entry = entries[idx];
+  // ---- SAMPLE DATA GENERATOR ----
+  function generateSampleEntries() {
+    var samples = [
+      { date:'2026-01-06', ticker:'NVDA', direction:'long', entry:875.50, exit:892.30, shares:20, stopLoss:865.00, holdTime:'2h 15m', setup:'Momentum', rating:4, notes:'Entered on breakout above consolidation. Strong volume confirmed the move.', emotion:'Confident' },
+      { date:'2026-01-10', ticker:'AAPL', direction:'long', entry:242.80, exit:238.40, shares:50, stopLoss:240.00, holdTime:'1d 4h', setup:'Value', rating:2, notes:'Bought the dip but it kept dipping. Should have waited for support confirmation.', emotion:'FOMO' },
+      { date:'2026-01-15', ticker:'TSLA', direction:'short', entry:410.25, exit:395.80, shares:15, stopLoss:420.00, holdTime:'3h 45m', setup:'Breakout', rating:5, notes:'Clean breakdown below support with high volume. Textbook setup.', emotion:'Disciplined' },
+      { date:'2026-01-22', ticker:'AMD', direction:'long', entry:168.40, exit:175.90, shares:40, stopLoss:164.00, holdTime:'2d', setup:'Momentum', rating:4, notes:'Rode the semiconductor rally. Took profits at resistance.', emotion:'Confident' },
+      { date:'2026-01-28', ticker:'META', direction:'long', entry:612.30, exit:605.10, shares:10, stopLoss:605.00, holdTime:'45m', setup:'Scalp', rating:2, notes:'Stopped out just before reversal. Frustrating.', emotion:'Fearful' },
+      { date:'2026-02-03', ticker:'AMZN', direction:'long', entry:228.50, exit:241.20, shares:30, stopLoss:222.00, holdTime:'5d', setup:'Earnings Play', rating:5, notes:'Held through earnings beat. Great risk/reward.', emotion:'Disciplined' },
+      { date:'2026-02-07', ticker:'MSFT', direction:'long', entry:445.00, exit:442.80, shares:25, stopLoss:440.00, holdTime:'1h 20m', setup:'Momentum', rating:3, notes:'Weak momentum, cut losses early. Right call.', emotion:'Disciplined' },
+      { date:'2026-02-12', ticker:'SPY', direction:'short', entry:598.40, exit:591.20, shares:100, stopLoss:602.00, holdTime:'4h', setup:'Breakout', rating:4, notes:'Shorted the breakdown of the daily range. Clean execution.', emotion:'Confident' },
+      { date:'2026-02-18', ticker:'GOOGL', direction:'long', entry:185.20, exit:192.40, shares:60, stopLoss:182.00, holdTime:'3d', setup:'Value', rating:4, notes:'Bought at moving average support. Patient entry.', emotion:'Disciplined' },
+      { date:'2026-02-21', ticker:'COIN', direction:'long', entry:265.00, exit:248.30, shares:20, stopLoss:255.00, holdTime:'2d', setup:'Momentum', rating:2, notes:'Caught in crypto selloff. Position sizing was too large.', emotion:'FOMO' },
+      { date:'2026-02-26', ticker:'NFLX', direction:'long', entry:935.00, exit:952.80, shares:8, stopLoss:920.00, holdTime:'1d 6h', setup:'Breakout', rating:4, notes:'Breakout above previous highs. Strong volume.', emotion:'Confident' },
+      { date:'2026-03-03', ticker:'QQQ', direction:'short', entry:520.40, exit:525.10, shares:50, stopLoss:524.00, holdTime:'30m', setup:'Scalp', rating:2, notes:'Tried to catch the top. Bad timing.', emotion:'Revenge' },
+      { date:'2026-03-04', ticker:'PLTR', direction:'long', entry:98.50, exit:105.20, shares:80, stopLoss:95.00, holdTime:'2d', setup:'Momentum', rating:5, notes:'Strong AI sector momentum. Added on pullback and held.', emotion:'Confident' },
+      { date:'2026-03-06', ticker:'BA', direction:'long', entry:182.00, exit:178.50, shares:30, stopLoss:178.00, holdTime:'6h', setup:'Value', rating:3, notes:'Value trap. Need to be more selective with industrials.', emotion:'Fearful' },
+      { date:'2026-03-07', ticker:'SQ', direction:'long', entry:88.20, exit:94.60, shares:50, stopLoss:85.00, holdTime:'1d 2h', setup:'Breakout', rating:4, notes:'Fintech rally. Clean breakout with follow through.', emotion:'Confident' },
+      { date:'2026-03-10', ticker:'SMCI', direction:'short', entry:42.80, exit:38.90, shares:100, stopLoss:45.00, holdTime:'5h', setup:'Momentum', rating:4, notes:'Shorted the continued weakness. Good risk management.', emotion:'Disciplined' },
+      { date:'2026-03-10', ticker:'AVGO', direction:'long', entry:1685.00, exit:1702.50, shares:5, stopLoss:1670.00, holdTime:'3h 30m', setup:'Options', rating:3, notes:'Bought calls ahead of product announcement. Modest win.', emotion:'Confident' },
+      { date:'2026-03-11', ticker:'CRWD', direction:'long', entry:345.20, exit:338.90, shares:15, stopLoss:340.00, holdTime:'2h', setup:'Scalp', rating:2, notes:'Whipsawed in choppy tape. Shouldnt have traded into lunch.', emotion:'Revenge' }
+    ];
 
-      document.getElementById('journalEntryDate').value = entry.date || '';
-      document.getElementById('journalEntryTicker').value = entry.ticker || '';
-      document.getElementById('journalEntryDirection').value = entry.direction || 'Long';
-      document.getElementById('journalEntryPrice').value = entry.entryPrice || '';
-      document.getElementById('journalExitPrice').value = entry.exitPrice || '';
-      document.getElementById('journalEntryShares').value = entry.shares || '';
-      document.getElementById('journalEntryStrategy').value = entry.strategy || 'Momentum';
-      document.getElementById('journalEntryOutcome').value = entry.outcome || 'Open';
-      document.getElementById('journalEntryNotes').value = entry.notes || '';
-      document.getElementById('journalEntryLessons').value = entry.lessons || '';
-      document.getElementById('journalModalTitle').textContent = 'Edit Trade Entry';
-
-      if (entry.screenshot) {
-        screenshotData = entry.screenshot;
-        document.getElementById('journalScreenshotImg').src = screenshotData;
-        document.getElementById('journalScreenshotPreview').style.display = 'block';
-        document.getElementById('journalScreenshotName').textContent = 'Saved screenshot';
-      } else {
-        screenshotData = null;
-        document.getElementById('journalScreenshotPreview').style.display = 'none';
-        document.getElementById('journalScreenshotName').textContent = 'No file selected';
-      }
-
-      var modal = document.getElementById('journalEntryModal');
-      if (modal) modal.classList.add('active');
+    return samples.map(function(s, i) {
+      var isLong = s.direction === 'long';
+      var diff = isLong ? (s.exit - s.entry) : (s.entry - s.exit);
+      var pnl = parseFloat((diff * s.shares).toFixed(2));
+      var risk = isLong ? (s.entry - s.stopLoss) : (s.stopLoss - s.entry);
+      var rMult = risk > 0 ? parseFloat(((isLong ? (s.exit - s.entry) : (s.entry - s.exit)) / risk).toFixed(2)) : null;
+      return {
+        id: 'j_sample_' + (i + 1),
+        date: s.date,
+        ticker: s.ticker,
+        direction: s.direction,
+        entry: s.entry,
+        exit: s.exit,
+        shares: s.shares,
+        stopLoss: s.stopLoss,
+        pnl: pnl,
+        rMultiple: rMult,
+        holdTime: s.holdTime,
+        setup: s.setup,
+        rating: s.rating,
+        notes: s.notes,
+        emotion: s.emotion
+      };
     });
   }
 
-  // Filters
-  if (filterOutcome) filterOutcome.addEventListener('change', renderEntries);
-  if (filterStrategy) filterStrategy.addEventListener('change', renderEntries);
-
-  // Initialize
-  updateStats();
-  renderEntries();
+  // ---- INITIALIZE ----
+  updateJournalStats();
+  renderJournalTable();
 })();
 
 /* Journal shortcut (7) is handled by the main viewMap */
@@ -5921,6 +7745,7 @@ const PortfolioManager = (function() {
 // ============================================
 // PORTFOLIO VIEW RENDERER
 // ============================================
+
 (function initPortfolioView() {
   let sortCol = 'marketValue';
   let sortDir = 'desc';
@@ -6094,6 +7919,29 @@ const PortfolioManager = (function() {
       return;
     }
 
+    // Check which mode is active
+    const allocToggle = document.getElementById('pfAllocToggle');
+    const activeBtn = allocToggle ? allocToggle.querySelector('.pf-toggle-btn.active') : null;
+    const mode = activeBtn ? activeBtn.dataset.mode : 'position';
+
+    let slices = [];
+    if (mode === 'sector') {
+      // Group holdings by sector
+      const sectorTotals = {};
+      const totalMktVal = holdings.reduce((s, h) => s + h.marketValue, 0);
+      holdings.forEach(h => {
+        const sec = h.sector || 'Other';
+        sectorTotals[sec] = (sectorTotals[sec] || 0) + h.marketValue;
+      });
+      slices = Object.entries(sectorTotals)
+        .map(([name, val]) => ({ label: name, weight: totalMktVal > 0 ? (val / totalMktVal) * 100 : 0 }))
+        .sort((a, b) => b.weight - a.weight);
+    } else {
+      slices = holdings
+        .map(h => ({ label: h.symbol, weight: h.weight }))
+        .sort((a, b) => b.weight - a.weight);
+    }
+
     const colors = ['#F59E0B','#3B82F6','#8B5CF6','#14B8A6','#EF4444','#10B981','#EC4899','#6366F1','#F97316','#06B6D4'];
     const ctx = canvas.getContext('2d');
     const size = Math.min(canvas.width, canvas.height);
@@ -6104,10 +7952,9 @@ const PortfolioManager = (function() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     let startAngle = -Math.PI / 2;
-    holdings.sort((a, b) => b.weight - a.weight);
 
-    holdings.forEach((h, i) => {
-      const angle = (h.weight / 100) * Math.PI * 2;
+    slices.forEach((s, i) => {
+      const angle = (s.weight / 100) * Math.PI * 2;
       ctx.beginPath();
       ctx.arc(cx, cy, r, startAngle, startAngle + angle);
       ctx.arc(cx, cy, innerR, startAngle + angle, startAngle, true);
@@ -6121,19 +7968,26 @@ const PortfolioManager = (function() {
     ctx.fillStyle = '#E8E8ED';
     ctx.font = 'bold 14px "JetBrains Mono"';
     ctx.textAlign = 'center';
-    ctx.fillText(holdings.length + ' pos', cx, cy - 2);
-    ctx.fillStyle = '#5C5C6E';
-    ctx.font = '10px Inter';
-    ctx.fillText('positions', cx, cy + 14);
+    if (mode === 'sector') {
+      ctx.fillText(slices.length + ' sec', cx, cy - 2);
+      ctx.fillStyle = '#5C5C6E';
+      ctx.font = '10px Inter';
+      ctx.fillText('sectors', cx, cy + 14);
+    } else {
+      ctx.fillText(slices.length + ' pos', cx, cy - 2);
+      ctx.fillStyle = '#5C5C6E';
+      ctx.font = '10px Inter';
+      ctx.fillText('positions', cx, cy + 14);
+    }
 
     // Legend
-    legendEl.innerHTML = holdings.slice(0, 8).map((h, i) =>
+    legendEl.innerHTML = slices.slice(0, 8).map((s, i) =>
       `<div class="pf-alloc-legend-item">
         <div class="pf-alloc-legend-left">
           <span class="pf-alloc-legend-dot" style="background:${colors[i % colors.length]}"></span>
-          <span class="pf-alloc-legend-sym">${h.symbol}</span>
+          <span class="pf-alloc-legend-sym">${s.label}</span>
         </div>
-        <span class="pf-alloc-legend-pct">${h.weight.toFixed(1)}%</span>
+        <span class="pf-alloc-legend-pct">${s.weight.toFixed(1)}%</span>
       </div>`
     ).join('');
   }
@@ -6526,4 +8380,700 @@ const PortfolioManager = (function() {
       }
     });
   }
+})();
+
+// ============================================
+// SLIDE-OUT SETTINGS PANEL
+// ============================================
+(function initSettingsPanel() {
+  var panel = document.getElementById('settingsPanelSlideout');
+  var backdrop = document.getElementById('spBackdrop');
+  var toggleBtn = document.getElementById('settingsPanelToggle');
+  var collapseBtn = document.getElementById('spCollapseBtn');
+  var expandTab = document.getElementById('spExpandTab');
+  if (!panel) return;
+
+  var isOpen = false;
+
+  function openPanel() {
+    if (isOpen) return;
+    isOpen = true;
+    panel.classList.add('open');
+    if (backdrop) backdrop.classList.add('active');
+    if (toggleBtn) toggleBtn.classList.add('active');
+    if (expandTab) expandTab.classList.add('hidden');
+  }
+
+  function closePanel() {
+    if (!isOpen) return;
+    isOpen = false;
+    panel.classList.remove('open');
+    if (backdrop) backdrop.classList.remove('active');
+    if (toggleBtn) toggleBtn.classList.remove('active');
+    if (expandTab) expandTab.classList.remove('hidden');
+  }
+
+  function togglePanel() {
+    if (isOpen) closePanel();
+    else openPanel();
+  }
+
+  // Settings gear button in sidebar
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      togglePanel();
+    });
+  }
+
+  // Collapse arrow button (inside panel, right edge)
+  if (collapseBtn) {
+    collapseBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      closePanel();
+    });
+  }
+
+  // Expand arrow tab (visible when panel is closed)
+  if (expandTab) {
+    expandTab.addEventListener('click', function(e) {
+      e.stopPropagation();
+      openPanel();
+    });
+  }
+
+  // Backdrop click closes
+  if (backdrop) {
+    backdrop.addEventListener('click', function() { closePanel(); });
+  }
+
+  // Escape key closes
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && isOpen) closePanel();
+  });
+
+  // ---- TAB SWITCHING ----
+  var tabs = panel.querySelectorAll('.sp-tab');
+  var tabMap = {
+    profile: document.getElementById('spTabProfile'),
+    portfolio: document.getElementById('spTabPortfolio'),
+    connections: document.getElementById('spTabConnections'),
+    preferences: document.getElementById('spTabPreferences')
+  };
+
+  tabs.forEach(function(tab) {
+    tab.addEventListener('click', function() {
+      var target = tab.dataset.spTab;
+      tabs.forEach(function(t) { t.classList.remove('active'); });
+      tab.classList.add('active');
+      Object.values(tabMap).forEach(function(el) { if (el) el.classList.remove('active'); });
+      if (tabMap[target]) tabMap[target].classList.add('active');
+    });
+  });
+
+  // ---- PROFILE TAB ----
+  function loadProfile() {
+    var profile = (typeof PortfolioManager !== 'undefined') ? PortfolioManager.getProfile() : {};
+    var nameInput = document.getElementById('spDisplayName');
+    var emailInput = document.getElementById('spEmail');
+    var nameShow = document.getElementById('spDisplayNameShow');
+    var emailShow = document.getElementById('spEmailShow');
+    var avatarEl = document.getElementById('spAvatarDisplay');
+    var expSelect = document.getElementById('spExperienceLevel');
+    var createdEl = document.getElementById('spAccountCreated');
+
+    if (nameInput && profile.displayName) nameInput.value = profile.displayName;
+    if (emailInput && profile.email) emailInput.value = profile.email;
+    if (nameShow) nameShow.textContent = profile.displayName || 'Greystone User';
+    if (emailShow) emailShow.textContent = profile.email || 'user@example.com';
+    if (avatarEl) {
+      var name = profile.displayName || 'GS';
+      var parts = name.split(' ');
+      avatarEl.textContent = parts.length > 1
+        ? (parts[0][0] + parts[1][0]).toUpperCase()
+        : name.substring(0, 2).toUpperCase();
+    }
+    if (expSelect && profile.experienceLevel) expSelect.value = profile.experienceLevel;
+    if (createdEl) createdEl.textContent = profile.createdAt ? new Date(profile.createdAt).toLocaleDateString() : '-';
+
+    // Trading styles
+    ['Day', 'Swing', 'Position', 'Scalp'].forEach(function(s) {
+      var cb = document.getElementById('spStyle' + s);
+      if (cb && profile.tradingStyles) cb.checked = profile.tradingStyles.includes(s.toLowerCase());
+    });
+
+    // Try to get email from Supabase
+    if (typeof SupabaseClient !== 'undefined' && SupabaseClient.getUser) {
+      var user = SupabaseClient.getUser();
+      if (user && user.email) {
+        if (emailInput) emailInput.value = user.email;
+        if (emailShow) emailShow.textContent = user.email;
+      }
+    }
+  }
+
+  document.getElementById('spSaveProfile')?.addEventListener('click', function() {
+    var profile = (typeof PortfolioManager !== 'undefined') ? PortfolioManager.getProfile() : {};
+    var nameInput = document.getElementById('spDisplayName');
+    var expSelect = document.getElementById('spExperienceLevel');
+
+    profile.displayName = nameInput ? nameInput.value.trim() : '';
+    profile.experienceLevel = expSelect ? expSelect.value : 'beginner';
+    profile.tradingStyles = [];
+    ['Day', 'Swing', 'Position', 'Scalp'].forEach(function(s) {
+      var cb = document.getElementById('spStyle' + s);
+      if (cb && cb.checked) profile.tradingStyles.push(s.toLowerCase());
+    });
+    if (!profile.createdAt) profile.createdAt = Date.now();
+
+    if (typeof PortfolioManager !== 'undefined') PortfolioManager.saveProfile(profile);
+    loadProfile();
+
+    // Toast notification
+    if (typeof showToast === 'function') showToast('Profile saved', 'success');
+  });
+
+  // ---- PORTFOLIO TAB - HOLDINGS ----
+  function renderHoldings() {
+    var body = document.getElementById('spHoldingsBody');
+    if (!body || typeof PortfolioManager === 'undefined') return;
+    var holdings = PortfolioManager.getHoldings();
+
+    if (holdings.length === 0) {
+      body.innerHTML = '<div class="sp-holdings-empty">No positions yet</div>';
+      return;
+    }
+
+    body.innerHTML = holdings.map(function(h) {
+      var pl = h.totalPL;
+      var plStr = (pl >= 0 ? '+' : '') + '$' + Math.abs(pl).toFixed(0);
+      var plClass = pl >= 0 ? 'profit' : 'loss';
+      return '<div class="sp-holdings-row">' +
+        '<span class="sp-h-symbol">' + h.symbol + '</span>' +
+        '<span>' + h.shares + '</span>' +
+        '<span>$' + h.avgCost.toFixed(2) + '</span>' +
+        '<span>$' + h.currentPrice.toFixed(2) + '</span>' +
+        '<span class="sp-h-pl ' + plClass + '">' + plStr + '</span>' +
+        '<button class="sp-h-del" data-symbol="' + h.symbol + '" title="Remove">x</button>' +
+        '</div>';
+    }).join('');
+
+    // Delete handlers
+    body.querySelectorAll('.sp-h-del').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        PortfolioManager.removePosition(btn.dataset.symbol);
+        renderHoldings();
+      });
+    });
+  }
+
+  document.getElementById('spAddPositionBtn')?.addEventListener('click', function() {
+    var symEl = document.getElementById('spAddSymbol');
+    var sharesEl = document.getElementById('spAddShares');
+    var costEl = document.getElementById('spAddCost');
+    if (!symEl || !sharesEl || !costEl) return;
+
+    var sym = symEl.value.trim().toUpperCase();
+    var shares = parseFloat(sharesEl.value);
+    var cost = parseFloat(costEl.value);
+    if (!sym || isNaN(shares) || shares <= 0 || isNaN(cost) || cost <= 0) return;
+
+    if (typeof PortfolioManager !== 'undefined') {
+      PortfolioManager.addPosition(sym, shares, cost);
+    }
+    symEl.value = '';
+    sharesEl.value = '';
+    costEl.value = '';
+    renderHoldings();
+  });
+
+  // ---- PORTFOLIO TAB - WATCHLIST ----
+  function renderWatchlistChips() {
+    var container = document.getElementById('spWatchlistChips');
+    if (!container || typeof PortfolioManager === 'undefined') return;
+    var list = PortfolioManager.getWatchlist();
+
+    // Also pull from DOM watchlist if PortfolioManager is empty
+    if (list.length === 0) {
+      document.querySelectorAll('.wl-row[data-ticker]').forEach(function(row) {
+        var t = row.dataset.ticker;
+        if (t && list.indexOf(t) === -1) list.push(t);
+      });
+    }
+
+    container.innerHTML = list.map(function(ticker) {
+      return '<span class="sp-wl-chip">' + ticker +
+        ' <button class="sp-chip-x" data-ticker="' + ticker + '">x</button></span>';
+    }).join('');
+
+    container.querySelectorAll('.sp-chip-x').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var ticker = btn.dataset.ticker;
+        var wl = PortfolioManager.getWatchlist().filter(function(t) { return t !== ticker; });
+        PortfolioManager.saveWatchlist(wl);
+        renderWatchlistChips();
+      });
+    });
+  }
+
+  document.getElementById('spAddWatchBtn')?.addEventListener('click', function() {
+    var input = document.getElementById('spAddWatchTicker');
+    if (!input) return;
+    var ticker = input.value.trim().toUpperCase();
+    if (!ticker || ticker.length > 6) return;
+
+    if (typeof PortfolioManager !== 'undefined') {
+      var wl = PortfolioManager.getWatchlist();
+      if (wl.indexOf(ticker) === -1) {
+        wl.push(ticker);
+        PortfolioManager.saveWatchlist(wl);
+      }
+    }
+    input.value = '';
+    renderWatchlistChips();
+  });
+
+  // Enter key for watchlist add
+  document.getElementById('spAddWatchTicker')?.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      document.getElementById('spAddWatchBtn')?.click();
+    }
+  });
+
+  // Enter key for position add
+  document.getElementById('spAddCost')?.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      document.getElementById('spAddPositionBtn')?.click();
+    }
+  });
+
+  // ---- INIT ON OPEN ----
+  var panelInitialized = false;
+  var origOpen = openPanel;
+  openPanel = function() {
+    origOpen();
+    if (!panelInitialized) {
+      panelInitialized = true;
+      loadProfile();
+      renderHoldings();
+      renderWatchlistChips();
+    }
+  };
+
+  // Re-render holdings when panel is opened
+  panel.addEventListener('transitionend', function() {
+    if (isOpen) {
+      renderHoldings();
+      renderWatchlistChips();
+    }
+  });
+})();
+
+/* ============================================
+   GREY SANKORE - CAP DATA & TOGGLE + MODAL
+   ============================================ */
+(function greySankoreCapAndModal() {
+
+var GS_CAP_DATA = {
+  large: {
+    anomalies: [
+      { ticker: 'NVDA', type: 'Volume Anomaly', severity: 'HIGH', desc: 'Options volume 340% above 20-day average. Concentrated in weekly $950 calls with 2 DTE. Possible institutional positioning ahead of earnings.' },
+      { ticker: 'AAPL', type: 'Dark Pool Alert', severity: 'MED', desc: 'Significant dark pool prints detected at $228 level. Block trades totaling $180M in last hour suggest institutional accumulation.' },
+      { ticker: 'JPM', type: 'Insider Activity', severity: 'LOW', desc: 'CFO filed Form 4 for 25,000 share purchase at $198.50. First insider buy in 8 months.' }
+    ],
+    values: [
+      { ticker: 'DIS', fwdPE: '17.8', vs5y: '-22%', fcfYield: '5.1%', score: 82, conviction: 'High' },
+      { ticker: 'PYPL', fwdPE: '14.2', vs5y: '-38%', fcfYield: '6.8%', score: 79, conviction: 'High' },
+      { ticker: 'JNJ', fwdPE: '14.5', vs5y: '-12%', fcfYield: '4.2%', score: 71, conviction: 'Med' },
+      { ticker: 'INTC', fwdPE: '22.1', vs5y: '-45%', fcfYield: '2.1%', score: 65, conviction: 'Med' },
+      { ticker: 'BMY', fwdPE: '7.8', vs5y: '-35%', fcfYield: '9.2%', score: 88, conviction: 'High' }
+    ],
+    momentum: 5, accuracy: '94.2%'
+  },
+  mid: {
+    anomalies: [
+      { ticker: 'PLTR', type: 'Momentum Breakout', severity: 'HIGH', desc: 'Broke out of 3-month consolidation on 4x average volume. RSI divergence confirmed. Government contract pipeline expanding.' },
+      { ticker: 'COIN', type: 'Options Sweep', severity: 'MED', desc: 'Aggressive call sweeps at ask in April $280 strikes. Premium spent: $12M in 30 minutes. Crypto correlation trade.' },
+      { ticker: 'NET', type: 'Earnings Anomaly', severity: 'LOW', desc: 'Implied volatility 85th percentile ahead of earnings. Historical post-earnings move averages 12%. Current straddle pricing 15% move.' }
+    ],
+    values: [
+      { ticker: 'SNAP', fwdPE: '28.4', vs5y: '-52%', fcfYield: '3.2%', score: 68, conviction: 'Med' },
+      { ticker: 'PINS', fwdPE: '19.1', vs5y: '-30%', fcfYield: '5.5%', score: 76, conviction: 'High' },
+      { ticker: 'HOOD', fwdPE: '16.8', vs5y: 'N/A', fcfYield: '4.1%', score: 62, conviction: 'Low' },
+      { ticker: 'DKNG', fwdPE: '32.5', vs5y: '-28%', fcfYield: '1.8%', score: 58, conviction: 'Low' },
+      { ticker: 'ABNB', fwdPE: '22.3', vs5y: '-18%', fcfYield: '6.2%', score: 74, conviction: 'Med' }
+    ],
+    momentum: 3, accuracy: '91.8%'
+  },
+  small: {
+    anomalies: [
+      { ticker: 'IONQ', type: 'Short Squeeze Setup', severity: 'HIGH', desc: 'Short interest at 28% of float. Cost to borrow spiked 400%. Days to cover: 5.2. Quantum computing catalyst approaching.' },
+      { ticker: 'SOFI', type: 'Institutional Accumulation', severity: 'MED', desc: 'Three major funds added positions in last 13F filing. Combined new ownership: 8.2M shares. Bank charter monetization thesis.' },
+      { ticker: 'PATH', type: 'Technical Reversal', severity: 'LOW', desc: 'Weekly RSI divergence at 52-week low. Inside week candle forming. AI automation spending cycle approaching.' }
+    ],
+    values: [
+      { ticker: 'SOFI', fwdPE: '24.5', vs5y: 'N/A', fcfYield: '2.8%', score: 64, conviction: 'Med' },
+      { ticker: 'AI', fwdPE: '35.2', vs5y: 'N/A', fcfYield: '1.2%', score: 55, conviction: 'Low' },
+      { ticker: 'RIVN', fwdPE: 'N/A', vs5y: 'N/A', fcfYield: '-8.5%', score: 42, conviction: 'Low' },
+      { ticker: 'OPEN', fwdPE: 'N/A', vs5y: 'N/A', fcfYield: '-2.1%', score: 38, conviction: 'Low' },
+      { ticker: 'MARA', fwdPE: '8.5', vs5y: 'N/A', fcfYield: '12.1%', score: 72, conviction: 'Med' }
+    ],
+    momentum: 4, accuracy: '87.5%'
+  },
+  micro: {
+    anomalies: [
+      { ticker: 'SOUN', type: 'Volume Spike', severity: 'HIGH', desc: 'Volume 800% above average with no news catalyst. Float rotation detected. Voice AI sector momentum building.' },
+      { ticker: 'RKLB', type: 'Contract Award', severity: 'MED', desc: 'New NASA contract rumored per industry sources. Prior contract wins led to 20-40% moves. Low float amplifies moves.' },
+      { ticker: 'LUNR', type: 'Catalyst Approaching', severity: 'LOW', desc: 'Next lunar mission window in 6 weeks. Historical pattern shows 30-60 day pre-mission accumulation phase.' }
+    ],
+    values: [
+      { ticker: 'BBAI', fwdPE: '15.2', vs5y: 'N/A', fcfYield: '3.5%', score: 61, conviction: 'Med' },
+      { ticker: 'SOUN', fwdPE: '45.0', vs5y: 'N/A', fcfYield: '-5.2%', score: 48, conviction: 'Low' },
+      { ticker: 'RKLB', fwdPE: '85.0', vs5y: 'N/A', fcfYield: '-3.8%', score: 52, conviction: 'Low' },
+      { ticker: 'ASTS', fwdPE: 'N/A', vs5y: 'N/A', fcfYield: '-12%', score: 35, conviction: 'Low' },
+      { ticker: 'GSAT', fwdPE: '42.0', vs5y: 'N/A', fcfYield: '0.5%', score: 44, conviction: 'Low' }
+    ],
+    momentum: 6, accuracy: '82.1%'
+  }
+};
+
+var GS_TICKER_ANALYSIS = {
+  NVDA: { name: 'NVIDIA Corporation', price: '$924.80', change: '+3.14%', changeClass: 'profit', bull: ['Data center revenue accelerating with H100/H200 cycle, $26B+ quarterly run rate', 'Sovereign AI spending creating new demand vertical, 15+ countries building GPU clusters', 'Software/CUDA moat deepening with enterprise AI adoption curve still early innings'], bear: ['Valuation at 35x forward earnings assumes perfect execution for 3+ years', 'China export restrictions limit addressable market by ~$8B annually', 'AMD MI300X gaining traction with hyperscalers on price-performance ratio'], risks: [{ level: 'high', text: 'Concentration risk: Top 4 customers are 40%+ of data center revenue' }, { level: 'med', text: 'Supply chain: TSMC dependency for CoWoS packaging' }, { level: 'low', text: 'Regulatory: Potential antitrust scrutiny on CUDA lock-in' }], technicals: { support: '$880', resistance: '$960', rsi: '62.4', macd: 'Bullish', ma50: '$892', ma200: '$745' }, catalysts: [{ date: 'Mar 18', desc: 'GTC Keynote - New Blackwell architecture details' }, { date: 'May 22', desc: 'Q1 FY2026 Earnings Release' }, { date: 'Jun 10', desc: 'Computex 2026 - Next-gen roadmap' }], valuation: { fwdPE: '34.8x', evEbitda: '42.1x', peg: '1.2x', fcfYield: '2.8%', revGrowth: '+94%', margin: '72.5%' } },
+  AAPL: { name: 'Apple Inc.', price: '$228.30', change: '+0.45%', changeClass: 'profit', bull: ['Services revenue hitting $100B annual run rate with 75%+ margins', 'Apple Intelligence creating upgrade super-cycle for iPhone 16/17', 'Vision Pro enterprise adoption accelerating in healthcare and manufacturing'], bear: ['iPhone unit growth flat, hardware commoditization pressure increasing', 'China market share declining as Huawei resurges with domestic chips', 'AI features lagging competitors, Siri still perceived as inferior'], risks: [{ level: 'med', text: 'Regulatory: EU DMA forcing sideloading, App Store fee compression' }, { level: 'med', text: 'Geopolitical: China supply chain and market access risk' }, { level: 'low', text: 'Competition: Foldables and AI-first devices from Samsung/Google' }], technicals: { support: '$220', resistance: '$235', rsi: '55.1', macd: 'Neutral', ma50: '$225', ma200: '$210' }, catalysts: [{ date: 'Jun 9', desc: 'WWDC 2026 - iOS 20 + Apple Intelligence v2' }, { date: 'Jul 31', desc: 'Q3 FY2026 Earnings' }, { date: 'Sep 10', desc: 'iPhone 17 launch event (expected)' }], valuation: { fwdPE: '28.5x', evEbitda: '24.2x', peg: '2.8x', fcfYield: '3.5%', revGrowth: '+8%', margin: '46.2%' } },
+  JPM: { name: 'JPMorgan Chase & Co.', price: '$198.50', change: '-0.32%', changeClass: 'loss', bull: ['Net interest income benefiting from higher-for-longer rate environment', 'Investment banking pipeline recovering strongly, ECM and DCM both up 30%+', 'Jamie Dimon succession planning indicates institutional stability'], bear: ['Commercial real estate exposure of $170B+ with office vacancy at record highs', 'Credit card delinquencies ticking up, consumer spending deceleration', 'Regulatory capital requirements (Basel III endgame) could compress ROE'], risks: [{ level: 'med', text: 'CRE exposure: Office and multifamily loan concentration' }, { level: 'low', text: 'Regulatory: Higher capital requirements reducing buyback capacity' }, { level: 'low', text: 'Credit cycle: Consumer delinquency normalization' }], technicals: { support: '$190', resistance: '$205', rsi: '48.7', macd: 'Bearish', ma50: '$195', ma200: '$178' }, catalysts: [{ date: 'Apr 11', desc: 'Q1 2026 Earnings - First to report among banks' }, { date: 'May 20', desc: 'Annual Investor Day' }, { date: 'Jun 26', desc: 'Fed stress test results' }], valuation: { fwdPE: '11.2x', evEbitda: 'N/A', peg: '1.5x', fcfYield: '4.8%', revGrowth: '+12%', margin: '38.1%' } },
+  DIS: { name: 'The Walt Disney Company', price: '$112.40', change: '+1.82%', changeClass: 'profit', bull: ['Streaming profitability inflection with Disney+ turning profitable in Q4', 'Parks & Experiences generating record revenue with pricing power intact', 'Content slate strongest in years with Marvel/Star Wars reset working'], bear: ['Linear TV decline accelerating, ESPN standalone timing uncertain', 'Box office inconsistency creating lumpy earnings', 'Succession uncertainty post-Iger creating strategic overhang'], risks: [{ level: 'med', text: 'Content spending: $30B+ annual commitment with uncertain ROI' }, { level: 'med', text: 'Cord-cutting: Linear networks declining 10%+ annually' }, { level: 'low', text: 'Consumer discretionary: Parks vulnerable to recession' }], technicals: { support: '$105', resistance: '$120', rsi: '58.3', macd: 'Bullish', ma50: '$108', ma200: '$98' }, catalysts: [{ date: 'May 7', desc: 'Q2 FY2026 Earnings' }, { date: 'Aug 1', desc: 'ESPN standalone streaming launch (expected)' }, { date: 'Nov 15', desc: 'Moana 2 sequel release' }], valuation: { fwdPE: '17.8x', evEbitda: '12.5x', peg: '1.1x', fcfYield: '5.1%', revGrowth: '+6%', margin: '14.8%' } },
+  PYPL: { name: 'PayPal Holdings Inc.', price: '$72.80', change: '+2.15%', changeClass: 'profit', bull: ['Fastlane checkout seeing 80% conversion rates, enterprise adoption scaling', 'Venmo monetization inflection with $68B TPV and business profiles growing 50%', 'New CEO Alex Chriss executing well, cost discipline improving margins'], bear: ['Apple Pay and Google Pay taking share in tap-to-pay at point of sale', 'Unbranded processing growth masking branded checkout decline', 'Take rate compression as merchants gain negotiating leverage'], risks: [{ level: 'med', text: 'Competition: Apple, Stripe, Adyen all gaining checkout share' }, { level: 'low', text: 'Regulatory: CFPB BNPL rules could impact PayPal Credit' }, { level: 'low', text: 'Macro: Cross-border volumes sensitive to trade disruption' }], technicals: { support: '$67', resistance: '$78', rsi: '61.2', macd: 'Bullish', ma50: '$70', ma200: '$62' }, catalysts: [{ date: 'Apr 29', desc: 'Q1 2026 Earnings' }, { date: 'May 15', desc: 'Investor Day - Updated strategy rollout' }, { date: 'Jul 30', desc: 'Q2 2026 Earnings' }], valuation: { fwdPE: '14.2x', evEbitda: '10.8x', peg: '0.9x', fcfYield: '6.8%', revGrowth: '+10%', margin: '15.5%' } },
+  JNJ: { name: 'Johnson & Johnson', price: '$158.20', change: '-0.18%', changeClass: 'loss', bull: ['MedTech segment growing 7%+ with robotic surgery and orthopedics', 'Innovative Medicine pipeline with 20+ Phase III readouts through 2026', 'Post-Kenvue separation provides clean pharma/medtech pure-play'], bear: ['Talc litigation overhang with $9B+ potential settlement', 'Stelara biosimilar erosion beginning in 2025, $20B revenue at risk', 'Patent cliff: Key drug patents expiring 2025-2028'], risks: [{ level: 'high', text: 'Litigation: Talc/mesothelioma liability estimate ranges $6-12B' }, { level: 'med', text: 'Patent cliff: Stelara, Tremfya, Darzalex exposure' }, { level: 'low', text: 'Pricing: Medicare drug negotiation reducing future revenue' }], technicals: { support: '$152', resistance: '$164', rsi: '44.8', macd: 'Neutral', ma50: '$157', ma200: '$155' }, catalysts: [{ date: 'Apr 15', desc: 'Q1 2026 Earnings' }, { date: 'Jun 1', desc: 'ASCO - Oncology pipeline data' }, { date: 'Sep 30', desc: 'Talc settlement court ruling (expected)' }], valuation: { fwdPE: '14.5x', evEbitda: '13.1x', peg: '2.4x', fcfYield: '4.2%', revGrowth: '+4%', margin: '22.8%' } },
+  INTC: { name: 'Intel Corporation', price: '$31.20', change: '+4.52%', changeClass: 'profit', bull: ['18A process node on track, early customer tape-outs showing competitive results', 'CHIPS Act funding of $8.5B de-risks domestic fab build-out', 'Foundry business could unlock massive value if external customers scale'], bear: ['Data center market share still declining to AMD and ARM-based chips', 'Foundry business burning cash with 2-3 year timeline to profitability', 'PC market recovery slower than expected, AI PC adoption uncertain'], risks: [{ level: 'high', text: 'Execution: 18A node must hit yield targets on time' }, { level: 'med', text: 'Cash burn: $25B+ annual capex with negative FCF' }, { level: 'med', text: 'Competition: TSMC 2nm, Samsung, AMD all advancing' }], technicals: { support: '$28', resistance: '$35', rsi: '67.8', macd: 'Bullish', ma50: '$29', ma200: '$34' }, catalysts: [{ date: 'Apr 24', desc: 'Q1 2026 Earnings' }, { date: 'Jun 15', desc: '18A production milestone update' }, { date: 'Sep 18', desc: 'Innovation Day - Foundry customer announcements' }], valuation: { fwdPE: '22.1x', evEbitda: '15.8x', peg: 'N/A', fcfYield: '2.1%', revGrowth: '-2%', margin: '18.5%' } },
+  BMY: { name: 'Bristol-Myers Squibb Co.', price: '$52.40', change: '+0.96%', changeClass: 'profit', bull: ['Karuna acquisition adds $4B+ peak sales potential with KarXT', 'Opdivo franchise still growing with first-line combinations', 'FCF yield of 9.2% with aggressive buyback program'], bear: ['Revlimid/Eliquis patent cliffs creating $20B+ revenue gap', 'Integration execution risk with Karuna and recent M&A spree', 'Pipeline must deliver multiple blockbusters simultaneously'], risks: [{ level: 'high', text: 'Patent cliff: Eliquis ($12B) losing exclusivity 2026-2028' }, { level: 'med', text: 'Pipeline: KarXT regulatory path and launch execution' }, { level: 'low', text: 'Pricing: IRA drug negotiation on Eliquis' }], technicals: { support: '$48', resistance: '$56', rsi: '54.2', macd: 'Neutral', ma50: '$51', ma200: '$49' }, catalysts: [{ date: 'Apr 24', desc: 'Q1 2026 Earnings' }, { date: 'Jun 5', desc: 'ASCO - Oncology data presentations' }, { date: 'Sep 26', desc: 'KarXT PDUFA date (expected)' }], valuation: { fwdPE: '7.8x', evEbitda: '8.2x', peg: '0.6x', fcfYield: '9.2%', revGrowth: '-5%', margin: '24.1%' } },
+  PLTR: { name: 'Palantir Technologies Inc.', price: '$24.80', change: '+5.21%', changeClass: 'profit', bull: ['AIP platform driving commercial revenue acceleration, 30%+ growth', 'Government contract wins expanding with defense budget increases', 'AI/ML platform becoming mission-critical for enterprise decision-making'], bear: ['Valuation stretched at 80x+ forward earnings for a 25% grower', 'Stock-based compensation diluting shareholders by 5%+ annually', 'Government revenue lumpy with contract timing uncertainty'], risks: [{ level: 'high', text: 'Valuation: Multiple compression risk if growth decelerates' }, { level: 'med', text: 'SBC: Stock-based comp running at 22% of revenue' }, { level: 'low', text: 'Concentration: Top 20 customers are 50%+ of revenue' }], technicals: { support: '$22', resistance: '$27', rsi: '71.3', macd: 'Bullish', ma50: '$23', ma200: '$18' }, catalysts: [{ date: 'May 5', desc: 'Q1 2026 Earnings' }, { date: 'Jun 20', desc: 'Army TITAN contract decision' }, { date: 'Aug 4', desc: 'Q2 2026 Earnings' }], valuation: { fwdPE: '82.5x', evEbitda: '65.0x', peg: '3.3x', fcfYield: '1.5%', revGrowth: '+28%', margin: '22.1%' } },
+  COIN: { name: 'Coinbase Global Inc.', price: '$265.40', change: '+3.87%', changeClass: 'profit', bull: ['Crypto regulatory clarity improving, ETF approvals driving institutional adoption', 'Base L2 network generating growing fee revenue from on-chain activity', 'Subscription and services revenue providing more stable revenue mix'], bear: ['Trading revenue still 60%+ of total, highly correlated to crypto prices', 'SEC enforcement actions creating ongoing legal uncertainty', 'Competition from decentralized exchanges eroding retail share'], risks: [{ level: 'high', text: 'Crypto correlation: Revenue drops 40-60% in bear markets' }, { level: 'med', text: 'Regulatory: SEC Wells notice and ongoing enforcement' }, { level: 'low', text: 'Competition: DEX volume growing faster than CEX' }], technicals: { support: '$240', resistance: '$285', rsi: '64.5', macd: 'Bullish', ma50: '$255', ma200: '$195' }, catalysts: [{ date: 'May 8', desc: 'Q1 2026 Earnings' }, { date: 'Jun 15', desc: 'Crypto regulatory framework vote (expected)' }, { date: 'Jul 1', desc: 'Base network major protocol upgrade' }], valuation: { fwdPE: '22.8x', evEbitda: '18.5x', peg: '1.2x', fcfYield: '4.5%', revGrowth: '+35%', margin: '28.3%' } },
+  NET: { name: 'Cloudflare Inc.', price: '$92.10', change: '-1.15%', changeClass: 'loss', bull: ['Workers AI platform positioning for edge-AI computing market', 'Net dollar retention at 115%, enterprise customers growing 30%+', 'Zero Trust security becoming default architecture for enterprises'], bear: ['Still not profitable on GAAP basis, path to profitability uncertain', 'Competing against AWS, Azure, and Google on compute is capital-intensive', 'SBC running at 18% of revenue, diluting shareholders'], risks: [{ level: 'med', text: 'Profitability: GAAP losses persisting despite revenue scale' }, { level: 'med', text: 'Competition: Hyperscalers bundling CDN/security' }, { level: 'low', text: 'Geopolitical: Russia/China blocking raises market access questions' }], technicals: { support: '$85', resistance: '$98', rsi: '45.2', macd: 'Bearish', ma50: '$95', ma200: '$82' }, catalysts: [{ date: 'May 1', desc: 'Q1 2026 Earnings' }, { date: 'Jun 12', desc: 'Developer Week - Workers AI updates' }, { date: 'Sep 28', desc: 'Birthday Week - Major product launches' }], valuation: { fwdPE: '85.0x', evEbitda: '55.0x', peg: '2.8x', fcfYield: '1.2%', revGrowth: '+30%', margin: '5.2%' } },
+  SNAP: { name: 'Snap Inc.', price: '$14.20', change: '+1.43%', changeClass: 'profit', bull: ['AR/ML advertising improving ROI metrics for advertisers', 'Snapchat+ subscription hitting 7M+ paying users', 'Gen Z engagement still strongest among social platforms'], bear: ['Revenue growth decelerating as TikTok and Reels take ad dollars', 'ARPU still well below Meta and Google levels', 'Dual-class share structure limits governance accountability'], risks: [{ level: 'med', text: 'Competition: TikTok and Instagram Reels dominating short-form video' }, { level: 'med', text: 'Monetization: ARPU gap vs. Meta is 5-8x' }, { level: 'low', text: 'Governance: Evan Spiegel super-voting control' }], technicals: { support: '$12', resistance: '$16', rsi: '56.8', macd: 'Neutral', ma50: '$13.50', ma200: '$12' }, catalysts: [{ date: 'Apr 22', desc: 'Q1 2026 Earnings' }, { date: 'May 15', desc: 'Snap Partner Summit - AR glasses update' }, { date: 'Jul 23', desc: 'Q2 2026 Earnings' }], valuation: { fwdPE: '28.4x', evEbitda: '22.0x', peg: '2.1x', fcfYield: '3.2%', revGrowth: '+14%', margin: '8.5%' } },
+  PINS: { name: 'Pinterest Inc.', price: '$38.60', change: '+0.78%', changeClass: 'profit', bull: ['Shopping ads showing strong conversion rates, ROAS improving', 'International monetization still in early innings, ARPU 10x gap vs US', 'AI-powered visual search driving engagement and commercial intent'], bear: ['User growth plateauing in developed markets', 'Amazon, Google Shopping taking share of product discovery', 'CEO transition created strategic uncertainty'], risks: [{ level: 'low', text: 'Competition: Google Lens and Amazon visual search improving' }, { level: 'low', text: 'Growth: MAU growth dependent on international markets' }, { level: 'low', text: 'Monetization: Ad load increases may hurt engagement' }], technicals: { support: '$35', resistance: '$42', rsi: '58.1', macd: 'Bullish', ma50: '$37', ma200: '$32' }, catalysts: [{ date: 'Apr 28', desc: 'Q1 2026 Earnings' }, { date: 'Jun 5', desc: 'Pinterest Presents - Advertiser summit' }, { date: 'Jul 28', desc: 'Q2 2026 Earnings' }], valuation: { fwdPE: '19.1x', evEbitda: '15.2x', peg: '1.1x', fcfYield: '5.5%', revGrowth: '+18%', margin: '16.8%' } },
+  HOOD: { name: 'Robinhood Markets Inc.', price: '$18.90', change: '+2.72%', changeClass: 'profit', bull: ['Gold subscription driving recurring revenue with 1.5M+ subscribers', 'Crypto trading revenue surging with Bitcoin ETF and alt-season', '24-hour trading and credit card expanding TAM significantly'], bear: ['PFOF under regulatory scrutiny, could lose 50%+ of equities revenue', 'Customer base skews young with lower account balances', 'Market downturn would severely impact trading volumes'], risks: [{ level: 'high', text: 'Regulatory: PFOF ban would eliminate core revenue stream' }, { level: 'med', text: 'Market sensitivity: Revenue drops 40%+ in bear markets' }, { level: 'low', text: 'Competition: Schwab/Fidelity targeting younger investors' }], technicals: { support: '$16', resistance: '$21', rsi: '63.4', macd: 'Bullish', ma50: '$17', ma200: '$14' }, catalysts: [{ date: 'Apr 30', desc: 'Q1 2026 Earnings' }, { date: 'May 20', desc: 'Annual shareholder meeting' }, { date: 'Jul 30', desc: 'Q2 2026 Earnings' }], valuation: { fwdPE: '16.8x', evEbitda: '12.5x', peg: '0.8x', fcfYield: '4.1%', revGrowth: '+22%', margin: '18.2%' } },
+  DKNG: { name: 'DraftKings Inc.', price: '$42.50', change: '-0.47%', changeClass: 'loss', bull: ['State legalization pipeline expanding TAM with 5+ states pending', 'iGaming launch states showing strong hold rates and ARPU', 'Promotional efficiency improving, path to sustained profitability'], bear: ['Tax rate increases in key states squeezing margins', 'Customer acquisition costs rising as market matures', 'FanDuel (Flutter) still has market share lead in most states'], risks: [{ level: 'med', text: 'Regulatory: State tax rate increases (NY at 51%, IL raising)' }, { level: 'med', text: 'Competition: FanDuel, BetMGM, ESPN BET all scaling' }, { level: 'low', text: 'Macro: Consumer discretionary spending sensitivity' }], technicals: { support: '$38', resistance: '$46', rsi: '47.5', macd: 'Neutral', ma50: '$41', ma200: '$35' }, catalysts: [{ date: 'May 2', desc: 'Q1 2026 Earnings' }, { date: 'Sep 1', desc: 'NFL season start - peak engagement' }, { date: 'Nov 1', desc: 'State election results - legalization votes' }], valuation: { fwdPE: '32.5x', evEbitda: '25.0x', peg: '1.8x', fcfYield: '1.8%', revGrowth: '+28%', margin: '5.2%' } },
+  ABNB: { name: 'Airbnb Inc.', price: '$152.30', change: '+1.05%', changeClass: 'profit', bull: ['Long-term stays (28+ nights) now 20%+ of bookings, higher margin', 'Experience platform expansion into activities and services', 'Supply growth outpacing demand in key markets, improving quality'], bear: ['Regulatory crackdowns in major cities limiting host supply', 'Hotel chains fighting back with loyalty programs and price matching', 'Take rate optimization reaching ceiling, growth must come from volume'], risks: [{ level: 'med', text: 'Regulatory: NYC, Barcelona, Paris restricting short-term rentals' }, { level: 'low', text: 'Competition: Booking.com and Vrbo improving alternative stays' }, { level: 'low', text: 'Macro: Travel demand normalization post-COVID surge' }], technicals: { support: '$142', resistance: '$160', rsi: '55.8', macd: 'Neutral', ma50: '$148', ma200: '$138' }, catalysts: [{ date: 'May 6', desc: 'Q1 2026 Earnings' }, { date: 'May 15', desc: 'Summer product launch event' }, { date: 'Aug 5', desc: 'Q2 2026 Earnings - Summer travel data' }], valuation: { fwdPE: '22.3x', evEbitda: '18.8x', peg: '1.5x', fcfYield: '6.2%', revGrowth: '+14%', margin: '35.2%' } },
+  IONQ: { name: 'IonQ Inc.', price: '$12.40', change: '+8.77%', changeClass: 'profit', bull: ['Trapped-ion approach showing highest qubit fidelity among public quantum companies', 'Enterprise contracts growing with $28M+ bookings in latest quarter', 'Partnership with major cloud providers (AWS, Azure, GCP) driving adoption'], bear: ['Revenue under $30M annually, years from meaningful commercialization', 'Quantum computing timeline constantly pushed back by industry', 'Cash burn rate suggests need for additional capital raises'], risks: [{ level: 'high', text: 'Technology: Quantum error correction still unsolved at scale' }, { level: 'high', text: 'Cash burn: $50M+ annual burn with <$30M revenue' }, { level: 'med', text: 'Competition: IBM, Google, Quantinuum all advancing rapidly' }], technicals: { support: '$10', resistance: '$15', rsi: '72.8', macd: 'Bullish', ma50: '$11', ma200: '$9' }, catalysts: [{ date: 'May 8', desc: 'Q1 2026 Earnings' }, { date: 'Jun 20', desc: 'Quantum algorithm benchmark results' }, { date: 'Sep 15', desc: 'New system launch (Forte 2)' }], valuation: { fwdPE: 'N/A', evEbitda: 'N/A', peg: 'N/A', fcfYield: '-15.2%', revGrowth: '+85%', margin: '-180%' } },
+  SOFI: { name: 'SoFi Technologies Inc.', price: '$9.80', change: '+3.16%', changeClass: 'profit', bull: ['Bank charter enabling deposit gathering at scale, NIM expanding', 'Lending platform segment (Galileo/Technisys) growing 30%+ B2B', 'Student loan restart driving refi volumes higher'], bear: ['Credit quality concerns as personal loans season', 'Stock-based comp dilution remains elevated', 'Competition from established banks entering digital-first products'], risks: [{ level: 'med', text: 'Credit risk: Personal loan book seasoning in uncertain macro' }, { level: 'med', text: 'Regulatory: Consumer lending under CFPB scrutiny' }, { level: 'low', text: 'Competition: Traditional banks launching digital products' }], technicals: { support: '$8.50', resistance: '$11', rsi: '62.1', macd: 'Bullish', ma50: '$9.20', ma200: '$8' }, catalysts: [{ date: 'Apr 28', desc: 'Q1 2026 Earnings' }, { date: 'Jun 1', desc: 'Auto loan product expansion launch' }, { date: 'Jul 28', desc: 'Q2 2026 Earnings' }], valuation: { fwdPE: '24.5x', evEbitda: '18.0x', peg: '1.2x', fcfYield: '2.8%', revGrowth: '+32%', margin: '12.5%' } },
+  AI: { name: 'C3.ai Inc.', price: '$28.50', change: '+2.15%', changeClass: 'profit', bull: ['Enterprise AI platform adoption accelerating with consumption-based pricing', 'Federal/defense contracts providing stable revenue base', 'Generative AI tailwind driving pipeline growth'], bear: ['Still not profitable, consumption model creates revenue unpredictability', 'Competition from hyperscalers (Azure AI, AWS SageMaker) intensifying', 'Tom Siebel concentration risk on founder-CEO'], risks: [{ level: 'high', text: 'Competition: Hyperscalers offering bundled AI at lower cost' }, { level: 'med', text: 'Profitability: FCF negative, needs revenue acceleration' }, { level: 'low', text: 'Governance: Founder control of voting shares' }], technicals: { support: '$25', resistance: '$32', rsi: '58.4', macd: 'Neutral', ma50: '$27', ma200: '$24' }, catalysts: [{ date: 'May 28', desc: 'Q4 FY2026 Earnings' }, { date: 'Jun 10', desc: 'AI summit - New product demos' }, { date: 'Aug 28', desc: 'Q1 FY2027 Earnings' }], valuation: { fwdPE: '35.2x', evEbitda: 'N/A', peg: 'N/A', fcfYield: '1.2%', revGrowth: '+22%', margin: '-12%' } },
+  RIVN: { name: 'Rivian Automotive Inc.', price: '$14.20', change: '-2.07%', changeClass: 'loss', bull: ['R2 platform targeting mass market at $45K, production start 2026', 'Amazon delivery van orders providing visible revenue floor', 'VW joint venture de-risks software and capital needs'], bear: ['Burning $1.5B+ quarterly cash with no clear path to breakeven', 'EV demand softening as incentives expire and competition rises', 'R1 pricing under pressure from Tesla Model X/Y competition'], risks: [{ level: 'high', text: 'Cash burn: $6B+ annual burn, needs continued capital raises' }, { level: 'high', text: 'Demand: EV market saturation in premium segment' }, { level: 'med', text: 'Execution: R2 launch ramp is critical and unproven' }], technicals: { support: '$12', resistance: '$17', rsi: '38.5', macd: 'Bearish', ma50: '$15', ma200: '$18' }, catalysts: [{ date: 'May 6', desc: 'Q1 2026 Earnings + delivery numbers' }, { date: 'Jul 1', desc: 'R2 Normal, IL factory prep update' }, { date: 'Aug 6', desc: 'Q2 2026 Earnings' }], valuation: { fwdPE: 'N/A', evEbitda: 'N/A', peg: 'N/A', fcfYield: '-8.5%', revGrowth: '+68%', margin: '-42%' } },
+  OPEN: { name: 'Opendoor Technologies Inc.', price: '$3.40', change: '-1.16%', changeClass: 'loss', bull: ['Housing market recovery could drive massive volume increase', 'Operational efficiency improving with lower spread targets', 'Category creator in iBuying with improving unit economics'], bear: ['Housing market remains frozen with high mortgage rates', 'iBuying model unproven through full market cycles', 'Cash constraints limit ability to hold inventory in downturn'], risks: [{ level: 'high', text: 'Housing market: High rates keeping transaction volumes depressed' }, { level: 'high', text: 'Model risk: iBuying untested through severe downturns' }, { level: 'med', text: 'Cash: Liquidity risk if housing prices decline further' }], technicals: { support: '$2.80', resistance: '$4.20', rsi: '41.2', macd: 'Bearish', ma50: '$3.60', ma200: '$4.10' }, catalysts: [{ date: 'May 1', desc: 'Q1 2026 Earnings' }, { date: 'Jun 18', desc: 'Fed rate decision - housing impact' }, { date: 'Aug 1', desc: 'Q2 2026 Earnings + summer housing data' }], valuation: { fwdPE: 'N/A', evEbitda: 'N/A', peg: 'N/A', fcfYield: '-2.1%', revGrowth: '+12%', margin: '-8.5%' } },
+  MARA: { name: 'Marathon Digital Holdings', price: '$22.80', change: '+6.54%', changeClass: 'profit', bull: ['Largest public Bitcoin miner by hash rate, economies of scale', 'Bitcoin halving cycle historically drives 10x+ price appreciation', 'Energy portfolio diversifying into renewables and energy harvesting'], bear: ['Revenue 95%+ correlated to Bitcoin price, zero diversification', 'Post-halving mining economics squeeze, breakeven ~$45K BTC', 'Dilution risk from at-the-market offerings to fund expansion'], risks: [{ level: 'high', text: 'Bitcoin price: Revenue collapse if BTC drops below $45K' }, { level: 'med', text: 'Energy costs: Power contracts subject to rate increases' }, { level: 'med', text: 'Dilution: Frequent ATM offerings to fund growth' }], technicals: { support: '$18', resistance: '$26', rsi: '68.5', macd: 'Bullish', ma50: '$20', ma200: '$16' }, catalysts: [{ date: 'May 8', desc: 'Q1 2026 Earnings + mining metrics' }, { date: 'Jun 1', desc: 'Hash rate expansion milestone' }, { date: 'Aug 8', desc: 'Q2 2026 Earnings' }], valuation: { fwdPE: '8.5x', evEbitda: '6.2x', peg: '0.3x', fcfYield: '12.1%', revGrowth: '+120%', margin: '45.2%' } },
+  PATH: { name: 'UiPath Inc.', price: '$13.60', change: '-0.73%', changeClass: 'loss', bull: ['Enterprise automation platform with strong installed base of 10K+ customers', 'AI-powered automation creating new use cases and upsell opportunities', 'New CEO executing cost discipline, margins improving'], bear: ['Growth decelerating to mid-teens as automation market matures', 'Microsoft Power Automate bundled for free threatens SMB segment', 'Leadership transitions creating strategic uncertainty'], risks: [{ level: 'med', text: 'Competition: Microsoft Power Automate and ServiceNow Workflow' }, { level: 'med', text: 'Growth: Revenue growth slowing from 30%+ to 15%' }, { level: 'low', text: 'Execution: CEO transition and strategy pivot risk' }], technicals: { support: '$12', resistance: '$15.50', rsi: '42.3', macd: 'Bearish', ma50: '$14', ma200: '$16' }, catalysts: [{ date: 'May 22', desc: 'Q1 FY2027 Earnings' }, { date: 'Jun 15', desc: 'Forward Summit - Product announcements' }, { date: 'Aug 22', desc: 'Q2 FY2027 Earnings' }], valuation: { fwdPE: '28.5x', evEbitda: '22.0x', peg: '2.0x', fcfYield: '4.5%', revGrowth: '+14%', margin: '12.8%' } },
+  SOUN: { name: 'SoundHound AI Inc.', price: '$6.80', change: '+12.40%', changeClass: 'profit', bull: ['Voice AI platform gaining enterprise traction in auto and restaurant verticals', 'Proprietary speech-to-meaning technology is differentiated vs. commodity ASR', 'Expanding TAM as voice commerce and AI assistants grow'], bear: ['Revenue under $50M with no clear path to profitability', 'Competition from Amazon Alexa, Google Assistant at much larger scale', 'Key customer concentration risk (Hyundai is ~30% of revenue)'], risks: [{ level: 'high', text: 'Scale: Revenue too small to sustain independent R&D investment' }, { level: 'high', text: 'Concentration: Top 3 customers are 60%+ of revenue' }, { level: 'med', text: 'Competition: Big Tech AI assistants bundled at zero cost' }], technicals: { support: '$5', resistance: '$8', rsi: '74.2', macd: 'Bullish', ma50: '$5.80', ma200: '$4.50' }, catalysts: [{ date: 'May 9', desc: 'Q1 2026 Earnings' }, { date: 'Jun 20', desc: 'New OEM partnership announcement (rumored)' }, { date: 'Aug 9', desc: 'Q2 2026 Earnings' }], valuation: { fwdPE: '45.0x', evEbitda: 'N/A', peg: 'N/A', fcfYield: '-5.2%', revGrowth: '+55%', margin: '-65%' } },
+  RKLB: { name: 'Rocket Lab USA Inc.', price: '$8.20', change: '+4.46%', changeClass: 'profit', bull: ['Neutron rocket development on track, opens medium-lift market', 'Space Systems segment growing 50%+ with satellite bus and component sales', 'Electron rocket reliability at 95%+, dominant in small-launch segment'], bear: ['Neutron development consuming $150M+ annually with execution risk', 'SpaceX Falcon 9 rideshare pricing undercuts dedicated small launch', 'Unprofitable with negative FCF, capital intensive business model'], risks: [{ level: 'high', text: 'Execution: Neutron must succeed to justify valuation' }, { level: 'med', text: 'Competition: SpaceX rideshare and Starship disruption' }, { level: 'med', text: 'Capital: Continued cash burn requiring dilutive financing' }], technicals: { support: '$7', resistance: '$9.50', rsi: '66.8', macd: 'Bullish', ma50: '$7.50', ma200: '$6' }, catalysts: [{ date: 'May 12', desc: 'Q1 2026 Earnings' }, { date: 'Jun 30', desc: 'Neutron progress update / hot fire test' }, { date: 'Aug 12', desc: 'Q2 2026 Earnings + launch manifest' }], valuation: { fwdPE: '85.0x', evEbitda: 'N/A', peg: 'N/A', fcfYield: '-3.8%', revGrowth: '+42%', margin: '-28%' } },
+  LUNR: { name: 'Intuitive Machines Inc.', price: '$7.40', change: '+2.07%', changeClass: 'profit', bull: ['Only company to successfully land on the Moon commercially (Odysseus)', 'NASA CLPS contracts worth $300M+ in backlog', 'Lunar infrastructure services creating recurring revenue potential'], bear: ['Lunar missions are high-risk with 50%+ historical failure rate', 'Revenue lumpy and tied to mission timing', 'Small team executing complex missions with limited margin for error'], risks: [{ level: 'high', text: 'Mission risk: Single mission failure could devastate stock' }, { level: 'med', text: 'Revenue timing: Lumpy mission-based revenue recognition' }, { level: 'med', text: 'Competition: SpaceX, Astrobotic, Firefly all pursuing lunar services' }], technicals: { support: '$6', resistance: '$9', rsi: '55.4', macd: 'Neutral', ma50: '$7', ma200: '$5.50' }, catalysts: [{ date: 'Apr 25', desc: 'IM-2 mission launch window opens' }, { date: 'May 15', desc: 'Q1 2026 Earnings' }, { date: 'Aug 15', desc: 'Q2 2026 Earnings + IM-3 contract details' }], valuation: { fwdPE: 'N/A', evEbitda: 'N/A', peg: 'N/A', fcfYield: '-18%', revGrowth: '+120%', margin: '-45%' } },
+  BBAI: { name: 'BigBear.ai Holdings', price: '$3.80', change: '+5.56%', changeClass: 'profit', bull: ['AI/ML analytics for defense and intelligence gaining contract momentum', 'Verizon partnership for network optimization opens commercial vertical', 'Edge AI capabilities differentiated for tactical/field applications'], bear: ['Revenue growth inconsistent, sub-$200M with persistent losses', 'Defense contract timing creates lumpy, unpredictable revenue', 'Debt load elevated for a pre-profit company'], risks: [{ level: 'med', text: 'Execution: Must scale revenue to cover fixed cost base' }, { level: 'med', text: 'Debt: Convertible notes maturing, potential dilution' }, { level: 'low', text: 'Competition: Palantir, Booz Allen, and other defense AI firms' }], technicals: { support: '$3', resistance: '$4.50', rsi: '62.1', macd: 'Bullish', ma50: '$3.40', ma200: '$2.80' }, catalysts: [{ date: 'May 10', desc: 'Q1 2026 Earnings' }, { date: 'Jun 25', desc: 'DoD budget allocation details' }, { date: 'Aug 10', desc: 'Q2 2026 Earnings' }], valuation: { fwdPE: '15.2x', evEbitda: '12.0x', peg: '1.0x', fcfYield: '3.5%', revGrowth: '+18%', margin: '5.2%' } },
+  ASTS: { name: 'AST SpaceMobile Inc.', price: '$5.20', change: '-3.70%', changeClass: 'loss', bull: ['Direct-to-cell broadband satellite technology is potentially transformative', 'Partnerships with AT&T, Vodafone, Rakuten validate the technology', 'First commercial BlueBird satellites launching mid-2025'], bear: ['Pre-revenue with massive capital requirements ($5B+ for full constellation)', 'Technology unproven at commercial scale', 'SpaceX Starlink Direct to Cell is a formidable competitor'], risks: [{ level: 'high', text: 'Technology: Unproven at scale, orbital challenges' }, { level: 'high', text: 'Capital: $5B+ needed, massive dilution ahead' }, { level: 'high', text: 'Competition: SpaceX DTC launching with proven Starlink platform' }], technicals: { support: '$4', resistance: '$7', rsi: '38.2', macd: 'Bearish', ma50: '$5.50', ma200: '$6.20' }, catalysts: [{ date: 'May 12', desc: 'Q1 2026 Earnings' }, { date: 'Jun 15', desc: 'BlueBird launch window' }, { date: 'Sep 1', desc: 'First commercial service date (target)' }], valuation: { fwdPE: 'N/A', evEbitda: 'N/A', peg: 'N/A', fcfYield: '-12%', revGrowth: 'Pre-revenue', margin: 'N/A' } },
+  GSAT: { name: 'Globalstar Inc.', price: '$2.10', change: '+1.45%', changeClass: 'profit', bull: ['Apple satellite SOS partnership provides stable, growing revenue base', 'Band n53/n256 spectrum assets increasingly valuable for 5G/IoT', 'New satellite constellation launching with improved capacity'], bear: ['Apple concentration risk: Single customer is 90%+ of revenue', 'Debt load from satellite constellation buildout', 'Limited diversification beyond Apple ecosystem'], risks: [{ level: 'high', text: 'Concentration: Apple is 90%+ of revenue' }, { level: 'med', text: 'Debt: Satellite buildout financing creating leverage risk' }, { level: 'low', text: 'Technology: Satellite lifespan and replacement costs' }], technicals: { support: '$1.80', resistance: '$2.50', rsi: '52.1', macd: 'Neutral', ma50: '$2.05', ma200: '$1.80' }, catalysts: [{ date: 'May 1', desc: 'Q1 2026 Earnings' }, { date: 'Jun 9', desc: 'Apple WWDC - Satellite feature expansion?' }, { date: 'Aug 1', desc: 'Q2 2026 Earnings + new satellite launch' }], valuation: { fwdPE: '42.0x', evEbitda: '18.5x', peg: '2.5x', fcfYield: '0.5%', revGrowth: '+28%', margin: '22%' } }
+};
+
+var capLabels = { large: 'Large Cap', mid: 'Mid Cap', small: 'Small Cap', micro: 'Micro Cap' };
+var currentGSCap = 'large';
+
+function updateGSCapData(capSize) {
+  currentGSCap = capSize;
+  var data = GS_CAP_DATA[capSize];
+  if (!data) return;
+
+  var anomalyStat = document.getElementById('gsStatAnomalies');
+  var valueStat = document.getElementById('gsStatValues');
+  var momentumStat = document.getElementById('gsStatMomentum');
+  var accuracyStat = document.getElementById('gsStatAccuracy');
+  if (anomalyStat) anomalyStat.textContent = data.anomalies.length;
+  if (valueStat) valueStat.textContent = data.values.length;
+  if (momentumStat) momentumStat.textContent = data.momentum;
+  if (accuracyStat) accuracyStat.textContent = data.accuracy;
+
+  var alertList = document.getElementById('gsAlertList');
+  if (alertList) {
+    alertList.innerHTML = data.anomalies.map(function(a) {
+      var sevClass = a.severity === 'HIGH' ? 'high' : (a.severity === 'MED' ? 'medium' : 'low');
+      return '<div class="gs-alert anomaly" data-ticker="' + a.ticker + '" data-type="' + a.type + '" data-severity="' + a.severity + '">' +
+        '<div class="alert-header">' +
+          '<span class="alert-ticker">' + a.ticker + '</span>' +
+          '<span class="alert-type">' + a.type + '</span>' +
+          '<span class="alert-severity ' + sevClass + '">' + a.severity + '</span>' +
+        '</div>' +
+        '<div class="alert-body">' + a.desc + '</div>' +
+        '<div class="alert-actions">' +
+          '<button class="alert-action-btn primary">Analyze Position</button>' +
+          '<button class="alert-action-btn">Set Alert</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    bindAlertClicks();
+  }
+
+  var valueTable = document.getElementById('gsValueTable');
+  if (valueTable) {
+    var html = '<div class="gvt-header"><span>Ticker</span><span>Fwd P/E</span><span>vs 5Y Avg</span><span>FCF Yield</span><span>Score</span><span>Conviction</span></div>';
+    html += data.values.map(function(v) {
+      var convClass = v.conviction === 'High' ? 'high' : (v.conviction === 'Med' ? 'medium' : 'low');
+      var vs5yClass = v.vs5y.indexOf('-') === 0 ? 'loss' : '';
+      var fcfClass = v.fcfYield.indexOf('-') === 0 ? 'loss' : 'profit';
+      return '<div class="gvt-row" data-ticker="' + v.ticker + '">' +
+        '<span class="gvt-ticker">' + v.ticker + '</span>' +
+        '<span>' + v.fwdPE + (v.fwdPE !== 'N/A' ? 'x' : '') + '</span>' +
+        '<span class="' + vs5yClass + '">' + v.vs5y + '</span>' +
+        '<span class="' + fcfClass + '">' + v.fcfYield + '</span>' +
+        '<span class="gvt-score">' + v.score + '</span>' +
+        '<span class="conviction ' + convClass + '">' + v.conviction + '</span>' +
+      '</div>';
+    }).join('');
+    valueTable.innerHTML = html;
+    bindValueRowClicks();
+  }
+}
+
+var gsView = document.getElementById('view-greysankore');
+if (gsView) {
+  var gsCapToggle = gsView.querySelector('.cap-toggle');
+  if (gsCapToggle) {
+    gsCapToggle.querySelectorAll('.cap-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var cap = btn.dataset.cap;
+        if (!cap) return;
+        gsCapToggle.querySelectorAll('.cap-btn').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        updateGSCapData(cap);
+      });
+    });
+  }
+}
+
+var overlay = document.getElementById('gsAnalysisOverlay');
+
+function openGSAnalysisModal(ticker, signalType, severity, capSize) {
+  if (!overlay) return;
+  var analysis = GS_TICKER_ANALYSIS[ticker];
+  if (!analysis) {
+    analysis = {
+      name: ticker, price: 'N/A', change: 'N/A', changeClass: 'profit',
+      bull: ['Detailed analysis not yet available for this ticker.', 'Check back after the next model scan cycle.'],
+      bear: ['No specific bearish thesis generated yet.'],
+      risks: [{ level: 'med', text: 'Limited data available for comprehensive risk assessment' }],
+      technicals: { support: 'N/A', resistance: 'N/A', rsi: 'N/A', macd: 'N/A', ma50: 'N/A', ma200: 'N/A' },
+      catalysts: [{ date: 'TBD', desc: 'Awaiting catalyst identification' }],
+      valuation: { fwdPE: 'N/A', evEbitda: 'N/A', peg: 'N/A', fcfYield: 'N/A', revGrowth: 'N/A', margin: 'N/A' }
+    };
+  }
+
+  var cap = capSize || currentGSCap;
+  document.getElementById('gsModalTicker').textContent = ticker;
+  document.getElementById('gsModalName').textContent = analysis.name;
+  document.getElementById('gsModalCapBadge').textContent = capLabels[cap] || 'Large Cap';
+  document.getElementById('gsModalPrice').textContent = analysis.price;
+  var changeEl = document.getElementById('gsModalChange');
+  changeEl.textContent = analysis.change;
+  changeEl.className = 'gs-modal-change ' + analysis.changeClass;
+
+  var signalEl = document.getElementById('gsModalSignal');
+  var sevClass = (severity === 'HIGH') ? 'high' : (severity === 'MED' ? 'medium' : 'low');
+  signalEl.innerHTML = '<span class="gs-modal-signal-type">' + (signalType || 'Analysis') + '</span>' +
+    '<span class="gs-modal-signal-severity ' + sevClass + '">' + (severity || 'INFO') + '</span>' +
+    '<span class="gs-modal-signal-confidence">Confidence: ' + (70 + Math.floor(Math.random() * 25)) + '%</span>';
+
+  var thesisHtml = '<ul>';
+  analysis.bull.forEach(function(b) { thesisHtml += '<li class="bull">' + b + '</li>'; });
+  analysis.bear.forEach(function(b) { thesisHtml += '<li class="bear">' + b + '</li>'; });
+  thesisHtml += '</ul>';
+  document.getElementById('gsModalThesis').innerHTML = thesisHtml;
+
+  var val = analysis.valuation;
+  var valMetrics = [
+    { label: 'Fwd P/E', value: val.fwdPE }, { label: 'EV/EBITDA', value: val.evEbitda },
+    { label: 'PEG Ratio', value: val.peg }, { label: 'FCF Yield', value: val.fcfYield },
+    { label: 'Rev Growth', value: val.revGrowth }, { label: 'Net Margin', value: val.margin }
+  ];
+  var valHtml = '';
+  valMetrics.forEach(function(m) {
+    valHtml += '<div class="gs-val-metric"><span class="gs-val-metric-label">' + m.label + '</span><span class="gs-val-metric-value">' + m.value + '</span></div>';
+  });
+  document.getElementById('gsModalValuation').innerHTML = valHtml;
+
+  var risksHtml = '';
+  analysis.risks.forEach(function(r) {
+    risksHtml += '<div class="gs-risk-item"><span class="gs-risk-level ' + r.level + '">' + r.level.toUpperCase() + '</span><span>' + r.text + '</span></div>';
+  });
+  document.getElementById('gsModalRisks').innerHTML = risksHtml;
+
+  var tech = analysis.technicals;
+  var techItems = [
+    { label: 'Support', value: tech.support }, { label: 'Resistance', value: tech.resistance },
+    { label: 'RSI (14)', value: tech.rsi }, { label: 'MACD', value: tech.macd },
+    { label: '50-Day MA', value: tech.ma50 }, { label: '200-Day MA', value: tech.ma200 }
+  ];
+  var techHtml = '';
+  techItems.forEach(function(t) {
+    techHtml += '<div class="gs-tech-item"><span class="gs-tech-label">' + t.label + '</span><span class="gs-tech-value">' + t.value + '</span></div>';
+  });
+  document.getElementById('gsModalTechnicals').innerHTML = techHtml;
+
+  var catHtml = '';
+  analysis.catalysts.forEach(function(c) {
+    catHtml += '<div class="gs-catalyst-item"><span class="gs-catalyst-date">' + c.date + '</span><span class="gs-catalyst-desc">' + c.desc + '</span></div>';
+  });
+  document.getElementById('gsModalCatalysts').innerHTML = catHtml;
+
+  drawModalChart(ticker, analysis);
+  overlay.classList.add('active');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeGSAnalysisModal() {
+  if (!overlay) return;
+  overlay.classList.remove('active');
+  document.body.style.overflow = '';
+}
+
+function drawModalChart(ticker, analysis) {
+  var canvas = document.getElementById('gsModalChart');
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var w = canvas.parentElement.offsetWidth - 20;
+  var h = 180;
+  canvas.width = w;
+  canvas.height = h;
+  ctx.clearRect(0, 0, w, h);
+
+  var basePrice = parseFloat(analysis.price.replace('$', '').replace(',', '')) || 100;
+  var points = [];
+  var price = basePrice * 0.88;
+  for (var i = 0; i < 90; i++) {
+    price += (Math.random() - 0.47) * basePrice * 0.02;
+    if (price < basePrice * 0.7) price = basePrice * 0.72;
+    if (price > basePrice * 1.2) price = basePrice * 1.18;
+    points.push(price);
+  }
+  points[89] = basePrice;
+
+  var min = Math.min.apply(null, points);
+  var max = Math.max.apply(null, points);
+  var range = max - min || 1;
+  var pad = { top: 10, right: 10, bottom: 20, left: 50 };
+  var cw = w - pad.left - pad.right;
+  var ch = h - pad.top - pad.bottom;
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+  ctx.lineWidth = 1;
+  for (var g = 0; g < 5; g++) {
+    var gy = pad.top + (ch / 4) * g;
+    ctx.beginPath(); ctx.moveTo(pad.left, gy); ctx.lineTo(w - pad.right, gy); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.font = '9px monospace'; ctx.textAlign = 'right';
+    ctx.fillText('$' + (max - (range / 4) * g).toFixed(1), pad.left - 5, gy + 3);
+  }
+
+  ctx.beginPath();
+  ctx.moveTo(pad.left, pad.top + ch - ((points[0] - min) / range) * ch);
+  for (var j = 1; j < points.length; j++) {
+    ctx.lineTo(pad.left + (j / (points.length - 1)) * cw, pad.top + ch - ((points[j] - min) / range) * ch);
+  }
+  ctx.lineTo(pad.left + cw, pad.top + ch); ctx.lineTo(pad.left, pad.top + ch); ctx.closePath();
+  var isProfit = points[89] >= points[0];
+  var grad = ctx.createLinearGradient(0, pad.top, 0, h);
+  grad.addColorStop(0, isProfit ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)');
+  grad.addColorStop(1, isProfit ? 'rgba(16,185,129,0.02)' : 'rgba(239,68,68,0.02)');
+  ctx.fillStyle = grad; ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(pad.left, pad.top + ch - ((points[0] - min) / range) * ch);
+  for (var k = 1; k < points.length; k++) {
+    ctx.lineTo(pad.left + (k / (points.length - 1)) * cw, pad.top + ch - ((points[k] - min) / range) * ch);
+  }
+  ctx.strokeStyle = isProfit ? '#10B981' : '#EF4444'; ctx.lineWidth = 1.5; ctx.stroke();
+
+  var lastX = pad.left + cw;
+  var lastY = pad.top + ch - ((points[89] - min) / range) * ch;
+  ctx.beginPath(); ctx.arc(lastX, lastY, 4, 0, Math.PI * 2);
+  ctx.fillStyle = isProfit ? '#10B981' : '#EF4444'; ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = 1; ctx.stroke();
+}
+
+function bindAlertClicks() {
+  var alertList = document.getElementById('gsAlertList');
+  if (!alertList) return;
+  alertList.querySelectorAll('.gs-alert').forEach(function(card) {
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.alert-action-btn')) return;
+      var ticker = card.dataset.ticker || (card.querySelector('.alert-ticker') ? card.querySelector('.alert-ticker').textContent : null);
+      var type = card.dataset.type || (card.querySelector('.alert-type') ? card.querySelector('.alert-type').textContent : null);
+      var severity = card.dataset.severity || (card.querySelector('.alert-severity') ? card.querySelector('.alert-severity').textContent : null);
+      if (ticker) openGSAnalysisModal(ticker, type, severity, currentGSCap);
+    });
+  });
+}
+
+function bindValueRowClicks() {
+  var valueTable = document.getElementById('gsValueTable');
+  if (!valueTable) return;
+  valueTable.querySelectorAll('.gvt-row').forEach(function(row) {
+    row.addEventListener('click', function() {
+      var ticker = row.dataset.ticker || (row.querySelector('.gvt-ticker') ? row.querySelector('.gvt-ticker').textContent : null);
+      if (ticker) openGSAnalysisModal(ticker, 'Value Opportunity', 'MED', currentGSCap);
+    });
+  });
+}
+
+bindAlertClicks();
+bindValueRowClicks();
+
+if (document.getElementById('gsModalClose')) {
+  document.getElementById('gsModalClose').addEventListener('click', closeGSAnalysisModal);
+}
+if (overlay) {
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) closeGSAnalysisModal(); });
+}
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && overlay && overlay.classList.contains('active')) closeGSAnalysisModal();
+});
+
+var addWatchBtn = document.getElementById('gsModalAddWatch');
+if (addWatchBtn) {
+  addWatchBtn.addEventListener('click', function() {
+    var ticker = document.getElementById('gsModalTicker').textContent;
+    if (typeof PortfolioManager !== 'undefined') {
+      var wl = PortfolioManager.getWatchlist();
+      if (wl.indexOf(ticker) === -1) { wl.push(ticker); PortfolioManager.saveWatchlist(wl); showToast(ticker + ' added to watchlist', 'success'); }
+      else { showToast(ticker + ' is already on your watchlist', 'info'); }
+    } else { showToast(ticker + ' added to watchlist', 'success'); }
+  });
+}
+
+var createSignalBtn = document.getElementById('gsModalCreateSignal');
+if (createSignalBtn) {
+  createSignalBtn.addEventListener('click', function() {
+    showToast('Signal created for ' + document.getElementById('gsModalTicker').textContent, 'success');
+  });
+}
+
+var journalNoteBtn = document.getElementById('gsModalJournalNote');
+if (journalNoteBtn) {
+  journalNoteBtn.addEventListener('click', function() {
+    var ticker = document.getElementById('gsModalTicker').textContent;
+    closeGSAnalysisModal();
+    var journalBtn = document.querySelector('[data-view="journal"]');
+    if (journalBtn) journalBtn.click();
+    showToast('Journal note started for ' + ticker, 'info');
+  });
+}
+
+var askAIBtn = document.getElementById('gsModalAskAI');
+if (askAIBtn) {
+  askAIBtn.addEventListener('click', function() {
+    var ticker = document.getElementById('gsModalTicker').textContent;
+    closeGSAnalysisModal();
+    var gsBtn = document.querySelector('[data-view="greysankore"]');
+    if (gsBtn) gsBtn.click();
+    setTimeout(function() {
+      var input = document.getElementById('gsChatInput');
+      if (input) { input.value = 'Give me a deep analysis on ' + ticker + ' - cover technicals, fundamentals, options flow, and your conviction level.'; input.focus(); }
+    }, 150);
+  });
+}
+
 })();

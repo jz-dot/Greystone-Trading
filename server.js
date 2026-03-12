@@ -159,6 +159,36 @@ function yahooFetch(urlPath) {
   });
 }
 
+// Ticker search / autocomplete
+app.get('/api/search', async function (req, res) {
+  var query = (req.query.q || '').trim();
+  if (!query || query.length < 1) {
+    return res.json({ quotes: [] });
+  }
+
+  var cacheKey = 'search:' + query.toLowerCase();
+  var cached = getCached(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    var data = await yahooFetch('/v1/finance/search?q=' + encodeURIComponent(query) + '&quotesCount=8&newsCount=0&listsCount=0');
+    var result = { quotes: (data.quotes || []).map(function(q) {
+      return {
+        symbol: q.symbol,
+        shortname: q.shortname || q.longname || '',
+        longname: q.longname || '',
+        quoteType: q.quoteType || 'Equity',
+        exchange: q.exchDisp || q.exchange || ''
+      };
+    })};
+    setCache(cacheKey, result);
+    res.json(result);
+  } catch (err) {
+    console.error('[API] Search error:', err.message);
+    res.json({ quotes: [] });
+  }
+});
+
 // Single quote
 app.get('/api/quote/:symbol', async function (req, res) {
   var symbol = req.params.symbol.toUpperCase();
@@ -1319,6 +1349,59 @@ app.get('/api/news', (req, res) => {
 });
 
 // ============================================
+// FUNDAMENTALS - Quote Summary Proxy
+// ============================================
+
+app.get('/api/fundamentals/:symbol', async function (req, res) {
+  var symbol = req.params.symbol.toUpperCase();
+  var cacheKey = 'fundamentals:' + symbol;
+  var cached = getCached(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    // Use v8 chart API for 52-week data + v6 quote for fundamentals
+    var chartData = await yahooFetch('/v8/finance/chart/' + encodeURIComponent(symbol) + '?interval=1d&range=1y');
+    var meta = (chartData.chart && chartData.chart.result && chartData.chart.result[0] && chartData.chart.result[0].meta) || {};
+    var closes = [];
+    try {
+      closes = chartData.chart.result[0].indicators.quote[0].close.filter(function(v) { return v !== null; });
+    } catch(e) {}
+    var high52 = closes.length ? Math.max.apply(null, closes) : null;
+    var low52 = closes.length ? Math.min.apply(null, closes) : null;
+
+    // Try v6 quote for additional data
+    var quoteData = {};
+    try {
+      var qResp = await yahooFetch('/v6/finance/quote?symbols=' + encodeURIComponent(symbol));
+      quoteData = (qResp.quoteResponse && qResp.quoteResponse.result && qResp.quoteResponse.result[0]) || {};
+    } catch(e) {
+      // v6 might also fail, use chart meta as fallback
+    }
+
+    var result = {
+      marketCap: quoteData.marketCap || null,
+      fiftyTwoWeekHigh: quoteData.fiftyTwoWeekHigh || high52,
+      fiftyTwoWeekLow: quoteData.fiftyTwoWeekLow || low52,
+      bid: quoteData.bid || null,
+      ask: quoteData.ask || null,
+      volume: quoteData.regularMarketVolume || meta.regularMarketVolume || null,
+      averageVolume: quoteData.averageDailyVolume10Day || null,
+      trailingPE: quoteData.trailingPE || null,
+      dividendYield: quoteData.dividendYield || quoteData.trailingAnnualDividendYield || null,
+      eps: quoteData.epsTrailingTwelveMonths || null,
+      beta: null, // not available in v6/v8
+      open: meta.regularMarketPrice || quoteData.regularMarketOpen || null,
+      previousClose: meta.chartPreviousClose || meta.previousClose || quoteData.regularMarketPreviousClose || null
+    };
+    setCache(cacheKey, result);
+    res.json(result);
+  } catch (err) {
+    console.error('[API] Fundamentals error for ' + symbol + ':', err.message);
+    res.status(502).json({ error: 'Failed to fetch fundamentals' });
+  }
+});
+
+// ============================================
 // STATIC FILES & SERVER START
 // ============================================
 
@@ -1334,6 +1417,7 @@ app.listen(PORT, function () {
   console.log('  Server running at http://localhost:' + PORT);
   console.log('');
   console.log('  Market Data:');
+  console.log('    GET /api/search?q=AAPL');
   console.log('    GET /api/quote/:symbol');
   console.log('    GET /api/quotes?symbols=AAPL,NVDA,...');
   console.log('    GET /api/chart/:symbol?interval=5m&range=1d');

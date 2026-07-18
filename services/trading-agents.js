@@ -17,6 +17,16 @@
    remains unvalidated. Use for learning the mechanics only.
    ============================================ */
 
+/* VALIDATION GATE (agents are gated before they can run)
+   ------------------------------------------------------
+   No agent starts without a passing backtest, and no agent runs in LIVE mode
+   without also being paper validated. The gate lives on TradingAgent:
+   setBacktestResult() records a conservative pass/fail, markPaperValidated()
+   records paper sign-off, canStart() reports whether the agent may run, and
+   start() REFUSES (does not enter the run loop) whenever canStart() is not ok.
+   Fail-closed: a fresh, failing, or malformed backtest leaves the agent blocked.
+   ============================================ */
+
 // --- Agent States ---
 const AgentState = {
   STOPPED: 'stopped',
@@ -61,6 +71,19 @@ class TradingAgent {
     // (also keeps the class constructable under Node for unit tests,
     // where the browser-global AlpacaClient does not exist).
     this.simulationMode = (typeof AlpacaClient === 'undefined') || !AlpacaClient.isConfigured();
+
+    // --- Validation gate state ---
+    // An agent is blocked from running until it has passed a backtest, and
+    // blocked from LIVE running until it is also paper validated. Fail-closed:
+    // these start false and only setBacktestResult() / markPaperValidated() flip
+    // them. backtestReasons holds the failed criteria from the last evaluation.
+    this.validation = {
+      backtested: false,
+      paperValidated: false,
+      backtestResult: null,
+      backtestReasons: [],
+    };
+    this.lastStartRefusal = null;
 
     // Risk guardrails
     this.maxPositionSize = config.maxPositionSize || 10000;
@@ -112,6 +135,80 @@ class TradingAgent {
     this._listeners = {};
   }
 
+  // --- Validation gate ---
+  // Shared contract with the backtest UI. The UI runs a backtest, hands the
+  // result to setBacktestResult(), optionally records paper validation, then
+  // uses canStart() / start(). These method names and return shapes are stable.
+
+  // Evaluate a backtest result (shape from services/backtest.js runBacktest)
+  // against a CONSERVATIVE pass gate and record the outcome. Passes only if ALL
+  // hold: numTrades >= 1, totalReturn > 0, annualizedSharpe > 0, and
+  // maxDrawdown <= 0.25 (25%). Any malformed / missing result fails closed.
+  // Returns { passed: boolean, reasons: string[] } where reasons lists the
+  // failed criteria (empty when passed).
+  setBacktestResult(result) {
+    if (!result || typeof result !== 'object') {
+      // Fail-closed: no usable result means the agent stays blocked.
+      this.validation.backtestResult = null;
+      this.validation.backtested = false;
+      this.validation.backtestReasons = ['No backtest result provided'];
+      this.warn('Backtest result rejected: missing or malformed result (fail-closed)');
+      this.emit('validationChange', this.validation);
+      return { passed: false, reasons: this.validation.backtestReasons.slice() };
+    }
+
+    const { numTrades, totalReturn, annualizedSharpe, maxDrawdown } = result;
+    const reasons = [];
+
+    if (!(typeof numTrades === 'number' && isFinite(numTrades) && numTrades >= 1)) {
+      reasons.push('numTrades must be >= 1');
+    }
+    if (!(typeof totalReturn === 'number' && isFinite(totalReturn) && totalReturn > 0)) {
+      reasons.push('totalReturn must be > 0');
+    }
+    if (!(typeof annualizedSharpe === 'number' && isFinite(annualizedSharpe) && annualizedSharpe > 0)) {
+      reasons.push('annualizedSharpe must be > 0');
+    }
+    if (!(typeof maxDrawdown === 'number' && isFinite(maxDrawdown) && maxDrawdown <= 0.25)) {
+      reasons.push('maxDrawdown must be <= 0.25 (25%)');
+    }
+
+    const passed = reasons.length === 0;
+    this.validation.backtestResult = result;
+    this.validation.backtested = passed;
+    this.validation.backtestReasons = reasons;
+
+    if (passed) {
+      this.info('Backtest PASSED validation gate. Agent is cleared to start.');
+    } else {
+      this.warn(`Backtest FAILED validation gate: ${reasons.join('; ')}`);
+    }
+    this.emit('validationChange', this.validation);
+    return { passed, reasons: reasons.slice() };
+  }
+
+  // Record paper-trading sign-off. Required before an agent may run LIVE.
+  markPaperValidated(v = true) {
+    this.validation.paperValidated = !!v;
+    this.info(`Paper validation ${this.validation.paperValidated ? 'recorded' : 'cleared'}.`);
+    this.emit('validationChange', this.validation);
+    return this.validation.paperValidated;
+  }
+
+  // Report whether the agent may start. Not ok unless it has passed a backtest.
+  // If the agent is in LIVE mode (not simulationMode) it must ALSO be paper
+  // validated. Returns { ok: boolean, reason?: string }.
+  canStart() {
+    if (!this.validation.backtested) {
+      return { ok: false, reason: 'Backtest required before this agent can run' };
+    }
+    const live = !this.simulationMode;
+    if (live && !this.validation.paperValidated) {
+      return { ok: false, reason: 'Paper validation required before live' };
+    }
+    return { ok: true };
+  }
+
   // --- Event system ---
   on(event, callback) {
     if (!this._listeners[event]) this._listeners[event] = [];
@@ -148,7 +245,24 @@ class TradingAgent {
   async start() {
     if (this.state === AgentState.RUNNING) return;
 
+    // Recompute live/sim mode FIRST, then gate, so the validation gate is always
+    // evaluated against the mode the agent is actually about to run in (a fresh
+    // live connection must not slip past a sim-mode gate check).
     this.simulationMode = (typeof AlpacaClient === 'undefined') || !AlpacaClient.isConfigured();
+
+    // Validation gate: no run without a passing backtest, no LIVE run without
+    // paper validation. Refuse observably instead of entering the run loop.
+    const gate = this.canStart();
+    if (!gate.ok) {
+      this.state = AgentState.ERROR;
+      this.lastStartRefusal = gate.reason;
+      this.error(`Refusing to start: ${gate.reason}`);
+      this.emit('startRefused', { id: this.id, reason: gate.reason });
+      this.emit('stateChange', this.state);
+      return { ok: false, reason: gate.reason };
+    }
+    this.lastStartRefusal = null;
+
     this.state = AgentState.RUNNING;
     this._startTime = Date.now();
 

@@ -9614,6 +9614,20 @@ const PortfolioManager = (function() {
           CsvIO.holdingsToCsv(PortfolioManager.getHoldings()));
       });
     }
+    const expTaxBtn = document.getElementById('pfExportTaxBtn');
+    if (expTaxBtn) {
+      expTaxBtn.addEventListener('click', () => {
+        if (typeof TaxReport === 'undefined') return;
+        const year = String(new Date().getFullYear());
+        const rows = TaxReport.buildDispositions(PortfolioManager.getPositions(), { year: year });
+        downloadCsv('gsp-schedule3-' + year + '.csv', TaxReport.dispositionsToCsv(rows));
+        downloadCsv('gsp-income-' + year + '.csv', TaxReport.incomeToCsv(PortfolioManager.getIncome(), { year: year }));
+        if (typeof showToast === 'function') {
+          const s = TaxReport.summarize(rows);
+          showToast(year + ' tax CSVs: ' + s.rowCount + ' disposition' + (s.rowCount === 1 ? '' : 's') + ', net ' + (s.totalGainCad >= 0 ? '+$' : '-$') + Math.abs(s.totalGainCad).toFixed(2) + ' CAD' + (s.approxCount ? ' (' + s.approxCount + ' approximate)' : ''), 'success');
+        }
+      });
+    }
     const expTxnBtn = document.getElementById('pfExportTxnsBtn');
     if (expTxnBtn) {
       expTxnBtn.addEventListener('click', () => {

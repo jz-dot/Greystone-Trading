@@ -1139,6 +1139,7 @@
           <div style="display:flex;align-items:center;gap:8px;">
             <button class="agent-btn" id="pfExportHoldingsBtn" style="font-size:10px;padding:3px 8px;" title="Download current holdings as CSV">Export Holdings</button>
             <button class="agent-btn" id="pfExportTxnsBtn" style="font-size:10px;padding:3px 8px;" title="Download the full transaction ledger as CSV (re-importable)">Export Transactions</button>
+            <button class="agent-btn" id="pfExportTaxBtn" style="font-size:10px;padding:3px 8px;" title="Schedule 3-style dispositions + income summary for this calendar year (CAD, transaction-date FX). Estimates, not tax advice.">Tax CSV</button>
             <span class="panel-subtitle" id="pfHoldingsCount">0 positions</span>
           </div>
         </div>
@@ -2983,6 +2984,7 @@
 <script src="services/csv-io.js"></script>
 <script src="services/fee-xray.js"></script>
 <script src="services/corporate-actions.js"></script>
+<script src="services/tax-report.js"></script>
 <script src="app.js"></script>
 <script src="services/auth-ui.js"></script>
 

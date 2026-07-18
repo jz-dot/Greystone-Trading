@@ -2883,6 +2883,10 @@
      so the Agents view can gate Start on a real passing backtest. -->
 <script src="services/risk-guardrails.js"></script>
 <script src="services/backtest.js"></script>
+<!-- Portfolio cloud sync + broker import must exist before app.js so the
+     tracker can sync on sign-in and normalize import previews. -->
+<script src="services/portfolio-sync.js"></script>
+<script src="services/broker-import.js"></script>
 <script src="app.js"></script>
 <script src="services/auth-ui.js"></script>
 

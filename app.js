@@ -8011,6 +8011,12 @@ const PortfolioManager = (function() {
   }
   function _save(key, data) {
     try { localStorage.setItem(key, JSON.stringify(data)); } catch(e) {}
+    // Any write to a synced slice stamps the local copy and schedules a cloud
+    // push (no-ops for guests and while a cloud document is being applied).
+    if (!applyingCloudDoc && SYNCED_KEYS.indexOf(key) !== -1) {
+      try { localStorage.setItem(META_KEY, JSON.stringify({ savedAt: new Date().toISOString() })); } catch(e) {}
+      scheduleCloudPush();
+    }
   }
 
   // ---- REAL QUOTES + MULTI-CURRENCY + ACB ----
@@ -8170,6 +8176,108 @@ const PortfolioManager = (function() {
     IWM:'ETF', DIA:'ETF', GLD:'Commodities', TLT:'Fixed Income'
   };
 
+  // ---- CLOUD SYNC (Supabase-backed, guest-safe) ----
+  // The tracker stays localStorage-first: guests lose nothing, and a signed-in
+  // user's account copy follows them across devices. Direction (push vs pull)
+  // is decided by the pure PortfolioSync.decide() table; when the account copy
+  // replaces a local copy that had data, the local copy is snapshotted to
+  // BACKUP_KEY first so nothing is ever silently destroyed.
+  const META_KEY = 'gs_portfolio_meta';
+  const BACKUP_KEY = 'gs_portfolio_presync_backup';
+  const SYNCED_KEYS = [STORAGE_KEY, REALIZED_KEY, ACTIVITY_KEY];
+  const PUSH_DEBOUNCE_MS = 2000;
+  let cloudPushTimer = null;
+  let cloudSyncBusy = false;
+  let applyingCloudDoc = false;
+
+  function canCloudSync() {
+    return typeof PortfolioSync !== 'undefined' &&
+           typeof SupabaseClient !== 'undefined' &&
+           SupabaseClient.isAuthenticated && SupabaseClient.isAuthenticated();
+  }
+
+  function localSavedAt() {
+    const meta = _load(META_KEY);
+    return (meta && meta.savedAt) || null;
+  }
+
+  function assembleCloudDoc() {
+    return PortfolioSync.buildDoc(
+      _load(STORAGE_KEY) || [],
+      _load(REALIZED_KEY) || [],
+      _load(ACTIVITY_KEY) || [],
+      localSavedAt() || new Date().toISOString()
+    );
+  }
+
+  function applyCloudDoc(doc) {
+    applyingCloudDoc = true;
+    try {
+      _save(STORAGE_KEY, doc.positions);
+      _save(REALIZED_KEY, doc.realized);
+      _save(ACTIVITY_KEY, doc.activity);
+      _save(META_KEY, { savedAt: doc.savedAt || new Date().toISOString() });
+    } finally {
+      applyingCloudDoc = false;
+    }
+    document.dispatchEvent(new CustomEvent('gs:portfolio-synced'));
+  }
+
+  function scheduleCloudPush() {
+    if (!canCloudSync()) return;
+    if (cloudPushTimer) clearTimeout(cloudPushTimer);
+    cloudPushTimer = setTimeout(pushToCloud, PUSH_DEBOUNCE_MS);
+  }
+
+  async function pushToCloud() {
+    if (!canCloudSync()) return false;
+    if (cloudPushTimer) { clearTimeout(cloudPushTimer); cloudPushTimer = null; }
+    try {
+      const res = await SupabaseClient.fetchWithAuth('/api/user/portfolio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(assembleCloudDoc())
+      });
+      return res.ok;
+    } catch (e) {
+      console.warn('[PortfolioSync] push failed:', e);
+      return false;
+    }
+  }
+
+  async function syncFromCloud() {
+    if (!canCloudSync() || cloudSyncBusy) return;
+    cloudSyncBusy = true;
+    try {
+      const res = await SupabaseClient.fetchWithAuth('/api/user/portfolio');
+      if (!res.ok) return;
+      const body = await res.json();
+      const remoteDoc = body && body.data;
+      const remoteValid = !!(remoteDoc && PortfolioSync.isValidDoc(remoteDoc));
+      const localDoc = assembleCloudDoc();
+      const decision = PortfolioSync.decide(
+        { savedAt: localSavedAt(), hasData: PortfolioSync.hasContent(localDoc) },
+        {
+          savedAt: remoteValid ? (remoteDoc.savedAt || body.updated_at) : null,
+          hasData: remoteValid && PortfolioSync.hasContent(remoteDoc)
+        }
+      );
+      if (decision.action === 'pull') {
+        if (decision.backupLocal) {
+          _save(BACKUP_KEY, { backedUpAt: new Date().toISOString(), doc: localDoc });
+        }
+        applyCloudDoc(remoteDoc);
+        if (typeof showToast === 'function') showToast('Portfolio loaded from your account', 'success');
+      } else if (decision.action === 'push') {
+        await pushToCloud();
+      }
+    } catch (e) {
+      console.warn('[PortfolioSync] sync failed:', e);
+    } finally {
+      cloudSyncBusy = false;
+    }
+  }
+
   return {
     getPositions: function() { return _load(STORAGE_KEY) || []; },
     savePositions: function(positions) { _save(STORAGE_KEY, positions); },
@@ -8179,6 +8287,9 @@ const PortfolioManager = (function() {
     getUsdCadRate: getUsdCadRate,
     getBaseCurrency: function() { return BASE_CURRENCY; },
     inferCurrency: inferCurrency,
+
+    syncFromCloud: syncFromCloud,
+    pushToCloud: pushToCloud,
 
     // opts: { currency, fxRate, commission, date }
     addPosition: function(sym, shares, avgCost, opts) {
@@ -8344,6 +8455,23 @@ const PortfolioManager = (function() {
     getNameMap: function() { return nameMap; },
     getSectorMap: function() { return sectorMap; }
   };
+})();
+
+// Kick off portfolio cloud sync when a session appears. app.js loads before
+// auth-ui.js calls SupabaseClient.init(), so this listener is registered in
+// time to catch the initial session event. One sync per session; sign-out
+// re-arms it.
+(function initPortfolioCloudSync() {
+  if (typeof SupabaseClient === 'undefined' || !SupabaseClient.onAuthChange) return;
+  let syncedThisSession = false;
+  SupabaseClient.onAuthChange(function(event, session) {
+    if (event === 'SIGNED_OUT') { syncedThisSession = false; return; }
+    const signedIn = (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') && session;
+    if (signedIn && !syncedThisSession) {
+      syncedThisSession = true;
+      PortfolioManager.syncFromCloud();
+    }
+  });
 })();
 
 
@@ -8983,6 +9111,15 @@ const PortfolioManager = (function() {
     btn.addEventListener('click', () => {
       setTimeout(origNavHandler, 50);
     });
+  });
+
+  // A cloud pull replaced the local copy: re-render if the view is open.
+  document.addEventListener('gs:portfolio-synced', () => {
+    const activeView = document.querySelector('.view.active');
+    if (activeView && activeView.id === 'view-portfolio') {
+      portfolioLoaded = true;
+      renderPortfolio();
+    }
   });
 })();
 

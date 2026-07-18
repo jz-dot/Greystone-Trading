@@ -5222,3 +5222,220 @@ kbd {
   content: "\25BC";  /* down triangle */
   margin-right: 4px; font-size: 0.72em; vertical-align: middle;
 }
+
+/* ============================================================
+   ORDER TICKET + GLOBAL KILL SWITCH (Wave 2 safety foundation)
+   Paper-first, explicit-confirm trading UI. Tokens only.
+   ============================================================ */
+
+/* --- Global kill switch (topbar) --- */
+.kill-switch-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 14px;
+  background: var(--loss-bg);
+  border: 1px solid var(--loss);
+  border-radius: var(--radius-sm);
+  color: var(--loss);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+  cursor: pointer; transition: var(--transition);
+  text-transform: uppercase; white-space: nowrap;
+}
+.kill-switch-btn:hover { background: var(--loss); color: #fff; }
+.kill-switch-btn.halted {
+  background: var(--loss); color: #fff;
+  border-color: var(--loss);
+  animation: killPulse 1.6s ease-in-out infinite;
+}
+@keyframes killPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
+  50% { box-shadow: 0 0 0 5px rgba(239, 68, 68, 0); }
+}
+
+/* --- Halt banner (below topbar) --- */
+.halt-banner {
+  background: var(--loss);
+  border-bottom: 1px solid var(--loss);
+  z-index: var(--z-sticky);
+}
+.halt-banner-inner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 16px;
+  color: #fff; font-size: 12px;
+}
+.halt-banner-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #fff; box-shadow: 0 0 8px rgba(255,255,255,0.8);
+  animation: pulse 1.4s infinite; flex-shrink: 0;
+}
+.halt-banner-text { flex: 1; letter-spacing: 0.02em; }
+.halt-banner-resume {
+  background: #fff; color: var(--loss);
+  border: none; border-radius: var(--radius-sm);
+  padding: 5px 14px; font-size: 11px; font-weight: 700;
+  letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer;
+  transition: var(--transition);
+}
+.halt-banner-resume:hover { background: rgba(255,255,255,0.85); }
+
+/* --- Chart-area trade affordance --- */
+.chart-trade-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 12px;
+  background: var(--accent-gold);
+  border: none; border-radius: var(--radius-sm);
+  color: var(--text-on-accent);
+  font-size: 11px; font-weight: 600; cursor: pointer;
+  transition: var(--transition); margin-right: 8px;
+}
+.chart-trade-btn:hover { background: var(--gold-hover); }
+
+/* --- Holdings row trade button --- */
+.pf-table .pf-action-btn.trade { color: var(--accent-gold); border-color: var(--gold-a30); }
+.pf-table .pf-action-btn.trade:hover { color: var(--text-on-accent); background: var(--accent-gold); border-color: var(--accent-gold); }
+
+/* --- Order ticket modal --- */
+.ot-modal .modal-body { display: flex; flex-direction: column; gap: 14px; }
+
+/* Mode toggle (paper default / live disabled) */
+.ot-mode-toggle {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+}
+.ot-mode-btn {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: 10px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer; transition: var(--transition); text-align: left;
+}
+.ot-mode-btn .ot-mode-label { font-size: 13px; font-weight: 700; letter-spacing: 0.06em; color: var(--text-primary); }
+.ot-mode-btn .ot-mode-sub { font-size: 10px; color: var(--text-muted); }
+.ot-mode-btn.active {
+  border-color: var(--profit);
+  background: var(--profit-bg);
+}
+.ot-mode-btn.active .ot-mode-label { color: var(--profit-strong); }
+.ot-mode-btn.disabled {
+  cursor: not-allowed; opacity: 0.55;
+}
+.ot-mode-btn.disabled:hover { border-color: var(--border); }
+.ot-live-note {
+  font-size: 11px; color: var(--text-muted); line-height: 1.4;
+  margin-top: -6px;
+}
+
+/* Halt warning inside ticket */
+.ot-halt-warn {
+  padding: 8px 12px;
+  background: var(--loss-bg);
+  border: 1px solid var(--loss);
+  border-radius: var(--radius-sm);
+  color: var(--loss); font-size: 12px; font-weight: 600;
+}
+
+/* Ticket form */
+.ot-form { display: flex; flex-direction: column; gap: 12px; }
+.ot-field { display: flex; flex-direction: column; gap: 5px; }
+.ot-field label {
+  font-size: 11px; font-weight: 500; color: var(--text-secondary);
+  letter-spacing: 0.5px; text-transform: uppercase;
+}
+.ot-field input {
+  width: 100%; padding: 10px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-sans); font-size: 13px;
+  outline: none; transition: border-color 0.2s ease; box-sizing: border-box;
+}
+.ot-field input:focus { border-color: var(--accent-gold); }
+.ot-field input::placeholder { color: var(--text-dim); }
+
+/* Segmented controls */
+.ot-seg {
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px;
+  background: var(--bg-tertiary); padding: 3px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+.ot-seg-btn {
+  padding: 7px 10px; border: none; background: transparent;
+  color: var(--text-muted); font-size: 12px; font-weight: 600;
+  border-radius: 4px; cursor: pointer; transition: var(--transition);
+}
+.ot-seg-btn:hover { color: var(--text-secondary); }
+.ot-seg-btn.active { background: var(--bg-elevated); color: var(--text-primary); }
+.ot-seg-btn.buy.active { background: var(--profit-bg); color: var(--profit-strong); }
+.ot-seg-btn.sell.active { background: var(--loss-bg); color: var(--loss); }
+
+/* Estimate block */
+.ot-estimate {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;
+}
+.ot-est-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 12px; color: var(--text-secondary);
+}
+.ot-est-row span:last-child { color: var(--text-primary); font-weight: 600; font-family: var(--font-mono); }
+.ot-bp-check { font-size: 11px; font-weight: 600; min-height: 14px; }
+.ot-bp-check.ok { color: var(--profit); }
+.ot-bp-check.bad { color: var(--loss); }
+
+/* Confirm summary */
+.ot-confirm {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--gold-a30);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+}
+.ot-confirm-badge {
+  display: inline-block; padding: 3px 10px; margin-bottom: 10px;
+  background: var(--gold-a15); color: var(--accent-gold);
+  border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
+}
+.ot-confirm-summary { display: flex; flex-direction: column; gap: 6px; }
+.ot-sum-line { font-size: 13px; color: var(--text-secondary); }
+.ot-sum-line strong { color: var(--text-primary); }
+.ot-confirm-note { margin-top: 10px; font-size: 11px; color: var(--text-muted); }
+.ot-confirm-btn { background: var(--profit) !important; color: #fff !important; }
+.ot-confirm-btn:hover { background: var(--profit-strong) !important; }
+.ot-confirm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+#otReviewBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Paper account panel */
+.ot-account {
+  border-top: 1px solid var(--border);
+  padding-top: 12px; display: flex; flex-direction: column; gap: 10px;
+}
+.ot-account-head { display: flex; align-items: center; justify-content: space-between; }
+.ot-account-title { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-secondary); }
+.ot-reset-btn {
+  background: transparent; border: 1px solid var(--border);
+  border-radius: 4px; padding: 3px 10px;
+  color: var(--text-muted); font-size: 10px; cursor: pointer; transition: var(--transition);
+}
+.ot-reset-btn:hover { color: var(--loss); border-color: var(--loss); }
+.ot-account-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.ot-acct-tile {
+  background: var(--bg-tertiary); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 3px;
+}
+.ot-acct-label { font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+.ot-acct-val { font-size: 13px; font-weight: 600; color: var(--text-primary); font-family: var(--font-mono); }
+.ot-positions { display: flex; flex-direction: column; gap: 4px; }
+.ot-pos-row {
+  display: grid; grid-template-columns: 1fr 0.6fr 1fr 1fr; gap: 6px; align-items: baseline;
+  padding: 5px 8px; background: var(--bg-tertiary); border-radius: 4px;
+  font-size: 11px; color: var(--text-secondary);
+}
+.ot-pos-sym { font-weight: 600; color: var(--text-primary); }
+.ot-pos-qty { text-align: right; font-family: var(--font-mono); }
+.ot-pos-mv { text-align: right; font-family: var(--font-mono); color: var(--text-primary); }
+.ot-pos-pnl { text-align: right; font-family: var(--font-mono); font-weight: 600; }
+.ot-pos-pnl.profit { color: var(--profit); }
+.ot-pos-pnl.loss { color: var(--loss); }
+.ot-acct-note { font-size: 11px; color: var(--text-muted); padding: 4px 0; }

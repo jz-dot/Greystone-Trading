@@ -8224,11 +8224,20 @@ const PortfolioManager = (function() {
         <td class="pf-right ${plCls}">${fmtPct(h.plPct)}</td>
         <td class="pf-right">${h.weight.toFixed(1)}%</td>
         <td class="pf-right"><div class="pf-actions-cell">
+          <button class="pf-action-btn trade" data-sym="${h.symbol}" title="Open the order ticket (paper)">Trade</button>
           <button class="pf-action-btn sell" data-sym="${h.symbol}" title="Sell / record disposition">Sell</button>
           <button class="pf-action-btn delete" data-sym="${h.symbol}" title="Remove (forget entry, no realized gain)">&#x2715;</button>
         </div></td>
       </tr>`;
     }).join('');
+
+    // Trade buttons (open the paper order ticket for this symbol)
+    tbody.querySelectorAll('.pf-action-btn.trade').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (typeof window.openOrderTicket === 'function') window.openOrderTicket(btn.dataset.sym, 'buy');
+      });
+    });
 
     // Sell buttons
     tbody.querySelectorAll('.pf-action-btn.sell').forEach(btn => {
@@ -9748,4 +9757,457 @@ if (askAIBtn) {
   });
 }
 
+})();
+
+/* ============================================
+   MANUAL ORDER TICKET + GLOBAL KILL SWITCH
+   Paper trading is the default. Every order has an explicit confirm step.
+   The kill switch is always visible and halts new orders + pauses agents.
+   All /api/paper/* requests carry a stable per-browser X-Session-Id.
+   ============================================ */
+(function initOrderTicket() {
+  var PAPER_BASE = '/api/paper';
+  var SESSION_KEY = 'gs_paper_session';
+  var HALT_KEY = 'gs_trading_halted';
+
+  // ---- session id (stable per browser) ----
+  function sessionId() {
+    var id = '';
+    try { id = localStorage.getItem(SESSION_KEY) || ''; } catch (e) {}
+    if (!id) {
+      id = 'gsp-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+      try { localStorage.setItem(SESSION_KEY, id); } catch (e) {}
+    }
+    return id;
+  }
+
+  function paperFetch(path, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign(
+      { 'Content-Type': 'application/json', 'X-Session-Id': sessionId() },
+      opts.headers || {}
+    );
+    return fetch(PAPER_BASE + path, opts);
+  }
+
+  function toast(msg, type) {
+    if (typeof showToast === 'function') showToast(msg, type || 'info');
+  }
+
+  // ---- state ----
+  var currentSide = 'buy';
+  var currentType = 'market';
+  var reviewMode = false;
+  var lastAccount = null;
+
+  // ---- helpers ----
+  function money(v, ccy) {
+    if (v == null || isNaN(v)) return '-';
+    var s = (v < 0 ? '-' : '') + '$' + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return ccy ? s + ' ' + ccy : s;
+  }
+
+  function activeChartSymbol() {
+    try { if (typeof currentChartSymbol !== 'undefined' && currentChartSymbol) return String(currentChartSymbol).toUpperCase(); } catch (e) {}
+    return '';
+  }
+
+  function inferCcy(sym) {
+    if (typeof PortfolioManager !== 'undefined' && PortfolioManager && typeof PortfolioManager.inferCurrency === 'function') {
+      try { return PortfolioManager.inferCurrency(sym); } catch (e) {}
+    }
+    return (lastAccount && lastAccount.currency) || 'USD';
+  }
+
+  // Reference price for the estimate line. Honest: limit price when set,
+  // else the live chart close for the active symbol, else a known position
+  // price, else null (we then show "~market" without a fabricated number).
+  function referencePrice(sym) {
+    sym = (sym || '').toUpperCase();
+    if (currentType === 'limit') {
+      var lp = parseFloat((document.getElementById('otLimitPrice') || {}).value);
+      if (lp > 0) return lp;
+      return null;
+    }
+    try {
+      if (typeof currentChartSymbol !== 'undefined' && currentChartSymbol &&
+          String(currentChartSymbol).toUpperCase() === sym &&
+          typeof currentChartCandles !== 'undefined' && Array.isArray(currentChartCandles) && currentChartCandles.length) {
+        var last = currentChartCandles[currentChartCandles.length - 1];
+        if (last && last.close > 0) return last.close;
+      }
+    } catch (e) {}
+    if (lastAccount && Array.isArray(lastAccount.positions)) {
+      var p = lastAccount.positions.find(function (x) { return String(x.symbol || '').toUpperCase() === sym; });
+      if (p && p.qty) {
+        if (p.marketValue) return Math.abs(p.marketValue / p.qty);
+        if (p.avgCost) return p.avgCost;
+      }
+    }
+    return null;
+  }
+
+  function estimateCost(qty, px, ccy) {
+    if (typeof FeeModel === 'undefined' || !(qty > 0) || !(px > 0)) return null;
+    try {
+      var acctCcy = 'CAD';
+      if (typeof PortfolioManager !== 'undefined' && PortfolioManager && typeof PortfolioManager.getBaseCurrency === 'function') {
+        acctCcy = PortfolioManager.getBaseCurrency();
+      }
+      var results = FeeModel.compareBrokers({ quantity: qty, price: px, currency: ccy, accountCurrency: acctCcy });
+      if (results && results.length) return results[0].total;
+    } catch (e) {}
+    return null;
+  }
+
+  // ---- halt (kill switch) ----
+  function isHalted() {
+    try { return localStorage.getItem(HALT_KEY) === '1'; } catch (e) { return false; }
+  }
+
+  function applyHaltState() {
+    var halted = isHalted();
+    var btn = document.getElementById('killSwitchBtn');
+    if (btn) {
+      btn.classList.toggle('halted', halted);
+      btn.textContent = halted ? 'HALTED - RESUME' : 'HALT';
+      btn.title = halted ? 'Trading halted - click to resume' : 'Halt all trading immediately';
+    }
+    var banner = document.getElementById('haltBanner');
+    if (banner) banner.style.display = halted ? 'block' : 'none';
+    var warn = document.getElementById('otHaltWarn');
+    if (warn) warn.style.display = halted ? 'block' : 'none';
+    var reviewBtn = document.getElementById('otReviewBtn');
+    if (reviewBtn) reviewBtn.disabled = halted;
+    var confirmBtn = document.getElementById('otConfirmBtn');
+    if (confirmBtn) confirmBtn.disabled = halted;
+  }
+
+  function setHalt(halted) {
+    try { localStorage.setItem(HALT_KEY, halted ? '1' : '0'); } catch (e) {}
+    if (halted) {
+      // Stop the simulated agents if the manager is loaded.
+      if (typeof AgentManager !== 'undefined' && AgentManager && typeof AgentManager.pauseAll === 'function') {
+        try { AgentManager.pauseAll(); } catch (e) {}
+      }
+    }
+    applyHaltState();
+  }
+
+  function onKillSwitch() {
+    if (!isHalted()) {
+      var ok = (typeof confirm === 'function')
+        ? confirm('HALT ALL TRADING?\n\nThis blocks new orders from the ticket and pauses all simulated agents. You can resume at any time.')
+        : true;
+      if (!ok) return;
+      setHalt(true);
+      toast('Trading halted. New orders blocked and agents paused.', 'error');
+    } else {
+      var ok2 = (typeof confirm === 'function')
+        ? confirm('Resume trading?\n\nThis releases the global halt. New paper orders will be allowed again.')
+        : true;
+      if (!ok2) return;
+      setHalt(false);
+      toast('Halt released. Trading resumed.', 'success');
+    }
+  }
+
+  // ---- form <-> confirm views ----
+  function showFormView() {
+    reviewMode = false;
+    var form = document.getElementById('otForm');
+    var conf = document.getElementById('otConfirm');
+    if (form) form.style.display = '';
+    if (conf) conf.style.display = 'none';
+    var reviewBtn = document.getElementById('otReviewBtn');
+    var confirmBtn = document.getElementById('otConfirmBtn');
+    var backBtn = document.getElementById('otBackBtn');
+    if (reviewBtn) reviewBtn.style.display = '';
+    if (confirmBtn) { confirmBtn.style.display = 'none'; confirmBtn.textContent = 'Confirm PAPER order'; }
+    if (backBtn) backBtn.style.display = 'none';
+    applyHaltState();
+  }
+
+  function showConfirmView(summaryHtml) {
+    reviewMode = true;
+    var form = document.getElementById('otForm');
+    var conf = document.getElementById('otConfirm');
+    var sumEl = document.getElementById('otConfirmSummary');
+    if (sumEl) sumEl.innerHTML = summaryHtml;
+    if (form) form.style.display = 'none';
+    if (conf) conf.style.display = 'block';
+    var reviewBtn = document.getElementById('otReviewBtn');
+    var confirmBtn = document.getElementById('otConfirmBtn');
+    var backBtn = document.getElementById('otBackBtn');
+    if (reviewBtn) reviewBtn.style.display = 'none';
+    if (confirmBtn) confirmBtn.style.display = '';
+    if (backBtn) backBtn.style.display = '';
+    applyHaltState();
+  }
+
+  // ---- segmented controls ----
+  function setSide(side) {
+    currentSide = (side === 'sell') ? 'sell' : 'buy';
+    var seg = document.getElementById('otSideSeg');
+    if (seg) seg.querySelectorAll('.ot-seg-btn').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.side === currentSide);
+    });
+    recalc();
+  }
+
+  function setType(type) {
+    currentType = (type === 'limit') ? 'limit' : 'market';
+    var seg = document.getElementById('otTypeSeg');
+    if (seg) seg.querySelectorAll('.ot-seg-btn').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.type === currentType);
+    });
+    var lf = document.getElementById('otLimitField');
+    if (lf) lf.style.display = (currentType === 'limit') ? '' : 'none';
+    recalc();
+  }
+
+  // ---- live estimate ----
+  function recalc() {
+    var symEl = document.getElementById('otSymbol');
+    var sym = ((symEl || {}).value || '').trim().toUpperCase();
+    var qty = parseFloat((document.getElementById('otQty') || {}).value);
+    var px = referencePrice(sym);
+    var ccy = inferCcy(sym);
+
+    var value = (qty > 0 && px > 0) ? qty * px : null;
+    var cost = estimateCost(qty, px, ccy);
+
+    var estValueEl = document.getElementById('otEstValue');
+    if (estValueEl) {
+      if (value != null) estValueEl.textContent = money(value, ccy) + (currentType === 'market' ? ' (~market)' : '');
+      else estValueEl.textContent = (currentType === 'market') ? 'at ~market' : '-';
+    }
+    var estCostEl = document.getElementById('otEstCost');
+    if (estCostEl) estCostEl.textContent = (cost != null) ? money(cost, ccy) : '-';
+
+    var bp = (lastAccount && typeof lastAccount.buyingPower === 'number') ? lastAccount.buyingPower : null;
+    var bpEl = document.getElementById('otBpValue');
+    if (bpEl) bpEl.textContent = (bp != null) ? money(bp, (lastAccount && lastAccount.currency) || ccy) : '-';
+
+    var chk = document.getElementById('otBpCheck');
+    if (chk) {
+      chk.textContent = '';
+      chk.className = 'ot-bp-check';
+      if (currentSide === 'buy' && value != null && bp != null) {
+        var need = value + (cost || 0);
+        if (need > bp) {
+          chk.textContent = 'Exceeds paper buying power by ' + money(need - bp, (lastAccount && lastAccount.currency) || ccy);
+          chk.classList.add('bad');
+        } else {
+          chk.textContent = 'Within paper buying power';
+          chk.classList.add('ok');
+        }
+      }
+    }
+  }
+
+  // ---- paper account panel ----
+  function renderAccount(a) {
+    var cashEl = document.getElementById('otAcctCash');
+    var eqEl = document.getElementById('otAcctEquity');
+    var bpEl = document.getElementById('otAcctBp');
+    var ccy = (a && a.currency) || 'USD';
+    if (cashEl) cashEl.textContent = (a && typeof a.cash === 'number') ? money(a.cash, ccy) : '-';
+    if (eqEl) eqEl.textContent = (a && typeof a.equity === 'number') ? money(a.equity, ccy) : '-';
+    if (bpEl) bpEl.textContent = (a && typeof a.buyingPower === 'number') ? money(a.buyingPower, ccy) : '-';
+
+    var posWrap = document.getElementById('otPositions');
+    if (!posWrap) return;
+    var positions = (a && Array.isArray(a.positions)) ? a.positions : [];
+    if (!positions.length) {
+      posWrap.innerHTML = '<div class="ot-acct-note">No open paper positions.</div>';
+      return;
+    }
+    posWrap.innerHTML = positions.map(function (p) {
+      var pnl = (typeof p.unrealizedPnl === 'number') ? p.unrealizedPnl : null;
+      var pnlCls = (pnl != null && pnl < 0) ? 'loss' : 'profit';
+      var mv = (typeof p.marketValue === 'number') ? money(p.marketValue, ccy) : '-';
+      return '<div class="ot-pos-row">' +
+        '<span class="ot-pos-sym">' + String(p.symbol || '').toUpperCase() + '</span>' +
+        '<span class="ot-pos-qty">' + (Number(p.qty) || 0) + '</span>' +
+        '<span class="ot-pos-mv">' + mv + '</span>' +
+        '<span class="ot-pos-pnl ' + pnlCls + '">' + (pnl != null ? (pnl >= 0 ? '+' : '') + money(pnl, '') : '-') + '</span>' +
+        '</div>';
+    }).join('');
+  }
+
+  function renderAccountError() {
+    lastAccount = null;
+    var posWrap = document.getElementById('otPositions');
+    if (posWrap) posWrap.innerHTML = '<div class="ot-acct-note">Paper account unavailable. The trading server may not be running.</div>';
+    ['otAcctCash', 'otAcctEquity', 'otAcctBp', 'otBpValue'].forEach(function (id) {
+      var el = document.getElementById(id); if (el) el.textContent = '-';
+    });
+  }
+
+  function refreshAccount() {
+    return paperFetch('/account', { method: 'GET' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (a) {
+        if (a) { lastAccount = a; renderAccount(a); recalc(); }
+        else renderAccountError();
+      })
+      .catch(function () { renderAccountError(); });
+  }
+
+  // ---- validation + summary ----
+  function validate() {
+    var sym = ((document.getElementById('otSymbol') || {}).value || '').trim().toUpperCase();
+    var qty = parseFloat((document.getElementById('otQty') || {}).value);
+    if (!sym) return { ok: false, msg: 'Enter a symbol.' };
+    if (!(qty > 0)) return { ok: false, msg: 'Enter a quantity greater than zero.' };
+    if (currentType === 'limit') {
+      var lp = parseFloat((document.getElementById('otLimitPrice') || {}).value);
+      if (!(lp > 0)) return { ok: false, msg: 'Enter a limit price greater than zero.' };
+    }
+    return { ok: true, sym: sym, qty: qty };
+  }
+
+  function buildBody() {
+    var sym = ((document.getElementById('otSymbol') || {}).value || '').trim().toUpperCase();
+    var qty = parseFloat((document.getElementById('otQty') || {}).value);
+    var body = { symbol: sym, side: currentSide, qty: qty, type: currentType };
+    if (currentType === 'limit') body.limitPrice = parseFloat((document.getElementById('otLimitPrice') || {}).value);
+    return body;
+  }
+
+  function onReview() {
+    if (isHalted()) { toast('Trading is halted. Release the global halt to place orders.', 'error'); return; }
+    var v = validate();
+    if (!v.ok) { toast(v.msg, 'error'); return; }
+    var ccy = inferCcy(v.sym);
+    var px = referencePrice(v.sym);
+    var value = (px > 0) ? v.qty * px : null;
+    var cost = estimateCost(v.qty, px, ccy);
+    var priceStr = (currentType === 'limit')
+      ? ('at limit ' + money(px, ccy))
+      : '@ ~market' + (px > 0 ? ' (~' + money(px, ccy) + ')' : '');
+    var lines = [];
+    lines.push('<strong>' + (currentSide === 'buy' ? 'Buy' : 'Sell') + ' ' + v.qty + ' ' + v.sym + '</strong> ' + priceStr);
+    if (value != null) lines.push('Est. order value: ' + money(value, ccy));
+    if (cost != null) lines.push('Est. cost to trade: ' + money(cost, ccy));
+    lines.push('Mode: <strong>PAPER</strong> (simulated)');
+    showConfirmView(lines.map(function (l) { return '<div class="ot-sum-line">' + l + '</div>'; }).join(''));
+  }
+
+  function onConfirm() {
+    if (isHalted()) { toast('Trading is halted. Order refused.', 'error'); return; }
+    var v = validate();
+    if (!v.ok) { toast(v.msg, 'error'); showFormView(); return; }
+    var body = buildBody();
+    var btn = document.getElementById('otConfirmBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Placing...'; }
+    paperFetch('/order', { method: 'POST', body: JSON.stringify(body) })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        var j = res.j || {};
+        if (res.ok && j.status && j.status !== 'rejected') {
+          if (j.account) { lastAccount = j.account; renderAccount(j.account); }
+          var costStr = (j.cost && typeof j.cost.total === 'number') ? (' - cost ' + money(j.cost.total, (j.account && j.account.currency) || '')) : '';
+          var fillStr = (typeof j.fillPrice === 'number' && j.fillPrice > 0) ? (' @ ' + money(j.fillPrice)) : '';
+          var verb = (j.status === 'filled') ? 'filled' : 'working';
+          toast('PAPER ' + verb + ': ' + body.side + ' ' + body.qty + ' ' + body.symbol + fillStr + costStr, (j.status === 'filled') ? 'success' : 'info');
+          closeModal('orderTicketModal');
+          refreshAccount();
+        } else {
+          toast('PAPER order rejected: ' + (j.message || 'unknown reason'), 'error');
+        }
+      })
+      .catch(function () {
+        toast('Could not reach the paper trading server. Order not placed.', 'error');
+      })
+      .then(function () {
+        if (btn) { btn.disabled = isHalted(); btn.textContent = 'Confirm PAPER order'; }
+      });
+  }
+
+  function onReset() {
+    var ok = (typeof confirm === 'function')
+      ? confirm('Reset the paper account to its starting cash? This clears all simulated positions and orders.')
+      : true;
+    if (!ok) return;
+    paperFetch('/reset', { method: 'POST', body: JSON.stringify({}) })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (j && j.ok && j.account) {
+          lastAccount = j.account; renderAccount(j.account); recalc();
+          toast('Paper account reset.', 'success');
+        } else {
+          toast('Reset failed.', 'error');
+        }
+      })
+      .catch(function () { toast('Could not reach the paper trading server.', 'error'); });
+  }
+
+  // ---- public open ----
+  function openOrderTicket(symbol, side) {
+    showFormView();
+    var symEl = document.getElementById('otSymbol');
+    if (symEl) symEl.value = (symbol || activeChartSymbol() || '').toUpperCase();
+    setSide(side === 'sell' ? 'sell' : 'buy');
+    setType('market');
+    var qtyEl = document.getElementById('otQty'); if (qtyEl) qtyEl.value = '';
+    var lpEl = document.getElementById('otLimitPrice'); if (lpEl) lpEl.value = '';
+    applyHaltState();
+    recalc();
+    refreshAccount();
+    if (typeof openModal === 'function') openModal('orderTicketModal');
+    if (symEl && !symEl.value) symEl.focus();
+    else if (qtyEl) qtyEl.focus();
+  }
+  window.openOrderTicket = openOrderTicket;
+
+  // ---- wiring (deferred: the modal lives after the app.js script tag) ----
+  function wire() {
+    // Kill switch + halt banner
+    var kill = document.getElementById('killSwitchBtn');
+    if (kill) kill.addEventListener('click', onKillSwitch);
+    var resume = document.getElementById('haltBannerResume');
+    if (resume) resume.addEventListener('click', onKillSwitch);
+
+    // Chart-area trade affordance
+    var chartTrade = document.getElementById('chartTradeBtn');
+    if (chartTrade) chartTrade.addEventListener('click', function () { openOrderTicket(activeChartSymbol(), 'buy'); });
+
+    // Recalc inputs
+    ['otSymbol', 'otQty', 'otLimitPrice'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.addEventListener('input', function () { if (!reviewMode) recalc(); });
+    });
+    var symEl = document.getElementById('otSymbol');
+    if (symEl) symEl.addEventListener('change', refreshAccount);
+
+    // Side segmented control
+    var sideSeg = document.getElementById('otSideSeg');
+    if (sideSeg) sideSeg.querySelectorAll('.ot-seg-btn').forEach(function (b) {
+      b.addEventListener('click', function () { setSide(b.dataset.side); });
+    });
+
+    // Type segmented control
+    var typeSeg = document.getElementById('otTypeSeg');
+    if (typeSeg) typeSeg.querySelectorAll('.ot-seg-btn').forEach(function (b) {
+      b.addEventListener('click', function () { setType(b.dataset.type); });
+    });
+
+    // Footer actions
+    var reviewBtn = document.getElementById('otReviewBtn');
+    if (reviewBtn) reviewBtn.addEventListener('click', onReview);
+    var confirmBtn = document.getElementById('otConfirmBtn');
+    if (confirmBtn) confirmBtn.addEventListener('click', onConfirm);
+    var backBtn = document.getElementById('otBackBtn');
+    if (backBtn) backBtn.addEventListener('click', showFormView);
+    var resetBtn = document.getElementById('otResetBtn');
+    if (resetBtn) resetBtn.addEventListener('click', onReset);
+
+    // Reflect any persisted halt on load
+    applyHaltState();
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire, { once: true });
+  else wire();
 })();

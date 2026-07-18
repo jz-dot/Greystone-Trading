@@ -206,6 +206,9 @@
     <!-- Populated by JS -->
   </div>
   <div class="topbar-right">
+    <!-- Global kill switch: always visible, halts new orders and pauses agents -->
+    <button class="kill-switch-btn" id="killSwitchBtn" title="Halt all trading immediately">HALT</button>
+
     <div class="market-status">
       <span class="status-dot live"></span>
       <span class="status-text">MARKET OPEN</span>
@@ -304,6 +307,15 @@
     </div>
   </div>
 </header>
+
+<!-- GLOBAL HALT BANNER (shown only while trading is halted) -->
+<div class="halt-banner" id="haltBanner" style="display:none;" role="alert">
+  <div class="halt-banner-inner">
+    <span class="halt-banner-dot"></span>
+    <span class="halt-banner-text"><strong>TRADING HALTED.</strong> New orders are blocked and simulated agents are paused.</span>
+    <button class="halt-banner-resume" id="haltBannerResume">Resume trading</button>
+  </div>
+</div>
 
 <!-- MAIN LAYOUT -->
 <div class="app-layout">
@@ -523,6 +535,10 @@
               <span class="panel-price profit">$227.48 <small>+2.31 (+1.03%)</small></span>
             </div>
             <div class="chart-controls">
+              <button class="chart-trade-btn" id="chartTradeBtn" title="Open the order ticket for this symbol (paper)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+                Trade
+              </button>
               <div class="timeframe-btns">
                 <button class="tf-btn">1m</button>
                 <button class="tf-btn">5m</button>
@@ -3114,6 +3130,99 @@
     <div class="modal-footer">
       <button class="agent-btn" onclick="closeModal('sellPositionModal')">Cancel</button>
       <button class="btn-primary" id="modalSellPosBtn">Confirm Sale</button>
+    </div>
+  </div>
+</div>
+
+<!-- ORDER TICKET (paper-first, explicit confirm step) -->
+<div class="modal-overlay" id="orderTicketModal">
+  <div class="modal-content ot-modal" style="max-width: 480px;">
+    <div class="modal-header">
+      <h2>Order Ticket</h2>
+      <button class="modal-close" onclick="closeModal('orderTicketModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+
+      <!-- Mode toggle: PAPER is the default; LIVE is disabled -->
+      <div class="ot-mode-toggle" role="group" aria-label="Trading mode">
+        <button type="button" class="ot-mode-btn active" id="otModePaper" data-mode="paper">
+          <span class="ot-mode-label">PAPER</span>
+          <span class="ot-mode-sub">Simulated - default</span>
+        </button>
+        <button type="button" class="ot-mode-btn disabled" id="otModeLive" data-mode="live" disabled aria-disabled="true">
+          <span class="ot-mode-label">LIVE</span>
+          <span class="ot-mode-sub">Coming soon</span>
+        </button>
+      </div>
+      <div class="ot-live-note">Coming soon - live execution is a later phase. Real broker execution and the hard risk layer are not wired yet.</div>
+
+      <!-- Halt warning (shown when trading is halted) -->
+      <div class="ot-halt-warn" id="otHaltWarn" style="display:none;">Trading is HALTED. Release the global halt before placing orders.</div>
+
+      <!-- Ticket form -->
+      <div class="ot-form" id="otForm">
+        <div class="ot-field">
+          <label for="otSymbol">Symbol</label>
+          <input type="text" id="otSymbol" placeholder="e.g. AAPL" style="text-transform:uppercase;" maxlength="8" autocomplete="off">
+        </div>
+        <div class="ot-field">
+          <label>Side</label>
+          <div class="ot-seg" id="otSideSeg">
+            <button type="button" class="ot-seg-btn buy active" data-side="buy">Buy</button>
+            <button type="button" class="ot-seg-btn sell" data-side="sell">Sell</button>
+          </div>
+        </div>
+        <div class="ot-field">
+          <label for="otQty">Quantity</label>
+          <input type="number" id="otQty" min="0" step="1" placeholder="e.g. 10" autocomplete="off">
+        </div>
+        <div class="ot-field">
+          <label>Order Type</label>
+          <div class="ot-seg" id="otTypeSeg">
+            <button type="button" class="ot-seg-btn active" data-type="market">Market</button>
+            <button type="button" class="ot-seg-btn" data-type="limit">Limit</button>
+          </div>
+        </div>
+        <div class="ot-field" id="otLimitField" style="display:none;">
+          <label for="otLimitPrice">Limit Price</label>
+          <input type="number" id="otLimitPrice" min="0" step="0.01" placeholder="e.g. 175.00" autocomplete="off">
+        </div>
+
+        <div class="ot-estimate">
+          <div class="ot-est-row"><span>Est. order value</span><span id="otEstValue">-</span></div>
+          <div class="ot-est-row"><span>Est. cost to trade</span><span id="otEstCost">-</span></div>
+          <div class="ot-est-row"><span>Paper buying power</span><span id="otBpValue">-</span></div>
+          <div class="ot-bp-check" id="otBpCheck"></div>
+        </div>
+      </div>
+
+      <!-- Explicit confirm summary (hidden until Review) -->
+      <div class="ot-confirm" id="otConfirm" style="display:none;">
+        <div class="ot-confirm-badge">PAPER ORDER</div>
+        <div class="ot-confirm-summary" id="otConfirmSummary"></div>
+        <div class="ot-confirm-note">Simulated order only. No real money is involved.</div>
+      </div>
+
+      <!-- Compact paper account panel -->
+      <div class="ot-account" id="otAccount">
+        <div class="ot-account-head">
+          <span class="ot-account-title">Paper Account</span>
+          <button type="button" class="ot-reset-btn" id="otResetBtn">Reset</button>
+        </div>
+        <div class="ot-account-grid">
+          <div class="ot-acct-tile"><span class="ot-acct-label">Cash</span><span class="ot-acct-val" id="otAcctCash">-</span></div>
+          <div class="ot-acct-tile"><span class="ot-acct-label">Equity</span><span class="ot-acct-val" id="otAcctEquity">-</span></div>
+          <div class="ot-acct-tile"><span class="ot-acct-label">Buying Power</span><span class="ot-acct-val" id="otAcctBp">-</span></div>
+        </div>
+        <div class="ot-positions" id="otPositions"><div class="ot-acct-note">Loading paper account...</div></div>
+      </div>
+
+    </div>
+    <div class="modal-footer">
+      <button class="agent-btn" id="otCancelBtn" onclick="closeModal('orderTicketModal')">Cancel</button>
+      <button class="agent-btn" id="otBackBtn" style="display:none;">Edit</button>
+      <button class="btn-primary" id="otReviewBtn">Review order</button>
+      <button class="btn-primary ot-confirm-btn" id="otConfirmBtn" style="display:none;">Confirm PAPER order</button>
     </div>
   </div>
 </div>

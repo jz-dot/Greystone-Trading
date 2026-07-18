@@ -7,6 +7,11 @@
    - Supabase auth + user data persistence
    ============================================ */
 
+// Load .env before anything reads process.env (Node 20.12+ built-in; no
+// dotenv dependency). Without this, `node server.js` silently ran with auth,
+// Supabase, and broker connections unconfigured even when .env was filled in.
+try { process.loadEnvFile(); } catch (e) { /* no .env: env comes from the shell */ }
+
 const express = require('express');
 const https = require('https');
 const crypto = require('crypto');

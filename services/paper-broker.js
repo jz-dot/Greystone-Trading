@@ -17,12 +17,15 @@
    clock is read is a thin default at the manager boundary (nowFn), used only
    when the caller does not supply a timestamp.
 
-   SAFETY (INTERIM)
-   placeOrder runs two minimal, clearly-marked inline checks: a global halt
-   flag and a max-order-notional cap. These are a stopgap. The CANONICAL hard
-   risk layer is services/risk-guardrails.js (being built in parallel). A
-   later wave should route every order (paper and live) through that module
-   and delete the inline checks here. Keep the checks here minimal on purpose.
+   SAFETY (CANONICAL RISK LAYER, NOW WIRED IN)
+   Every order routes through services/risk-guardrails.checkOrder() before it
+   can fill. placeOrder builds a per-session accountState (equity, buyingPower,
+   positions marked to market) and evaluates the order against that session's
+   hard limits and kill-switch / auto-halt risk state. The old interim inline
+   checks (a global halt flag and a single notional cap) have been retired in
+   favour of this engine. Each session carries its own riskState + limits (see
+   _freshAccount); halt()/resume() drive the kill switch and getRisk() reports
+   the posture. This is the exact pattern live execution will reuse.
 
    MODELING SIMPLIFICATIONS (documented so nobody mistakes this for a matching
    engine):
@@ -53,6 +56,10 @@
    ============================================ */
 
 const FeeModel = require('./fee-model');
+// CANONICAL hard risk layer. Every order routes through checkOrder() before it
+// can fill; each session carries its own riskState (kill switch + auto-halt
+// baselines) and limits derived from its starting equity.
+const RiskGuardrails = require('./risk-guardrails');
 
 // ---- Defaults (all overridable via the factory config) ----
 const DEFAULT_INITIAL_CASH = 100000; // fake dollars
@@ -61,8 +68,12 @@ const DEFAULT_BASE_CURRENCY = 'CAD';
 // commission-free with a 1.5% FX spread, which cleanly surfaces the FX line
 // (the whole point of the platform) on USD trades from a CAD account.
 const DEFAULT_FEE_BROKER = 'wealthsimple';
-// Interim per-order notional cap (fake money, so generous). Server may tighten.
-const DEFAULT_MAX_ORDER_NOTIONAL = 500000;
+// Fraction of a session's STARTING equity used as the canonical single-order
+// notional ceiling. 0.30 means a $100,000 paper account caps any single order
+// at $30,000 (so ordinary trades pass, fat-fingers are blocked). Every other
+// hard limit (position %, daily-loss %, circuit-breaker %, concurrent count,
+// leverage) keeps the conservative risk-guardrails DEFAULT_LIMITS value.
+const DEFAULT_ORDER_NOTIONAL_PCT = 0.30;
 const DEFAULT_SESSION = '__default__';
 
 // Snap money to cents; kill negative zero.
@@ -74,6 +85,39 @@ function round2(n) {
 function isPositiveFiniteNumber(v) {
   const n = Number(v);
   return Number.isFinite(n) && n > 0;
+}
+
+function isPlainObject(x) {
+  return x !== null && typeof x === 'object' && !Array.isArray(x);
+}
+
+/**
+ * Derive a session's canonical hard limits from its starting equity.
+ * Starts from risk-guardrails DEFAULT_LIMITS, sizes maxOrderNotional to a
+ * percent of starting equity, then applies any caller overrides (deployment
+ * defaults and/or a per-session reset). Only known, well-typed fields are
+ * honored; anything else is ignored (fail safe, never widen blindly).
+ */
+function deriveSessionLimits(initialCash, orderNotionalPct, overrides) {
+  const cash = isPositiveFiniteNumber(initialCash) ? Number(initialCash) : DEFAULT_INITIAL_CASH;
+  const pct = isPositiveFiniteNumber(orderNotionalPct) ? Number(orderNotionalPct) : DEFAULT_ORDER_NOTIONAL_PCT;
+  const limits = Object.assign({}, RiskGuardrails.DEFAULT_LIMITS, {
+    maxOrderNotional: round2(cash * pct),
+  });
+  if (isPlainObject(overrides)) {
+    const numericKeys = [
+      'maxOrderNotional', 'maxPositionPct', 'maxConcurrentPositions',
+      'maxDailyLossPct', 'circuitBreakerDrawdownPct', 'maxLeverage',
+    ];
+    for (let i = 0; i < numericKeys.length; i++) {
+      const k = numericKeys[i];
+      if (isPositiveFiniteNumber(overrides[k])) limits[k] = Number(overrides[k]);
+    }
+    if (typeof overrides.requirePaperConfirmedBeforeLive === 'boolean') {
+      limits.requirePaperConfirmedBeforeLive = overrides.requirePaperConfirmedBeforeLive;
+    }
+  }
+  return limits;
 }
 
 /**
@@ -136,7 +180,8 @@ class PaperBroker {
    * @param {number}   [opts.initialCash]  - starting cash per account (default 100000)
    * @param {string}   [opts.baseCurrency] - account base currency (default 'CAD')
    * @param {string}   [opts.feeBrokerId]  - fee-model broker id for cost sim (default 'wealthsimple')
-   * @param {number}   [opts.maxOrderNotional] - interim per-order cap (default 500000)
+   * @param {number}   [opts.orderNotionalPct] - single-order notional ceiling as a fraction of a session's starting equity (default 0.30)
+   * @param {object}   [opts.limits]       - deployment-wide partial hard-limit overrides applied to every new session
    * @param {object}   [opts.feeModel]     - fee model override (default services/fee-model)
    * @param {function} [opts.nowFn]        - clock for the default timestamp (default Date.now)
    */
@@ -150,25 +195,36 @@ class PaperBroker {
     this.initialCash = typeof opts.initialCash === 'number' ? opts.initialCash : DEFAULT_INITIAL_CASH;
     this.baseCurrency = opts.baseCurrency || DEFAULT_BASE_CURRENCY;
     this.feeBrokerId = opts.feeBrokerId || DEFAULT_FEE_BROKER;
-    this.maxOrderNotional = typeof opts.maxOrderNotional === 'number' ? opts.maxOrderNotional : DEFAULT_MAX_ORDER_NOTIONAL;
+    // Fraction of a session's starting equity used as the canonical single-order
+    // notional ceiling (see DEFAULT_ORDER_NOTIONAL_PCT).
+    this.orderNotionalPct = isPositiveFiniteNumber(opts.orderNotionalPct)
+      ? Number(opts.orderNotionalPct)
+      : DEFAULT_ORDER_NOTIONAL_PCT;
+    // Optional deployment-wide partial hard-limit overrides applied to EVERY new
+    // session. A per-session reset can override further.
+    this.defaultLimitOverrides = isPlainObject(opts.limits) ? opts.limits : null;
     this.nowFn = typeof opts.nowFn === 'function' ? opts.nowFn : function () { return Date.now(); };
 
-    // sessionId -> account
+    // sessionId -> account (each carries its own canonical riskState + limits).
     this.accounts = new Map();
-    // Global kill switch (INTERIM safety; see services/risk-guardrails.js).
-    this.halted = false;
     // Monotonic order id counter (shared across sessions; ids are unique).
     this._orderSeq = 0;
   }
 
-  // ---- Global halt (interim safety) ----
-  setHalt(flag) { this.halted = !!flag; }
-  isHalted() { return this.halted; }
-
   // ---- Account lifecycle ----
 
-  _freshAccount(sessionId, initialCash) {
+  _freshAccount(sessionId, initialCash, limitOverrides) {
     const cash = typeof initialCash === 'number' ? initialCash : this.initialCash;
+    // Merge deployment-wide overrides under any per-session (reset) overrides.
+    const overrides = Object.assign(
+      {},
+      isPlainObject(this.defaultLimitOverrides) ? this.defaultLimitOverrides : {},
+      isPlainObject(limitOverrides) ? limitOverrides : {}
+    );
+    const riskState = RiskGuardrails.createRiskState();
+    // Seed the daily baseline and high-water mark at the starting equity so
+    // drawdown / daily-loss are meaningful from the very first order.
+    RiskGuardrails.startNewDay(riskState, cash);
     return {
       sessionId: sessionId,
       currency: this.baseCurrency,
@@ -178,7 +234,27 @@ class PaperBroker {
       feesPaid: 0,
       positions: new Map(), // symbol -> { qty, avgCost }
       orders: [],           // full history (filled / working / rejected / canceled)
+      // ---- canonical risk layer, per session ----
+      limits: deriveSessionLimits(cash, this.orderNotionalPct, overrides),
+      riskState: riskState,
+      lastViolations: [],   // violations from the most recent checkOrder (for /risk)
+      lastActivityDay: null, // UTC date string of last activity, for the day boundary
     };
+  }
+
+  // Roll the daily-loss baseline forward when the calendar day advances. Does
+  // NOT release a kill switch (a human must do that deliberately).
+  _maybeStartNewDay(account, equity, timestamp) {
+    let day = null;
+    try {
+      day = new Date(timestamp || this.nowFn()).toISOString().slice(0, 10);
+    } catch (e) {
+      day = null;
+    }
+    if (day && account.lastActivityDay && account.lastActivityDay !== day) {
+      RiskGuardrails.startNewDay(account.riskState, equity);
+    }
+    if (day) account.lastActivityDay = day;
   }
 
   _account(sessionId) {
@@ -204,7 +280,10 @@ class PaperBroker {
     const initialCash = isPositiveFiniteNumber(options.initialCash)
       ? Number(options.initialCash)
       : this.initialCash;
-    this.accounts.set(id, this._freshAccount(id, initialCash));
+    // Optional per-session hard-limit overrides (e.g. tighten maxOrderNotional
+    // or maxPositionPct). Only known numeric fields are honored.
+    const limitOverrides = isPlainObject(options.limits) ? options.limits : null;
+    this.accounts.set(id, this._freshAccount(id, initialCash, limitOverrides));
     const account = await this.getAccount(id);
     return { ok: true, account };
   }
@@ -231,11 +310,12 @@ class PaperBroker {
     const hasLimit = order.limitPrice !== undefined && order.limitPrice !== null && String(order.limitPrice).trim() !== '';
     const limitPrice = hasLimit ? Number(order.limitPrice) : null;
 
-    const reject = (message) => this._record(account, {
+    const reject = (message, violations) => this._record(account, {
       orderId: this._nextOrderId(), sessionId, symbol, side, qty: Number.isFinite(qty) ? qty : null,
       type, limitPrice, status: 'rejected', fillPrice: null,
       cost: { commission: 0, fxCost: 0, total: 0 }, currency: account.currency,
       createdAt: timestamp, message,
+      violations: Array.isArray(violations) && violations.length ? violations : undefined,
     });
 
     // ---- Input validation (clean rejects; server maps to 400) ----
@@ -247,10 +327,9 @@ class PaperBroker {
       return reject('A limit order requires a positive limitPrice.');
     }
 
-    // ---- INTERIM SAFETY (canonical layer: services/risk-guardrails.js) ----
-    if (this.halted) return reject('Trading is halted (global paper halt is set).');
-
     // ---- Live quote (unknown symbol -> clean reject) ----
+    // Fetched first: the canonical risk gate needs a real transaction price to
+    // compute notional, position %, buying power and leverage.
     let quote;
     try {
       quote = await this.quoteFn(symbol);
@@ -263,13 +342,31 @@ class PaperBroker {
     }
     const currency = (quote && quote.currency) || account.currency;
 
-    // Reference price for the notional cap: intended limit for limits, else last.
+    // Reference (transaction) price for risk checks: intended limit for a limit
+    // order, else the live last. notional is retained below for the fill math.
     const refPrice = type === 'limit' ? limitPrice : last;
     const notional = qty * refPrice;
 
-    // ---- INTERIM SAFETY: max order notional ----
-    if (notional > this.maxOrderNotional) {
-      return reject('Order notional ' + round2(notional) + ' exceeds the max of ' + this.maxOrderNotional + '.');
+    // ---- CANONICAL RISK GATE (services/risk-guardrails.checkOrder) ----------
+    // Every paper order routes through the hard risk layer before it can fill.
+    // Build a per-session accountState (equity, buyingPower, positions marked to
+    // market) and evaluate the order against this session's hard limits and its
+    // kill-switch / auto-halt risk state. getAccount() also refreshes the risk
+    // state (day boundary + circuit breaker / daily-loss auto-halt) from the
+    // freshly marked snapshot, so a breach engages the kill switch before this
+    // order is even judged. Nothing routes around this gate.
+    const accountState = await this.getAccount(sessionId);
+    const check = RiskGuardrails.checkOrder(
+      { symbol, side, qty, price: refPrice, mode: 'paper' },
+      accountState,
+      account.limits,
+      account.riskState
+    );
+    account.lastViolations = check.violations;
+    if (!check.allowed) {
+      const summary = 'Order rejected by risk guardrails: ' +
+        check.violations.map((v) => v.message).join(' ');
+      return reject(summary, check.violations);
     }
 
     // ---- Marketability ----
@@ -353,6 +450,17 @@ class PaperBroker {
       realizedPnl: round2(realized), createdAt: timestamp,
       message: 'Filled ' + qty + ' ' + symbol + ' @ ' + round2(fillPrice) + '.',
     });
+
+    // Refresh this session's risk state from the POST-fill snapshot so a
+    // drawdown / daily-loss breach auto-halts before the next order (getAccount
+    // internally calls updateRiskState against the freshly marked equity).
+    // Best-effort: a transient quote failure must not unwind a booked fill.
+    try {
+      await this.getAccount(sessionId);
+    } catch (e) {
+      /* non-fatal risk refresh */
+    }
+
     return filled;
   }
 
@@ -360,7 +468,7 @@ class PaperBroker {
   _record(account, rec) {
     account.orders.push(rec);
     // Client-facing response includes an account snapshot for convenience.
-    return {
+    const out = {
       orderId: rec.orderId,
       status: rec.status,
       fillPrice: rec.fillPrice,
@@ -368,6 +476,11 @@ class PaperBroker {
       message: rec.message,
       account: this._accountSnapshotSync(account),
     };
+    // Additive: rejects carrying risk-guardrail violations surface WHY.
+    if (Array.isArray(rec.violations) && rec.violations.length) {
+      out.violations = rec.violations;
+    }
+    return out;
   }
 
   // ---- Reads ----
@@ -414,10 +527,16 @@ class PaperBroker {
     const account = this._account(sessionId);
     const positions = await this.getPositions(sessionId);
     const positionsValue = positions.reduce((sum, p) => sum + p.marketValue, 0);
-    const equity = account.cash + positionsValue;
+    const equity = round2(account.cash + positionsValue);
+    // On every account read, roll the daily baseline forward if the calendar day
+    // advanced, then recompute the per-session risk state from this snapshot so
+    // the circuit breaker / daily-loss auto-halt stays current (fail-closed: an
+    // unusable equity would engage the kill switch inside updateRiskState).
+    this._maybeStartNewDay(account, equity, this.nowFn());
+    RiskGuardrails.updateRiskState(account.riskState, { equity: equity }, account.limits);
     return {
       cash: round2(account.cash),
-      equity: round2(equity),
+      equity: equity,
       buyingPower: round2(account.cash), // 1:1, no margin (simplification #4)
       currency: account.currency,
       initialCash: round2(account.initialCash),
@@ -425,6 +544,58 @@ class PaperBroker {
       feesPaid: round2(account.feesPaid),
       positions: positions,
     };
+  }
+
+  // ---- Per-session risk posture (canonical guardrails) ----
+
+  /**
+   * Engage the session kill switch. A halted session then rejects ALL orders
+   * via checkOrder's kill_switch rule until resume() is called.
+   * @returns {{ halted:true, reason:string }}
+   */
+  halt(sessionId, reason) {
+    const account = this._account(sessionId);
+    RiskGuardrails.engageKillSwitch(account.riskState, reason);
+    return { halted: true, reason: account.riskState.haltReason };
+  }
+
+  /**
+   * Release the session kill switch. Deliberate human action; never automatic.
+   * @returns {{ halted:false }}
+   */
+  resume(sessionId) {
+    const account = this._account(sessionId);
+    RiskGuardrails.releaseKillSwitch(account.riskState);
+    return { halted: false };
+  }
+
+  /**
+   * Current risk posture for the session, from a freshly marked snapshot.
+   * @returns {Promise<{halted,haltReason,limits,equity,peakEquity,startOfDayEquity,drawdownPct,dailyPnl,lastViolations?}>}
+   */
+  async getRisk(sessionId) {
+    const account = this._account(sessionId);
+    const acct = await this.getAccount(sessionId); // marks to market + refreshes risk state
+    const rs = account.riskState;
+    const equity = acct.equity;
+    const peakEquity = round2(rs.peakEquity);
+    const startOfDayEquity = round2(rs.startOfDayEquity);
+    const drawdownPct = peakEquity > 0 ? round2(((peakEquity - equity) / peakEquity) * 100) : 0;
+    const dailyPnl = round2(equity - startOfDayEquity);
+    const out = {
+      halted: RiskGuardrails.isHalted(rs),
+      haltReason: rs.haltReason || null,
+      limits: Object.assign({}, account.limits),
+      equity: equity,
+      peakEquity: peakEquity,
+      startOfDayEquity: startOfDayEquity,
+      drawdownPct: drawdownPct,
+      dailyPnl: dailyPnl,
+    };
+    if (Array.isArray(account.lastViolations) && account.lastViolations.length) {
+      out.lastViolations = account.lastViolations;
+    }
+    return out;
   }
 
   // Cheap, quote-free account snapshot for embedding in an order response.

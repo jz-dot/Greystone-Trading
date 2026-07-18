@@ -2219,10 +2219,17 @@ const paperBroker = createPaperBroker({
   initialCash: parseFloat(process.env.PAPER_INITIAL_CASH || '100000'),
   baseCurrency: process.env.PAPER_BASE_CURRENCY || 'CAD',
   feeBrokerId: process.env.PAPER_FEE_BROKER || 'wealthsimple',
-  // Interim per-order notional cap. The canonical hard risk layer is
-  // services/risk-guardrails.js; a later wave should route paper AND live
-  // orders through it and retire the inline checks in paper-broker.js.
-  maxOrderNotional: parseFloat(process.env.PAPER_MAX_ORDER_NOTIONAL || '500000'),
+  // CANONICAL RISK LAYER (services/risk-guardrails.js) is now load-bearing:
+  // every paper order routes through checkOrder() before it can fill, and each
+  // session carries its own kill switch + auto-halt risk state. Per-session hard
+  // limits are derived from that session's starting equity:
+  //   - maxOrderNotional  = orderNotionalPct of starting equity (default 30%, so
+  //                         a $100k paper account caps any single order at $30k);
+  //   - maxPositionPct (20%), maxDailyLossPct (3%), circuitBreakerDrawdownPct
+  //     (10%), maxConcurrentPositions (10) and maxLeverage (1.0x) keep the
+  //     conservative risk-guardrails DEFAULT_LIMITS values.
+  // Any field can be overridden per session via POST /api/paper/reset { limits }.
+  orderNotionalPct: parseFloat(process.env.PAPER_ORDER_NOTIONAL_PCT || '0.30'),
 });
 
 function paperSessionId(req) {
@@ -2271,15 +2278,66 @@ app.get('/api/paper/orders', function (req, res) {
   }
 });
 
-// POST /api/paper/reset  body { initialCash? } -> { ok:true, account }
+// POST /api/paper/reset  body { initialCash?, limits? } -> { ok:true, account }
+// `limits` optionally overrides this session's canonical hard limits (e.g.
+// { maxOrderNotional, maxPositionPct, maxDailyLossPct, ... }); only known,
+// well-typed fields are honored, everything else falls back to the derived
+// defaults (30% notional + DEFAULT_LIMITS percentages).
 app.post('/api/paper/reset', async function (req, res) {
   const body = req.body || {};
   try {
-    const result = await paperBroker.reset(paperSessionId(req), { initialCash: body.initialCash });
+    const result = await paperBroker.reset(paperSessionId(req), {
+      initialCash: body.initialCash,
+      limits: body.limits,
+    });
     res.json(result);
   } catch (err) {
     console.error('[Paper] reset error:', err && err.stack ? err.stack : err);
     res.status(500).json({ error: 'PAPER_ERROR', message: 'Could not reset paper account.' });
+  }
+});
+
+// POST /api/paper/halt  [X-Session-Id]  body { reason? } -> { halted:true, reason }
+// Engages this session's kill switch (services/risk-guardrails). A halted
+// session then rejects ALL orders via checkOrder's kill_switch rule until
+// /resume. No auth (fake money); rate-limited by the general /api/ limiter.
+app.post('/api/paper/halt', function (req, res) {
+  const body = req.body || {};
+  try {
+    const reason = (body.reason && String(body.reason).trim())
+      ? String(body.reason).trim()
+      : 'Manually halted by operator.';
+    const result = paperBroker.halt(paperSessionId(req), reason);
+    res.json(result);
+  } catch (err) {
+    console.error('[Paper] halt error:', err && err.stack ? err.stack : err);
+    res.status(500).json({ error: 'PAPER_ERROR', message: 'Could not halt the paper session.' });
+  }
+});
+
+// POST /api/paper/resume  [X-Session-Id] -> { halted:false }
+// Releases this session's kill switch (deliberate human action; never automatic).
+app.post('/api/paper/resume', function (req, res) {
+  try {
+    const result = paperBroker.resume(paperSessionId(req));
+    res.json(result);
+  } catch (err) {
+    console.error('[Paper] resume error:', err && err.stack ? err.stack : err);
+    res.status(500).json({ error: 'PAPER_ERROR', message: 'Could not resume the paper session.' });
+  }
+});
+
+// GET /api/paper/risk  [X-Session-Id]
+// -> { halted, haltReason, limits, equity, peakEquity, startOfDayEquity,
+//      drawdownPct, dailyPnl, lastViolations? }
+// The UI's read model for the current risk posture of the session.
+app.get('/api/paper/risk', async function (req, res) {
+  try {
+    const risk = await paperBroker.getRisk(paperSessionId(req));
+    res.json(risk);
+  } catch (err) {
+    console.error('[Paper] risk error:', err && err.stack ? err.stack : err);
+    res.status(500).json({ error: 'PAPER_ERROR', message: 'Could not load paper risk posture.' });
   }
 });
 
@@ -2393,10 +2451,13 @@ app.listen(PORT, function () {
   console.log('    GET  /api/health');
   console.log('');
   console.log('  Paper Trading (simulated, fake money, no auth):');
-  console.log('    POST /api/paper/order');
+  console.log('    POST /api/paper/order   (routed through risk-guardrails)');
   console.log('    GET  /api/paper/account');
   console.log('    GET  /api/paper/orders');
   console.log('    POST /api/paper/reset');
+  console.log('    POST /api/paper/halt    (kill switch)');
+  console.log('    POST /api/paper/resume');
+  console.log('    GET  /api/paper/risk');
   console.log('');
   console.log('  News Feed:');
   console.log('    GET /api/news?symbols=AAPL,NVDA&category=top');

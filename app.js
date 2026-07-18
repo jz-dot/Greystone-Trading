@@ -8290,8 +8290,8 @@ const PortfolioManager = (function() {
   // BoC series cannot cover (pre-2017, network down) freeze at the live rate,
   // flagged fxEstimated so the approximation stays visible.
   let fxRepairRun = false;
-  async function repairFxRates() {
-    if (fxRepairRun) return; fxRepairRun = true;
+  async function repairFxRates(force) {
+    if (fxRepairRun && !force) return; fxRepairRun = true;
     const positions = _load(STORAGE_KEY);
     if (!Array.isArray(positions) || !positions.length) return;
     const need = [];
@@ -8612,7 +8612,7 @@ const PortfolioManager = (function() {
     if (countEl) countEl.textContent = holdings.length + ' position' + (holdings.length !== 1 ? 's' : '');
 
     if (holdings.length === 0) {
-      tbody.innerHTML = '<tr class="pf-empty-row"><td colspan="11"><div class="pf-empty-state"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="1"><path d="M21 12V7H5a2 2 0 010-4h14v4"/><path d="M3 5v14a2 2 0 002 2h16v-5"/><path d="M18 12a2 2 0 000 4h4v-4h-4z"/></svg><p>No positions yet. Add your first holding to start tracking.</p></div></td></tr>';
+      tbody.innerHTML = '<tr class="pf-empty-row"><td colspan="11"><div class="pf-empty-state"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="1"><path d="M21 12V7H5a2 2 0 010-4h14v4"/><path d="M3 5v14a2 2 0 002 2h16v-5"/><path d="M18 12a2 2 0 000 4h4v-4h-4z"/></svg><p>No positions yet. Add your first holding to start tracking.</p><button class="agent-btn" onclick="gsLoadSamplePortfolio()" style="margin-top:12px;">Load sample portfolio</button></div></td></tr>';
       return;
     }
 
@@ -11021,4 +11021,192 @@ if (askAIBtn) {
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire, { once: true });
   else wire();
+})();
+
+
+// ============================================
+// SAMPLE PORTFOLIO (explicit, labeled, reversible)
+// Real tickers at real prices; the LOTS are demo data the user asked for,
+// every txn carries source:'sample', a banner shows while any exist, and
+// one click clears them. Never auto-seeded.
+// ============================================
+(function initSamplePortfolio() {
+  const SAMPLE = [
+    { sym: 'SPCX', shares: 15, cost: 110.00, date: '2026-06-25', account: 'non-registered' },
+    { sym: 'TSLA', shares: 40, cost: 250.00, date: '2025-11-14', account: 'non-registered' },
+    { sym: 'MSFT', shares: 25, cost: 415.00, date: '2025-09-10', account: 'RRSP' },
+    { sym: 'NVDA', shares: 60, cost: 135.00, date: '2025-08-20', account: 'TFSA' },
+    { sym: 'AAPL', shares: 30, cost: 225.00, date: '2025-10-03', account: 'non-registered' },
+    { sym: 'AMZN', shares: 20, cost: 185.00, date: '2025-12-05', account: 'RRSP' },
+    { sym: 'RY.TO', shares: 35, cost: 168.00, date: '2025-09-25', account: 'non-registered' },
+    { sym: 'SHOP.TO', shares: 25, cost: 145.00, date: '2026-01-12', account: 'TFSA' },
+    { sym: 'XEQT.TO', shares: 200, cost: 33.00, date: '2025-08-05', account: 'FHSA' },
+  ];
+
+  window.gsLoadSamplePortfolio = async function () {
+    SAMPLE.forEach(s => {
+      PortfolioManager.addPosition(s.sym, s.shares, s.cost, {
+        account: s.account, date: s.date, source: 'sample',
+        fxEstimated: PortfolioManager.inferCurrency(s.sym) === 'USD'
+      });
+    });
+    await PortfolioManager.refreshQuotes();
+    await PortfolioManager.repairFxRates(true); // true BoC rate for each buy date
+    if (typeof showToast === 'function') showToast('Sample portfolio loaded. Every lot is labeled SAMPLE; one click clears it.', 'success');
+    window.gsUpdateSampleBanner();
+    document.dispatchEvent(new CustomEvent('gs:portfolio-synced'));
+    return true;
+  };
+
+  window.gsClearSamplePortfolio = function () {
+    const keep = PortfolioManager.getPositions().filter(p => !(p.txns || []).every(t => t.source === 'sample'));
+    PortfolioManager.savePositions(keep);
+    window.gsUpdateSampleBanner();
+    document.dispatchEvent(new CustomEvent('gs:portfolio-synced'));
+    if (typeof showToast === 'function') showToast('Sample portfolio cleared', 'info');
+  };
+
+  window.gsHasSample = function () {
+    return PortfolioManager.getPositions().some(p => (p.txns || []).some(t => t.source === 'sample'));
+  };
+
+  window.gsUpdateSampleBanner = function () {
+    let el = document.getElementById('gsSampleBanner');
+    if (!window.gsHasSample()) { if (el) el.remove(); return; }
+    if (el) return;
+    el = document.createElement('div');
+    el.id = 'gsSampleBanner';
+    el.className = 'gs-sample-banner';
+    el.innerHTML = 'SAMPLE PORTFOLIO - demo lots, not your money. <button class="agent-btn" id="gsClearSampleBtn" style="margin-left:10px;font-size:10px;padding:2px 8px;">Clear sample</button>';
+    const view = document.getElementById('view-portfolio');
+    const header = view ? view.querySelector('.view-header') : null;
+    if (header && header.parentNode) header.parentNode.insertBefore(el, header.nextSibling);
+    const btn = el.querySelector('#gsClearSampleBtn');
+    if (btn) btn.addEventListener('click', window.gsClearSamplePortfolio);
+  };
+  window.gsUpdateSampleBanner();
+})();
+
+// ============================================
+// FEE X-RAY VIEW
+// The hero surface: what each Canadian broker would charge PER YEAR for
+// this portfolio and trading pattern. Math in services/fee-xray.js.
+// ============================================
+(function initFeeXray() {
+  if (!document.getElementById('view-feexray')) return;
+  const PREFS_KEY = 'gs_feexray_prefs';
+  let prefsApplied = false;
+
+  function loadPrefs() { try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; } catch (e) { return {}; } }
+  function savePrefs(p) { try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch (e) {} }
+  function fmtMoney(v) { return '$' + Math.round(v).toLocaleString('en-CA'); }
+
+  function populateControls() {
+    const sel = document.getElementById('fxrBrokerSel');
+    if (sel && !sel.options.length && typeof FeeModel !== 'undefined') {
+      Object.keys(FeeModel.BROKERS).forEach(id => {
+        const o = document.createElement('option');
+        o.value = id;
+        o.textContent = FeeModel.BROKERS[id].name;
+        sel.appendChild(o);
+      });
+    }
+    if (!prefsApplied && sel && sel.options.length) {
+      prefsApplied = true;
+      const p = loadPrefs();
+      if (p.broker && FeeModel.BROKERS[p.broker]) sel.value = p.broker; else sel.value = 'td';
+      if (p.tradesPerYear !== undefined) document.getElementById('fxrTradesInput').value = p.tradesPerYear;
+      if (p.contracts !== undefined) document.getElementById('fxrContractsInput').value = p.contracts;
+    }
+  }
+
+  function render() {
+    if (typeof FeeXray === 'undefined' || typeof FeeModel === 'undefined') return;
+    populateControls();
+    const emptyEl = document.getElementById('fxrEmpty');
+    const contentEl = document.getElementById('fxrContent');
+    const holdings = PortfolioManager.getHoldings();
+    if (!holdings.length) {
+      if (emptyEl) emptyEl.style.display = '';
+      if (contentEl) contentEl.style.display = 'none';
+      return;
+    }
+    if (emptyEl) emptyEl.style.display = 'none';
+    if (contentEl) contentEl.style.display = '';
+
+    const brokerId = (document.getElementById('fxrBrokerSel') || {}).value || 'td';
+    const tradesRaw = parseInt((document.getElementById('fxrTradesInput') || {}).value, 10);
+    const contractsRaw = parseInt((document.getElementById('fxrContractsInput') || {}).value, 10);
+    const tradesPerYear = isNaN(tradesRaw) ? 24 : tradesRaw;
+    const contracts = isNaN(contractsRaw) ? 0 : contractsRaw;
+    savePrefs({ broker: brokerId, tradesPerYear: tradesPerYear, contracts: contracts });
+
+    const profile = FeeXray.buildProfile(holdings, {
+      tradesPerYear: tradesPerYear,
+      optionContractsPerYear: contracts,
+      usdCadRate: PortfolioManager.getUsdCadRate(),
+    });
+    const rows = FeeXray.compareAnnualCosts(profile);
+    const current = rows.find(r => r.broker === brokerId) || rows[rows.length - 1];
+    const cheapest = rows[0];
+    const over = current.totalYr - cheapest.totalYr;
+
+    document.getElementById('fxrHeroNumber').textContent = fmtMoney(over);
+    document.getElementById('fxrHeroSub').textContent = over > 0
+      ? ('Per year at ' + current.brokerName + ' versus ' + cheapest.brokerName + ', for these holdings and this trading pattern. That money comes straight out of your returns, every year.')
+      : (current.brokerName + ' is already the cheapest modeled broker for this behaviour.');
+
+    document.getElementById('fxrUsdExposure').textContent = fmtMoney(profile.stats.usdValueCad);
+    document.getElementById('fxrUsdShare').textContent = Math.round(profile.stats.usdShare * 100) + '% of your ' + fmtMoney(profile.stats.totalValueCad) + ' portfolio is USD-denominated.';
+
+    const story = FeeXray.fxStory(profile, brokerId);
+    document.getElementById('fxrFxDrag').textContent = fmtMoney(current.fxDragYr);
+    document.getElementById('fxrFxDragSub').textContent = current.brokerName + ' converts at ' + current.fxRatePct + '%. On roughly ' + fmtMoney(story.volumeCad) + ' of USD purchases per year, that is the skim.';
+
+    document.getElementById('fxrGambit').textContent = fmtMoney(story.gambitSavings);
+    document.getElementById('fxrGambitSub').textContent = story.gambitWorthIt
+      ? ('vs converting at ' + current.brokerName + ', after two commissions and the DLR spread. The classic DIY fix, until conversion is simply at cost.')
+      : 'At this conversion volume the gambit friction eats the benefit. Not worth it yet.';
+
+    const tbody = document.getElementById('fxrTableBody');
+    tbody.innerHTML = rows.map(r => {
+      const cls = r.broker === brokerId ? 'fxr-current' : '';
+      const nameExtra = (r.broker === brokerId ? ' <span style="font-size:8px;color:var(--accent-gold);letter-spacing:0.08em;">YOURS</span>' : '') +
+        (r.broker === cheapest.broker ? ' <span style="font-size:8px;color:var(--accent-teal);letter-spacing:0.08em;">CHEAPEST</span>' : '');
+      return '<tr class="' + cls + '">' +
+        '<td class="fxr-broker-name">' + r.brokerName + nameExtra + '</td>' +
+        '<td class="pf-right">' + fmtMoney(r.commissionsYr) + '</td>' +
+        '<td class="pf-right">' + fmtMoney(r.fxDragYr) + '</td>' +
+        '<td class="pf-right">' + fmtMoney(r.optionsYr) + '</td>' +
+        '<td class="pf-right" style="font-weight:600;">' + fmtMoney(r.totalYr) + '</td>' +
+        '<td class="pf-right ' + (r.vsCheapest > 0 ? 'pf-loss' : 'pf-profit') + '">' + (r.vsCheapest > 0 ? '+' : '') + fmtMoney(r.vsCheapest) + '</td>' +
+        '</tr>';
+    }).join('');
+    document.getElementById('fxrTableSub').textContent = profile.tradesPerYear + ' trades/yr, ~' + fmtMoney(profile.avgTradeSizeCad) + ' per trade, ' + profile.usdTrades + ' in USD';
+    document.getElementById('fxrAssumptions').textContent = 'Assumptions: trades are CAD-funded, so each USD purchase converts at the broker rate (holding USD or journaling avoids this, which is the point). Trade size defaults to 2% of portfolio value; the trade mix follows your USD/CAD split by market value. Gambit friction is modeled as two $9.99 commissions plus a 0.10% DLR spread. Options premium FX and account minimums/inactivity fees are not modeled. Fee schedules come from the open-source fee engine in this repository. Estimates for education, not advice.';
+  }
+
+  ['fxrBrokerSel', 'fxrTradesInput', 'fxrContractsInput'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', render);
+  });
+  const refreshBtn = document.getElementById('fxrRefreshBtn');
+  if (refreshBtn) refreshBtn.addEventListener('click', () => PortfolioManager.refreshQuotes().then(render).catch(() => render()));
+  const goBtn = document.getElementById('fxrGoPortfolioBtn');
+  if (goBtn) goBtn.addEventListener('click', () => { const b = document.querySelector('.nav-btn[data-view="portfolio"]'); if (b) b.click(); });
+  const sampleBtn = document.getElementById('fxrLoadSampleBtn');
+  if (sampleBtn) sampleBtn.addEventListener('click', () => { window.gsLoadSamplePortfolio().then(render); });
+
+  document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
+    btn.addEventListener('click', () => setTimeout(() => {
+      const active = document.querySelector('.view.active');
+      if (active && active.id === 'view-feexray') {
+        PortfolioManager.refreshQuotes().then(render).catch(() => render());
+      }
+    }, 60));
+  });
+  document.addEventListener('gs:portfolio-synced', () => {
+    const active = document.querySelector('.view.active');
+    if (active && active.id === 'view-feexray') render();
+  });
 })();

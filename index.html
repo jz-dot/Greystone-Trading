@@ -341,6 +341,14 @@
         </svg>
         <span>Portfolio</span>
       </button>
+      <button class="nav-btn" data-view="feexray" title="Fee X-Ray">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="11" cy="11" r="7"/>
+          <path d="M21 21l-4.35-4.35"/>
+          <path d="M11 7.5v7M9 9.3c0-.72.9-1.3 2-1.3s2 .58 2 1.3-.9 1.3-2 1.3-2 .58-2 1.3.9 1.3 2 1.3 2-.58 2-1.3"/>
+        </svg>
+        <span>Fee X-Ray</span>
+      </button>
       <button class="nav-btn" data-view="options" title="Options Chain">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M3 3v18h18"/>
@@ -943,6 +951,83 @@
           </div>
         </div>
 
+      </div>
+    </div>
+
+    <!-- ===================== FEE X-RAY VIEW ===================== -->
+    <div class="view" id="view-feexray">
+      <div class="view-header">
+        <div class="view-title">
+          <h1>Fee X-Ray</h1>
+          <span class="view-subtitle">What your broker mix actually costs per year, computed from your holdings. Estimates, not advice.</span>
+        </div>
+        <div class="view-actions">
+          <button class="agent-btn" id="fxrRefreshBtn">Recalculate</button>
+        </div>
+      </div>
+
+      <div class="panel" id="fxrEmpty" style="display:none;text-align:center;padding:44px 20px;">
+        <p style="color:var(--text-muted);margin-bottom:16px;max-width:520px;margin-left:auto;margin-right:auto;line-height:1.6;">The X-Ray reads your real holdings and shows what every Canadian broker would charge for the same behaviour. Add positions in the Portfolio view, or load the labeled sample portfolio to see it work.</p>
+        <div style="display:flex;gap:10px;justify-content:center;">
+          <button class="btn-primary" id="fxrGoPortfolioBtn">Go to Portfolio</button>
+          <button class="agent-btn" id="fxrLoadSampleBtn">Load sample portfolio</button>
+        </div>
+      </div>
+
+      <div id="fxrContent" style="display:none;">
+        <div class="fxr-hero panel">
+          <div class="fxr-hero-left">
+            <div class="fxr-hero-label">ESTIMATED ANNUAL OVERPAYMENT AT YOUR CURRENT BROKER</div>
+            <div class="fxr-hero-number" id="fxrHeroNumber">$0</div>
+            <div class="fxr-hero-sub" id="fxrHeroSub"></div>
+          </div>
+          <div class="fxr-hero-controls">
+            <div class="auth-field">
+              <label for="fxrBrokerSel">Your current broker</label>
+              <select id="fxrBrokerSel"></select>
+            </div>
+            <div class="auth-field">
+              <label for="fxrTradesInput">Trades per year</label>
+              <input type="number" id="fxrTradesInput" min="0" max="2000" step="1" value="24">
+            </div>
+            <div class="auth-field">
+              <label for="fxrContractsInput">Option contracts / yr</label>
+              <input type="number" id="fxrContractsInput" min="0" max="10000" step="1" value="0">
+            </div>
+          </div>
+        </div>
+
+        <div class="fxr-cards">
+          <div class="panel fxr-card">
+            <div class="fxr-card-label">USD EXPOSURE</div>
+            <div class="fxr-card-value" id="fxrUsdExposure">$0</div>
+            <div class="fxr-card-sub" id="fxrUsdShare"></div>
+          </div>
+          <div class="panel fxr-card">
+            <div class="fxr-card-label">FX DRAG PER YEAR</div>
+            <div class="fxr-card-value" id="fxrFxDrag">$0</div>
+            <div class="fxr-card-sub" id="fxrFxDragSub"></div>
+          </div>
+          <div class="panel fxr-card">
+            <div class="fxr-card-label">NORBERT'S GAMBIT WOULD SAVE</div>
+            <div class="fxr-card-value" id="fxrGambit">$0</div>
+            <div class="fxr-card-sub" id="fxrGambitSub"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <h3 class="panel-title">Annual cost by broker, for your exact behaviour</h3>
+            <span class="panel-subtitle" id="fxrTableSub"></span>
+          </div>
+          <div class="pf-table-wrap">
+            <table class="pf-table" id="fxrTable">
+              <thead><tr><th>Broker</th><th class="pf-right">Commissions / yr</th><th class="pf-right">FX drag / yr</th><th class="pf-right">Options / yr</th><th class="pf-right">Total / yr</th><th class="pf-right">vs cheapest</th></tr></thead>
+              <tbody id="fxrTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <p class="fxr-assumptions" id="fxrAssumptions"></p>
       </div>
     </div>
 
@@ -2896,6 +2981,7 @@
 <script src="services/portfolio-sync.js"></script>
 <script src="services/broker-import.js"></script>
 <script src="services/csv-io.js"></script>
+<script src="services/fee-xray.js"></script>
 <script src="app.js"></script>
 <script src="services/auth-ui.js"></script>
 

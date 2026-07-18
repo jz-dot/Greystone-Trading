@@ -18,6 +18,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { createBigDataService } = require('./services/bigdata-client');
 const aiTools = require('./services/ai-tools');
 const { createPaperBroker } = require('./services/paper-broker');
+const brokerImport = require('./services/broker-import');
 
 // Official Anthropic SDK. Resolve the constructor across CJS export shapes.
 const AnthropicSDK = require('@anthropic-ai/sdk');
@@ -1771,6 +1772,43 @@ app.get('/api/questrade/executions', requireAuth, async (req, res) => {
 // bypassing every guardrail. Use the specific endpoints above instead.
 
 // ============================================
+// BROKER POSITION IMPORT (read-only preview)
+// ============================================
+
+// GET /api/broker/import/preview?broker=questrade|ibkr
+// Returns the broker's current positions normalized for the portfolio
+// tracker's import flow. Strictly read-only: no order paths are touched.
+app.get('/api/broker/import/preview', requireAuth, async (req, res) => {
+  const broker = String(req.query.broker || '').toLowerCase();
+  try {
+    if (broker === 'questrade') {
+      if (!QUESTRADE_ACCOUNT_ID) {
+        return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set on server.' });
+      }
+      const data = await questradeFetch('GET', '/v1/accounts/' + QUESTRADE_ACCOUNT_ID + '/positions');
+      return res.json(brokerImport.normalizeQuestrade(data, QUESTRADE_ACCOUNT_ID));
+    }
+    if (broker === 'ibkr') {
+      if (!IBKR_ACCOUNT_ID) {
+        return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
+      }
+      // IBKR pages positions in blocks of 100.
+      let all = [];
+      for (let page = 0; page < 10; page++) {
+        const chunk = await ibkrFetch('GET', '/portfolio/' + IBKR_ACCOUNT_ID + '/positions/' + page);
+        if (!Array.isArray(chunk) || chunk.length === 0) break;
+        all = all.concat(chunk);
+        if (chunk.length < 100) break;
+      }
+      return res.json(brokerImport.normalizeIbkr(all, IBKR_ACCOUNT_ID));
+    }
+    return res.status(400).json({ error: 'UNKNOWN_BROKER', message: 'broker must be questrade or ibkr.' });
+  } catch (err) {
+    res.status(err.status || 502).json({ error: 'IMPORT_FAILED', message: err.message });
+  }
+});
+
+// ============================================
 // BIGDATA.COM PREMIUM DATA API
 // ============================================
 
@@ -2069,6 +2107,53 @@ app.post('/api/user/settings', requireAuth, async (req, res) => {
 
     if (error) return res.status(500).json({ error: error.message });
     res.json(data ? data.settings : req.body);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Portfolio (cloud copy of the local tracker) ---
+// One JSONB document per user; last-write-wins is decided client-side by
+// services/portfolio-sync.js using the document's own savedAt timestamp.
+const PORTFOLIO_DOC_MAX_BYTES = 512 * 1024;
+
+app.get('/api/user/portfolio', requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('portfolios')
+      .select('data, updated_at')
+      .eq('user_id', req.user.id)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') return res.json({ data: null, updated_at: null });
+      return res.status(500).json({ error: error.message });
+    }
+    res.json({ data: data.data, updated_at: data.updated_at });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/user/portfolio', requireAuth, async (req, res) => {
+  const doc = req.body;
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc) ||
+      !Array.isArray(doc.positions) || !Array.isArray(doc.realized) || !Array.isArray(doc.activity)) {
+    return res.status(400).json({ error: 'INVALID_DOC', message: 'Expected { positions[], realized[], activity[], savedAt }.' });
+  }
+  const bytes = Buffer.byteLength(JSON.stringify(doc), 'utf8');
+  if (bytes > PORTFOLIO_DOC_MAX_BYTES) {
+    return res.status(413).json({ error: 'DOC_TOO_LARGE', message: 'Portfolio document exceeds ' + PORTFOLIO_DOC_MAX_BYTES + ' bytes.' });
+  }
+
+  try {
+    const updatedAt = new Date().toISOString();
+    const { error } = await supabaseAdmin
+      .from('portfolios')
+      .upsert({ user_id: req.user.id, data: doc, updated_at: updatedAt });
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ saved: true, updated_at: updatedAt });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -45,6 +45,16 @@ CREATE TABLE IF NOT EXISTS api_credentials (
   UNIQUE(user_id, credential_type)
 );
 
+-- Portfolios (one JSONB document per user: positions with their transaction
+-- series, the realized-gains ledger, and recent activity; written by the
+-- portfolio tracker's cloud sync)
+CREATE TABLE IF NOT EXISTS portfolios (
+  user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
 -- ============================================
 -- ROW LEVEL SECURITY
 -- ============================================
@@ -53,6 +63,7 @@ ALTER TABLE user_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE watchlists ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE api_credentials ENABLE ROW LEVEL SECURITY;
+ALTER TABLE portfolios ENABLE ROW LEVEL SECURITY;
 
 -- user_profiles: users can only read/write their own profile
 CREATE POLICY "Users can view own profile"
@@ -112,6 +123,23 @@ CREATE POLICY "Users can update own credentials"
 
 CREATE POLICY "Users can delete own credentials"
   ON api_credentials FOR DELETE
+  USING (auth.uid() = user_id);
+
+-- portfolios: users can only access their own portfolio
+CREATE POLICY "Users can view own portfolio"
+  ON portfolios FOR SELECT
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert own portfolio"
+  ON portfolios FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update own portfolio"
+  ON portfolios FOR UPDATE
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete own portfolio"
+  ON portfolios FOR DELETE
   USING (auth.uid() = user_id);
 
 -- ============================================

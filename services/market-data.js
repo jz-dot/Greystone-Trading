@@ -5,7 +5,7 @@
 
 const MarketData = (function () {
   // Symbols for index/metric cards (map display name to ticker)
-  const INDEX_SYMBOLS = ['SPY', 'QQQ', 'DIA', 'IWM', '^VIX'];
+  const INDEX_SYMBOLS = ['SPY', 'QQQ', 'DIA', 'IWM', '^VIX', '^GSPTSE', 'CADUSD=X', '^TNX'];
 
   // Watchlist symbols (must match data-ticker attributes in HTML)
   const WATCHLIST_SYMBOLS = [
@@ -118,37 +118,34 @@ const MarketData = (function () {
   }
 
   function updateMetricCards(quotes) {
-    // Map metric card labels to index symbols
-    var cardMap = {};
-    INDEX_SYMBOLS.forEach(function (sym) {
-      var label = INDEX_LABEL_MAP[sym];
-      if (label) cardMap[label] = sym;
-    });
-
-    document.querySelectorAll('.metric-card').forEach(function (card) {
-      var labelEl = card.querySelector('.metric-label');
-      if (!labelEl) return;
-      var label = labelEl.textContent.trim();
-
-      // Special handling: 10Y YIELD doesn't come from our API
-      if (label === '10Y YIELD') return;
-
-      var sym = cardMap[label];
-      if (!sym) return;
+    // Cards are keyed by their data-symbol attribute, never by label text.
+    document.querySelectorAll('.metric-card[data-symbol]').forEach(function (card) {
+      var sym = card.dataset.symbol;
       var q = quotes[sym];
-      if (!q) return;
+      if (!q || !(q.price > 0)) return;
 
       var valueEl = card.querySelector('.metric-value');
       var badgeEl = card.querySelector('.metric-badge');
+      var changeEl = card.querySelector('.metric-change');
 
       if (valueEl) {
-        // Format differently based on the symbol
         if (sym === '^VIX') {
           valueEl.textContent = q.price.toFixed(2);
+        } else if (sym === 'CADUSD=X') {
+          valueEl.textContent = q.price.toFixed(4);
+        } else if (sym === '^TNX') {
+          // Yahoo quotes ^TNX as yield x10 conventionally already in percent points
+          valueEl.textContent = q.price.toFixed(3) + '%';
+        } else if (sym === '^GSPTSE') {
+          valueEl.textContent = Math.round(q.price).toLocaleString('en-US');
         } else {
-          // For index ETFs, show the price (not the full index value)
           valueEl.textContent = q.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         }
+      }
+      if (changeEl && typeof q.change === 'number') {
+        var up = q.change >= 0;
+        changeEl.textContent = (up ? '+' : '') + q.change.toFixed(sym === 'CADUSD=X' ? 4 : 2);
+        changeEl.className = 'metric-change ' + (up ? 'profit' : 'loss');
       }
       if (badgeEl) {
         var isUp = q.changePct >= 0;

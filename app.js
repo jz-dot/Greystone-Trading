@@ -25,6 +25,13 @@
   // Landing stat tiles are static, honest capability labels (no fabricated
   // metrics), so there is no counter to animate here.
 
+  // Returning users with a restored session skip the landing and the scripted
+  // loading sequence entirely (theatre on visit one, friction on visit fifty).
+  window.gsSkipSplash = function () {
+    if (landing && document.body.contains(landing)) { landing.classList.add('hidden'); setTimeout(() => landing.remove(), 100); }
+    if (loadingScreen && document.body.contains(loadingScreen)) loadingScreen.remove();
+  };
+
   enterBtn.addEventListener('click', () => {
     landing.classList.add('hidden');
     if (loadingScreen) {
@@ -3183,6 +3190,12 @@ function setupCapSizeToggle() {
 
 function getActiveWatchlistTickers() {
   if (currentWatchlistTab === 'favorites' || !WATCHLIST_TAB_TICKERS[currentWatchlistTab]) {
+    // Favorites = the user's OWN watchlist (built in onboarding and via every
+    // Add-to-Watchlist button). Defaults only when they have none yet.
+    if (typeof PortfolioManager !== 'undefined') {
+      const mine = PortfolioManager.getWatchlist();
+      if (Array.isArray(mine) && mine.length) return mine.slice(0, 20);
+    }
     return CAP_SIZE_TICKERS[currentCapSize] || CAP_SIZE_TICKERS.large;
   }
   return WATCHLIST_TAB_TICKERS[currentWatchlistTab];

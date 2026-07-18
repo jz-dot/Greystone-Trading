@@ -293,7 +293,8 @@
     var initialized = await SupabaseClient.init();
 
     if (initialized && SupabaseClient.isAuthenticated()) {
-      // Already signed in, skip auth screen
+      // Already signed in: skip the auth screen AND the landing/loading splash.
+      if (typeof window.gsSkipSplash === 'function') window.gsSkipSplash();
       onAuthSuccess();
     } else if (!initialized) {
       // Supabase not configured, go straight to guest mode

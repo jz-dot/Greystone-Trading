@@ -10,6 +10,9 @@
 const express = require('express');
 const https = require('https');
 const path = require('path');
+const helmet = require('helmet');
+const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 const { createClient } = require('@supabase/supabase-js');
 const { createBigDataService } = require('./services/bigdata-client');
 
@@ -32,6 +35,21 @@ let questradeAccessToken = '';
 let questradeApiServer = '';
 const QUESTRADE_ACCOUNT_ID = process.env.QUESTRADE_ACCOUNT_ID || '';
 const QUESTRADE_MAX_ORDER_QTY = parseInt(process.env.QUESTRADE_MAX_ORDER_QTY || '1000');
+
+// --- Order Safety Guardrails ---
+// Global max share/contract quantity and dollar-notional cap. These are
+// server-side, coarse limits. True per-user position and exposure limits are a
+// later item; see the change report.
+const MAX_ORDER_QTY = parseInt(process.env.MAX_ORDER_QTY || '1000', 10);
+const MAX_ORDER_NOTIONAL = parseFloat(process.env.MAX_ORDER_NOTIONAL || '50000');
+
+// --- Live-trading server-side gates ---
+// Alpaca is gated by ALPACA_PAPER_MODE above. IBKR and Questrade have no paper
+// endpoint here, so live order placement is disabled unless the operator opts
+// in server-side. The client-settable X-Confirm-Live-Trade header is only a UX
+// confirmation flag, never the security gate.
+const IBKR_LIVE_TRADING = process.env.IBKR_LIVE_TRADING === 'true';
+const QUESTRADE_LIVE_TRADING = process.env.QUESTRADE_LIVE_TRADING === 'true';
 
 // --- BigData.com Config ---
 let bigdataApiKey = process.env.BIGDATA_API_KEY || '';
@@ -64,7 +82,71 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
   });
 }
 
+// ============================================
+// SECURITY HARDENING (helmet, CORS allowlist, rate limits)
+// ============================================
+
+// Security headers. CSP and COEP are left off so the existing single-page
+// frontend (inline scripts, external resources) keeps working; a tuned CSP is
+// a later item. All other protections (HSTS, X-Content-Type-Options,
+// frameguard, etc.) stay on.
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+}));
+
+// CORS allowlist. Default is same-origin only: browser cross-origin requests
+// are blocked unless their Origin is listed in ALLOWED_ORIGINS (comma
+// separated). Same-origin and non-browser requests (no Origin header) are
+// always allowed so the co-hosted frontend keeps working.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map(function (s) { return s.trim(); })
+  .filter(Boolean);
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true); // same-origin or server-to-server
+    if (ALLOWED_ORIGINS.length > 0 && ALLOWED_ORIGINS.indexOf(origin) !== -1) {
+      return callback(null, true);
+    }
+    // Not allowed: respond without CORS headers so the browser blocks it.
+    return callback(null, false);
+  },
+  credentials: true,
+}));
+
 app.use(express.json({ limit: '1mb' }));
+
+// General rate limiter for all API routes, with stricter limits on the AI
+// proxy (server-funded Anthropic calls) and the auth/credential routes.
+const generalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'RATE_LIMITED', message: 'Too many requests. Please slow down.' },
+});
+
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'RATE_LIMITED', message: 'Too many AI requests. Please slow down.' },
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'RATE_LIMITED', message: 'Too many attempts. Please try again later.' },
+});
+
+app.use('/api/', generalLimiter);
+app.use('/api/ai/', aiLimiter);
+app.use('/api/auth/', authLimiter);
 
 // ============================================
 // AUTH MIDDLEWARE
@@ -94,22 +176,68 @@ async function requireAuth(req, res, next) {
   }
 }
 
-// Optional auth: attaches user if token present, does not block
-async function optionalAuth(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ') || !supabaseAdmin) {
-    req.user = null;
-    return next();
+// ============================================
+// ORDER GUARDRAIL + UPSTREAM ERROR HELPERS
+// ============================================
+
+// Validate an order's size before it is forwarded to a broker. Fails CLOSED:
+// a missing, non-numeric, zero, or negative quantity is rejected. Dollar
+// notional orders (Alpaca, no qty field) are capped by MAX_ORDER_NOTIONAL.
+// Returns null when the order passes, otherwise { code, message }.
+function checkOrderGuardrail(orderBody, maxQty, qtyFields) {
+  orderBody = orderBody || {};
+  qtyFields = qtyFields || ['qty'];
+
+  function present(v) {
+    return v !== undefined && v !== null && String(v).trim() !== '';
   }
 
-  const token = authHeader.replace('Bearer ', '');
-  try {
-    const { data, error } = await supabaseAdmin.auth.getUser(token);
-    req.user = (!error && data.user) ? data.user : null;
-  } catch (err) {
-    req.user = null;
+  let rawQty;
+  for (let i = 0; i < qtyFields.length; i++) {
+    if (present(orderBody[qtyFields[i]])) { rawQty = orderBody[qtyFields[i]]; break; }
   }
-  next();
+  const hasQty = present(rawQty);
+  const hasNotional = present(orderBody.notional);
+
+  // Dollar-notional order with no quantity (e.g. Alpaca fractional/notional).
+  if (hasNotional && !hasQty) {
+    const notional = Number(orderBody.notional);
+    if (!Number.isFinite(notional) || notional <= 0) {
+      return { code: 'GUARDRAIL', message: 'Order notional must be a positive number.' };
+    }
+    if (notional > MAX_ORDER_NOTIONAL) {
+      return { code: 'GUARDRAIL', message: 'Order notional ' + notional + ' exceeds server max of ' + MAX_ORDER_NOTIONAL + '.' };
+    }
+    return null;
+  }
+
+  // Quantity order: require a valid, positive number at or under the cap.
+  const qty = Number(rawQty);
+  if (!hasQty || !Number.isFinite(qty) || qty <= 0) {
+    return { code: 'GUARDRAIL', message: 'Order quantity must be a positive number.' };
+  }
+  if (qty > maxQty) {
+    return { code: 'GUARDRAIL', message: 'Order quantity ' + qty + ' exceeds server max of ' + maxQty + '.' };
+  }
+  // If a notional is ALSO present alongside a quantity, cap it too.
+  if (hasNotional) {
+    const notional = Number(orderBody.notional);
+    if (Number.isFinite(notional) && notional > MAX_ORDER_NOTIONAL) {
+      return { code: 'GUARDRAIL', message: 'Order notional ' + notional + ' exceeds server max of ' + MAX_ORDER_NOTIONAL + '.' };
+    }
+  }
+  return null;
+}
+
+// Return a sanitized error to the client. The full upstream detail is logged
+// server-side only; the client gets a generic message and status. Never echo
+// raw provider error text or provider payloads to the response.
+function respondUpstreamError(res, status, code, logLabel, detail) {
+  console.error('[Upstream] ' + logLabel + ':', detail);
+  res.status(status || 502).json({
+    error: code,
+    message: 'Upstream service error. Please try again later.',
+  });
 }
 
 // ============================================
@@ -548,55 +676,61 @@ app.get('/api/options/:symbol/:expiration', async function (req, res) {
 
 let anthropicApiKey = process.env.ANTHROPIC_API_KEY || '';
 
-const GREY_SANKORE_SYSTEM = `You are Grey Sankore, the Head of Investment at Greystone Trading Platform. You are a world-class AI investment analyst who operates with the precision, rigor, and conviction of a senior portfolio manager at a top quantitative hedge fund.
+const GREY_SANKORE_SYSTEM = `You are Grey Sankore, the AI research analyst inside GSP Trading, an open-source trading and market-research platform. Your role is education and research, NOT investment advice. You explain how markets, instruments, and analytical techniques work so a user can do their own research and reach their own decisions.
+
+WHAT YOU ARE AND ARE NOT:
+- You are an educational research tool. You are NOT a registered investment dealer, adviser, or financial planner, and you do not provide personalized investment advice, suitability assessments, or recommendations.
+- You do NOT tell the user what to do with their money. You explain concepts, methods, scenarios, and trade-offs so they can decide for themselves.
+- When a user asks a personalized suitability question (for example "should I put my savings into X", "what should I buy", "is this a good investment for me", "how much should I invest"), decline to advise. Briefly explain that this is a suitability question that depends on their goals, risk tolerance, time horizon, and full financial picture, which only they or a licensed adviser can properly assess. Then offer to explain the relevant concepts, risks, and how one would analyze the question instead.
 
 PERSONALITY AND COMMUNICATION STYLE:
-- Precise, data-driven, and direct. No hedging language or filler.
-- Speak like a seasoned PM who has survived multiple market cycles.
-- Reference specific levels, percentages, and metrics. Never be vague.
-- Use structured analysis: thesis, supporting evidence, risk factors, trade structure.
-- Confident but intellectually honest. Acknowledge uncertainty where it exists.
+- Precise, data-driven, and clear. Explain rather than instruct.
+- Reference specific levels, percentages, and metrics to illustrate concepts, framed as observations and analysis rather than directives.
+- Use structured analysis: what is being observed, what it can mean, what the counter-arguments and risks are, what an analyst would look at next.
+- Confident about mechanics and methods, intellectually honest about uncertainty. Markets are uncertain and past behavior does not predict future results.
 - NEVER use em dashes. Use hyphens, commas, semicolons, or restructure sentences instead.
 
-ANALYTICAL CAPABILITIES:
-- Anomaly detection: Identify unusual options flow, volume divergences, volatility skew anomalies, dark pool activity patterns, and institutional positioning signals.
-- Value opportunity screening: Multi-factor model using forward P/E compression vs historical averages, FCF yield, EV/EBITDA, PEG ratio, and mean-reversion signals.
-- Momentum signal analysis: Technical breakouts confirmed by volume, RSI divergences, moving average crossovers, Bollinger Band compression/expansion, and sector rotation patterns.
-- Greeks analysis: Delta exposure, gamma risk at key strikes, theta decay optimization, vega sensitivity to IV regime changes.
-- IV percentile analysis: Current IV rank vs 52-week range, term structure analysis, skew dynamics.
-- Flow data interpretation: Sweep detection, block trade analysis, put/call premium ratios, smart money vs retail flow differentiation.
-- Dark pool activity: Block print analysis, institutional accumulation/distribution patterns.
+ANALYTICAL CONCEPTS YOU CAN EXPLAIN:
+- Anomaly detection: how unusual options flow, volume divergences, volatility skew anomalies, dark pool activity patterns, and institutional positioning signals are identified and what they can indicate.
+- Valuation screening: how multi-factor views using forward P/E vs historical averages, FCF yield, EV/EBITDA, PEG ratio, and mean-reversion signals are constructed and read.
+- Momentum analysis: how breakouts confirmed by volume, RSI divergences, moving average crossovers, and Bollinger Band dynamics are interpreted.
+- Greeks: how delta exposure, gamma risk at key strikes, theta decay, and vega sensitivity to IV regime changes work.
+- IV percentile analysis: IV rank vs 52-week range, term structure, and skew dynamics.
+- Flow interpretation: sweep detection, block trade analysis, put/call premium ratios, and the difference between institutional and retail flow.
+- Dark pool activity: how block prints and accumulation/distribution patterns are read.
 
 UNIVERSE AWARENESS:
-- Analyze across Large Cap ($10B+), Mid Cap ($2B-$10B), Small Cap ($300M-$2B), and Micro Cap (<$300M) universes.
-- Adjust analysis framework based on active cap toggle: liquidity considerations, spread dynamics, and information edge differ by universe.
+- Discuss Large Cap ($10B+), Mid Cap ($2B-$10B), Small Cap ($300M-$2B), and Micro Cap (<$300M) universes, and how liquidity, spread dynamics, and information edge differ across them.
 
-TRADE IDEA FORMAT:
-When providing specific trade ideas, always include:
-- Ticker and direction (long/short)
-- Entry level or range
-- Target price(s) with timeframe
-- Stop-loss level
-- Position sizing guidance (% of portfolio)
-- Key risk factors and catalysts
-- Preferred structure (equity, options spread, etc.)
+DISCUSSING SCENARIOS (NOT RECOMMENDATIONS):
+- You may walk through how one could analyze an instrument, including illustrative entry, target, and risk levels AS EDUCATIONAL SCENARIOS that explain a technique, clearly framed as examples of how analysis is done, not as a recommendation to trade or a personal position-sizing instruction.
+- Do NOT prescribe entries, targets, stop-losses, or position sizes as things the user should do. If you show levels, present them as illustrative analysis and note that position sizing and risk management are personal decisions that depend on the individual's circumstances.
+- Always surface key risks, catalysts, and counter-scenarios alongside any illustrative analysis.
 
 RESPONSE FORMAT:
 - Use HTML formatting: <strong>, <ul>/<li>, <p> tags for structure.
-- Keep responses focused and actionable. No unnecessary preamble.
-- Lead with the most important insight or conclusion.
-- Use bullet points for multi-factor analysis.`;
+- Keep responses focused and educational. No unnecessary preamble.
+- Lead with the most important insight or concept.
+- Use bullet points for multi-factor analysis.
 
-// POST /api/ai/chat - Streaming chat proxy
+COMPLIANCE:
+- GSP Trading is open-source software for research and education, is not investment advice, and GSP Trading Inc. is not a registered investment dealer or adviser.`;
+
+// POST /api/ai/chat - Streaming chat proxy (guest-accessible, rate limited)
 app.post('/api/ai/chat', async (req, res) => {
-  const { message, context, history } = req.body;
+  const { message, context, history, systemPrompt } = req.body;
 
   if (!anthropicApiKey) {
     return res.status(401).json({
       error: 'no_api_key',
-      message: 'Anthropic API key not configured. Add it in Settings.'
+      message: 'AI is not configured on this server. An Anthropic API key must be set.'
     });
   }
+
+  // Honor a caller-supplied system prompt (quick-chat sends one); else default.
+  const systemForRequest = (systemPrompt && typeof systemPrompt === 'string' && systemPrompt.trim())
+    ? systemPrompt
+    : GREY_SANKORE_SYSTEM;
 
   if (!message) {
     return res.status(400).json({ error: 'missing_message', message: 'Message is required.' });
@@ -643,9 +777,9 @@ app.post('/api/ai/chat', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
 
   const postData = JSON.stringify({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-opus-4-8',
     max_tokens: 2048,
-    system: GREY_SANKORE_SYSTEM,
+    system: systemForRequest,
     messages: messages,
     stream: true
   });
@@ -668,7 +802,9 @@ app.post('/api/ai/chat', async (req, res) => {
       let errorBody = '';
       apiRes.on('data', chunk => { errorBody += chunk; });
       apiRes.on('end', () => {
-        res.write(`data: ${JSON.stringify({ type: 'error', error: `API returned ${apiRes.statusCode}: ${errorBody}` })}\n\n`);
+        // Log the raw upstream error server-side; return a generic message.
+        console.error('[Grey Sankore] Anthropic API error ' + apiRes.statusCode + ':', errorBody);
+        res.write(`data: ${JSON.stringify({ type: 'error', error: 'AI service error (' + apiRes.statusCode + '). Please try again.' })}\n\n`);
         res.write('data: [DONE]\n\n');
         res.end();
       });
@@ -695,7 +831,8 @@ app.post('/api/ai/chat', async (req, res) => {
             } else if (parsed.type === 'message_stop') {
               res.write('data: [DONE]\n\n');
             } else if (parsed.type === 'error') {
-              res.write(`data: ${JSON.stringify({ type: 'error', error: parsed.error.message || 'Unknown API error' })}\n\n`);
+              console.error('[Grey Sankore] Anthropic stream error:', parsed.error);
+              res.write(`data: ${JSON.stringify({ type: 'error', error: 'AI service error. Please try again.' })}\n\n`);
               res.write('data: [DONE]\n\n');
             }
           } catch (e) {}
@@ -724,7 +861,8 @@ app.post('/api/ai/chat', async (req, res) => {
   });
 
   apiReq.on('error', (err) => {
-    res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
+    console.error('[Grey Sankore] Anthropic request error:', err.message);
+    res.write(`data: ${JSON.stringify({ type: 'error', error: 'AI service is unreachable. Please try again.' })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();
   });
@@ -733,16 +871,23 @@ app.post('/api/ai/chat', async (req, res) => {
   apiReq.end();
 });
 
-// POST /api/ai/analyze - Non-streaming analysis
+// POST /api/ai/analyze - Non-streaming analysis (guest-accessible, rate limited)
 app.post('/api/ai/analyze', async (req, res) => {
   const { prompt, type } = req.body;
 
   if (!anthropicApiKey) {
-    return res.status(401).json({ error: 'no_api_key' });
+    return res.status(401).json({
+      error: 'no_api_key',
+      message: 'AI is not configured on this server. An Anthropic API key must be set.'
+    });
+  }
+
+  if (!prompt || typeof prompt !== 'string') {
+    return res.status(400).json({ error: 'missing_prompt', message: 'Prompt is required.' });
   }
 
   const postData = JSON.stringify({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-opus-4-8',
     max_tokens: 1024,
     system: GREY_SANKORE_SYSTEM,
     messages: [{ role: 'user', content: prompt }]
@@ -771,19 +916,24 @@ app.post('/api/ai/analyze', async (req, res) => {
           if (apiRes.statusCode === 200 && parsed.content && parsed.content[0]) {
             res.json({ text: parsed.content[0].text, type });
           } else {
-            res.status(apiRes.statusCode || 500).json({
-              error: parsed.error?.message || 'API request failed'
+            // Log the upstream detail; return a generic message.
+            console.error('[Grey Sankore] Anthropic analyze error ' + apiRes.statusCode + ':', parsed.error ? parsed.error.message : body);
+            res.status(apiRes.statusCode || 502).json({
+              error: 'ai_error',
+              message: 'AI service error. Please try again.'
             });
           }
         } catch (e) {
-          res.status(500).json({ error: 'Failed to parse API response' });
+          console.error('[Grey Sankore] Failed to parse Anthropic response:', e.message);
+          res.status(502).json({ error: 'ai_error', message: 'AI service returned an unreadable response.' });
         }
         resolve();
       });
     });
 
     apiReq.on('error', (err) => {
-      res.status(500).json({ error: err.message });
+      console.error('[Grey Sankore] Anthropic analyze request error:', err.message);
+      res.status(502).json({ error: 'ai_error', message: 'AI service is unreachable. Please try again.' });
       resolve();
     });
 
@@ -792,8 +942,8 @@ app.post('/api/ai/analyze', async (req, res) => {
   });
 });
 
-// POST /api/ai/key - Set API key
-app.post('/api/ai/key', (req, res) => {
+// POST /api/ai/key - Set API key (authenticated: writes a server-global key)
+app.post('/api/ai/key', authLimiter, requireAuth, (req, res) => {
   const { apiKey } = req.body;
   if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 10) {
     return res.status(400).json({ error: 'Invalid API key format' });
@@ -809,7 +959,7 @@ app.post('/api/ai/key/validate', (req, res) => {
   }
 
   const postData = JSON.stringify({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-opus-4-8',
     max_tokens: 10,
     messages: [{ role: 'user', content: 'Hello' }]
   });
@@ -834,29 +984,26 @@ app.post('/api/ai/key/validate', (req, res) => {
       if (apiRes.statusCode === 200) {
         res.json({ valid: true, message: 'Connected to Anthropic API' });
       } else {
-        try {
-          const parsed = JSON.parse(body);
-          res.json({ valid: false, message: parsed.error?.message || `API returned ${apiRes.statusCode}` });
-        } catch (e) {
-          res.json({ valid: false, message: `API returned ${apiRes.statusCode}` });
-        }
+        // Log upstream detail server-side; return a generic validation result.
+        console.error('[Grey Sankore] Anthropic key validation error ' + apiRes.statusCode + ':', body);
+        res.json({ valid: false, message: 'Key rejected by Anthropic API (status ' + apiRes.statusCode + ')' });
       }
     });
   });
 
   apiReq.on('error', (err) => {
-    res.json({ valid: false, message: err.message });
+    console.error('[Grey Sankore] Anthropic key validation request error:', err.message);
+    res.json({ valid: false, message: 'Could not reach Anthropic API.' });
   });
 
   apiReq.write(postData);
   apiReq.end();
 });
 
-// GET /api/ai/status - Check if key is set
+// GET /api/ai/status - Check if key is set (never reveals any part of the key)
 app.get('/api/ai/status', (req, res) => {
   res.json({
-    configured: !!anthropicApiKey,
-    keyPrefix: anthropicApiKey ? anthropicApiKey.slice(0, 8) + '...' : null
+    configured: !!anthropicApiKey
   });
 });
 
@@ -907,8 +1054,8 @@ app.get('/api/broker/status', (req, res) => {
   });
 });
 
-// --- Alpaca proxy: Account ---
-app.get('/api/alpaca/account', async (req, res) => {
+// --- Alpaca proxy: Account --- (account data requires auth)
+app.get('/api/alpaca/account', requireAuth, async (req, res) => {
   if (!ALPACA_API_KEY) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Alpaca API keys not set on server.' });
   }
@@ -924,8 +1071,8 @@ app.get('/api/alpaca/account', async (req, res) => {
   }
 });
 
-// --- Alpaca proxy: Positions ---
-app.get('/api/alpaca/positions', async (req, res) => {
+// --- Alpaca proxy: Positions --- (account data requires auth)
+app.get('/api/alpaca/positions', requireAuth, async (req, res) => {
   if (!ALPACA_API_KEY) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Alpaca API keys not set on server.' });
   }
@@ -941,32 +1088,29 @@ app.get('/api/alpaca/positions', async (req, res) => {
   }
 });
 
-// --- Alpaca proxy: Place Order --- (requires auth when Supabase configured)
-app.post('/api/alpaca/order', optionalAuth, async (req, res) => {
+// --- Alpaca proxy: Place Order --- (requires auth)
+app.post('/api/alpaca/order', requireAuth, async (req, res) => {
   if (!ALPACA_API_KEY) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Alpaca API keys not set on server.' });
   }
 
-  // Safety: reject live trading if in paper mode
+  // Live trading is gated server-side by ALPACA_PAPER_MODE. The
+  // X-Confirm-Live-Trade header is only a UX confirmation flag, not the gate.
   if (!ALPACA_PAPER_MODE) {
-    // Require explicit confirmation header for live trades
     if (req.headers['x-confirm-live-trade'] !== 'true') {
       return res.status(403).json({
-        error: 'LIVE_TRADE_BLOCKED',
-        message: 'Live trading requires explicit confirmation. Set X-Confirm-Live-Trade: true header.',
+        error: 'LIVE_TRADE_UNCONFIRMED',
+        message: 'Live trade not confirmed. Set X-Confirm-Live-Trade: true to confirm intent.',
       });
     }
   }
 
   const orderBody = req.body;
 
-  // Server-side guardrails
-  const maxQty = parseInt(process.env.MAX_ORDER_QTY || '1000');
-  if (parseInt(orderBody.qty) > maxQty) {
-    return res.status(400).json({
-      error: 'GUARDRAIL',
-      message: `Order quantity ${orderBody.qty} exceeds server max of ${maxQty}`,
-    });
+  // Server-side guardrails (fails closed: missing/NaN/zero/negative rejected)
+  const guard = checkOrderGuardrail(orderBody, MAX_ORDER_QTY, ['qty']);
+  if (guard) {
+    return res.status(400).json({ error: guard.code, message: guard.message });
   }
 
   try {
@@ -983,8 +1127,8 @@ app.post('/api/alpaca/order', optionalAuth, async (req, res) => {
   }
 });
 
-// --- Alpaca proxy: Cancel Order --- (requires auth when Supabase configured)
-app.delete('/api/alpaca/order/:id', optionalAuth, async (req, res) => {
+// --- Alpaca proxy: Cancel Order --- (requires auth)
+app.delete('/api/alpaca/order/:id', requireAuth, async (req, res) => {
   if (!ALPACA_API_KEY) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Alpaca API keys not set on server.' });
   }
@@ -1001,8 +1145,8 @@ app.delete('/api/alpaca/order/:id', optionalAuth, async (req, res) => {
   }
 });
 
-// --- Alpaca proxy: List Orders ---
-app.get('/api/alpaca/orders', async (req, res) => {
+// --- Alpaca proxy: List Orders --- (account data requires auth)
+app.get('/api/alpaca/orders', requireAuth, async (req, res) => {
   if (!ALPACA_API_KEY) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Alpaca API keys not set on server.' });
   }
@@ -1019,26 +1163,9 @@ app.get('/api/alpaca/orders', async (req, res) => {
   }
 });
 
-// --- Alpaca proxy: Generic proxy for any endpoint --- (requires auth when Supabase configured)
-app.post('/api/alpaca/proxy', optionalAuth, async (req, res) => {
-  if (!ALPACA_API_KEY) {
-    return res.json({ error: 'NOT_CONFIGURED', message: 'Alpaca API keys not set on server.' });
-  }
-  const { method, endpoint, body } = req.body;
-  try {
-    const opts = {
-      method: method || 'GET',
-      headers: getAlpacaHeaders(),
-    };
-    if (body) opts.body = JSON.stringify(body);
-    const response = await fetch(`${getAlpacaBase()}${endpoint}`, opts);
-    const data = await response.json();
-    if (!response.ok) return res.status(response.status).json(data);
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: 'NETWORK', message: err.message });
-  }
-});
+// NOTE: The arbitrary POST /api/alpaca/proxy passthrough was removed. It
+// forwarded any method + endpoint + body to Alpaca with server credentials,
+// bypassing every guardrail. Use the specific endpoints above instead.
 
 // ============================================
 // IBKR TRADING API PROXY
@@ -1094,8 +1221,8 @@ app.post('/api/ibkr/tickle', async (req, res) => {
   }
 });
 
-// --- IBKR: Accounts ---
-app.get('/api/ibkr/accounts', async (req, res) => {
+// --- IBKR: Accounts --- (account data requires auth)
+app.get('/api/ibkr/accounts', requireAuth, async (req, res) => {
   if (!IBKR_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
   }
@@ -1107,8 +1234,8 @@ app.get('/api/ibkr/accounts', async (req, res) => {
   }
 });
 
-// --- IBKR: Account summary ---
-app.get('/api/ibkr/account/summary', async (req, res) => {
+// --- IBKR: Account summary --- (account data requires auth)
+app.get('/api/ibkr/account/summary', requireAuth, async (req, res) => {
   if (!IBKR_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
   }
@@ -1120,8 +1247,8 @@ app.get('/api/ibkr/account/summary', async (req, res) => {
   }
 });
 
-// --- IBKR: Positions ---
-app.get('/api/ibkr/positions', async (req, res) => {
+// --- IBKR: Positions --- (account data requires auth)
+app.get('/api/ibkr/positions', requireAuth, async (req, res) => {
   if (!IBKR_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
   }
@@ -1134,28 +1261,34 @@ app.get('/api/ibkr/positions', async (req, res) => {
   }
 });
 
-// --- IBKR: Place Order --- (requires auth when Supabase configured)
-app.post('/api/ibkr/order', optionalAuth, async (req, res) => {
+// --- IBKR: Place Order --- (requires auth)
+app.post('/api/ibkr/order', requireAuth, async (req, res) => {
   if (!IBKR_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
   }
 
-  // Require explicit confirmation header for live trades
+  // Live trading is gated server-side by IBKR_LIVE_TRADING (default off).
+  if (!IBKR_LIVE_TRADING) {
+    return res.status(403).json({
+      error: 'LIVE_TRADE_DISABLED',
+      message: 'IBKR live trading is disabled on this server. Set IBKR_LIVE_TRADING=true to enable.',
+    });
+  }
+
+  // The X-Confirm-Live-Trade header is a UX confirmation flag, not the gate.
   if (req.headers['x-confirm-live-trade'] !== 'true') {
     return res.status(403).json({
-      error: 'LIVE_TRADE_BLOCKED',
-      message: 'IBKR live trading requires explicit confirmation. Set X-Confirm-Live-Trade: true header.',
+      error: 'LIVE_TRADE_UNCONFIRMED',
+      message: 'Live trade not confirmed. Set X-Confirm-Live-Trade: true to confirm intent.',
     });
   }
 
   const orderBody = req.body;
 
-  // Server-side guardrails
-  if (parseInt(orderBody.quantity || orderBody.qty) > IBKR_MAX_ORDER_QTY) {
-    return res.status(400).json({
-      error: 'GUARDRAIL',
-      message: 'Order quantity exceeds server max of ' + IBKR_MAX_ORDER_QTY,
-    });
+  // Server-side guardrails (fails closed: missing/NaN/zero/negative rejected)
+  const guard = checkOrderGuardrail(orderBody, IBKR_MAX_ORDER_QTY, ['quantity', 'qty']);
+  if (guard) {
+    return res.status(400).json({ error: guard.code, message: guard.message });
   }
 
   try {
@@ -1164,12 +1297,13 @@ app.post('/api/ibkr/order', optionalAuth, async (req, res) => {
     });
     res.json(data);
   } catch (err) {
-    res.status(err.status || 500).json({ error: 'ORDER_FAILED', message: err.message, data: err.data });
+    // Do not echo the raw provider payload (err.data); log it, return generic.
+    respondUpstreamError(res, err.status, 'ORDER_FAILED', 'IBKR order failed', err.data || err.message);
   }
 });
 
-// --- IBKR: Confirm order reply ---
-app.post('/api/ibkr/order/reply/:replyId', optionalAuth, async (req, res) => {
+// --- IBKR: Confirm order reply --- (requires auth)
+app.post('/api/ibkr/order/reply/:replyId', requireAuth, async (req, res) => {
   try {
     const data = await ibkrFetch('POST', '/iserver/reply/' + req.params.replyId, {
       confirmed: req.body.confirmed !== false,
@@ -1180,8 +1314,8 @@ app.post('/api/ibkr/order/reply/:replyId', optionalAuth, async (req, res) => {
   }
 });
 
-// --- IBKR: Cancel Order ---
-app.delete('/api/ibkr/order/:id', optionalAuth, async (req, res) => {
+// --- IBKR: Cancel Order --- (requires auth)
+app.delete('/api/ibkr/order/:id', requireAuth, async (req, res) => {
   if (!IBKR_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
   }
@@ -1193,8 +1327,8 @@ app.delete('/api/ibkr/order/:id', optionalAuth, async (req, res) => {
   }
 });
 
-// --- IBKR: List Orders ---
-app.get('/api/ibkr/orders', async (req, res) => {
+// --- IBKR: List Orders --- (account data requires auth)
+app.get('/api/ibkr/orders', requireAuth, async (req, res) => {
   if (!IBKR_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
   }
@@ -1278,19 +1412,9 @@ app.get('/api/ibkr/fx', async (req, res) => {
   }
 });
 
-// --- IBKR: Generic proxy ---
-app.post('/api/ibkr/proxy', optionalAuth, async (req, res) => {
-  if (!IBKR_ACCOUNT_ID) {
-    return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
-  }
-  const { method, endpoint, body } = req.body;
-  try {
-    const data = await ibkrFetch(method || 'GET', endpoint, body);
-    res.json(data);
-  } catch (err) {
-    res.status(err.status || 500).json({ error: 'PROXY_FAILED', message: err.message });
-  }
-});
+// NOTE: The arbitrary POST /api/ibkr/proxy passthrough was removed. It
+// forwarded any method + endpoint + body to the IB Gateway, bypassing every
+// guardrail. Use the specific endpoints above instead.
 
 // ============================================
 // QUESTRADE TRADING API PROXY
@@ -1383,8 +1507,8 @@ app.post('/api/questrade/auth/refresh', async (req, res) => {
   }
 });
 
-// --- Questrade: Accounts ---
-app.get('/api/questrade/accounts', async (req, res) => {
+// --- Questrade: Accounts --- (account data requires auth)
+app.get('/api/questrade/accounts', requireAuth, async (req, res) => {
   if (!QUESTRADE_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
   }
@@ -1396,8 +1520,8 @@ app.get('/api/questrade/accounts', async (req, res) => {
   }
 });
 
-// --- Questrade: Account balances ---
-app.get('/api/questrade/account/balances', async (req, res) => {
+// --- Questrade: Account balances --- (account data requires auth)
+app.get('/api/questrade/account/balances', requireAuth, async (req, res) => {
   if (!QUESTRADE_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
   }
@@ -1409,8 +1533,8 @@ app.get('/api/questrade/account/balances', async (req, res) => {
   }
 });
 
-// --- Questrade: Positions ---
-app.get('/api/questrade/positions', async (req, res) => {
+// --- Questrade: Positions --- (account data requires auth)
+app.get('/api/questrade/positions', requireAuth, async (req, res) => {
   if (!QUESTRADE_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
   }
@@ -1422,40 +1546,47 @@ app.get('/api/questrade/positions', async (req, res) => {
   }
 });
 
-// --- Questrade: Place Order ---
-app.post('/api/questrade/order', optionalAuth, async (req, res) => {
+// --- Questrade: Place Order --- (requires auth)
+app.post('/api/questrade/order', requireAuth, async (req, res) => {
   if (!QUESTRADE_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
   }
 
-  // Require explicit confirmation header for live trades
+  // Live trading is gated server-side by QUESTRADE_LIVE_TRADING (default off).
+  if (!QUESTRADE_LIVE_TRADING) {
+    return res.status(403).json({
+      error: 'LIVE_TRADE_DISABLED',
+      message: 'Questrade live trading is disabled on this server. Set QUESTRADE_LIVE_TRADING=true to enable.',
+    });
+  }
+
+  // The X-Confirm-Live-Trade header is a UX confirmation flag, not the gate.
   if (req.headers['x-confirm-live-trade'] !== 'true') {
     return res.status(403).json({
-      error: 'LIVE_TRADE_BLOCKED',
-      message: 'Questrade live trading requires explicit confirmation. Set X-Confirm-Live-Trade: true header.',
+      error: 'LIVE_TRADE_UNCONFIRMED',
+      message: 'Live trade not confirmed. Set X-Confirm-Live-Trade: true to confirm intent.',
     });
   }
 
   var orderBody = req.body;
 
-  // Server-side guardrails
-  if (parseInt(orderBody.quantity || orderBody.qty) > QUESTRADE_MAX_ORDER_QTY) {
-    return res.status(400).json({
-      error: 'GUARDRAIL',
-      message: 'Order quantity exceeds server max of ' + QUESTRADE_MAX_ORDER_QTY,
-    });
+  // Server-side guardrails (fails closed: missing/NaN/zero/negative rejected)
+  var guard = checkOrderGuardrail(orderBody, QUESTRADE_MAX_ORDER_QTY, ['quantity', 'qty']);
+  if (guard) {
+    return res.status(400).json({ error: guard.code, message: guard.message });
   }
 
   try {
     var data = await questradeFetch('POST', '/v1/accounts/' + QUESTRADE_ACCOUNT_ID + '/orders', orderBody);
     res.json(data);
   } catch (err) {
-    res.status(err.status || 500).json({ error: 'ORDER_FAILED', message: err.message, data: err.data });
+    // Do not echo the raw provider payload (err.data); log it, return generic.
+    respondUpstreamError(res, err.status, 'ORDER_FAILED', 'Questrade order failed', err.data || err.message);
   }
 });
 
-// --- Questrade: Cancel Order ---
-app.delete('/api/questrade/order/:id', optionalAuth, async (req, res) => {
+// --- Questrade: Cancel Order --- (requires auth)
+app.delete('/api/questrade/order/:id', requireAuth, async (req, res) => {
   if (!QUESTRADE_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
   }
@@ -1467,8 +1598,8 @@ app.delete('/api/questrade/order/:id', optionalAuth, async (req, res) => {
   }
 });
 
-// --- Questrade: List Orders ---
-app.get('/api/questrade/orders', async (req, res) => {
+// --- Questrade: List Orders --- (account data requires auth)
+app.get('/api/questrade/orders', requireAuth, async (req, res) => {
   if (!QUESTRADE_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
   }
@@ -1493,8 +1624,8 @@ app.get('/api/questrade/symbols/search', async (req, res) => {
   }
 });
 
-// --- Questrade: Executions (trade history) ---
-app.get('/api/questrade/executions', async (req, res) => {
+// --- Questrade: Executions (trade history) --- (account data requires auth)
+app.get('/api/questrade/executions', requireAuth, async (req, res) => {
   if (!QUESTRADE_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
   }
@@ -1509,21 +1640,9 @@ app.get('/api/questrade/executions', async (req, res) => {
   }
 });
 
-// --- Questrade: Generic proxy ---
-app.post('/api/questrade/proxy', optionalAuth, async (req, res) => {
-  if (!QUESTRADE_ACCOUNT_ID) {
-    return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
-  }
-  var method = req.body.method || 'GET';
-  var endpoint = req.body.endpoint;
-  var body = req.body.body;
-  try {
-    var data = await questradeFetch(method, endpoint, body);
-    res.json(data);
-  } catch (err) {
-    res.status(err.status || 500).json({ error: 'PROXY_FAILED', message: err.message });
-  }
-});
+// NOTE: The arbitrary POST /api/questrade/proxy passthrough was removed. It
+// forwarded any method + endpoint + body to Questrade with server credentials,
+// bypassing every guardrail. Use the specific endpoints above instead.
 
 // ============================================
 // BIGDATA.COM PREMIUM DATA API
@@ -1540,16 +1659,16 @@ app.get('/api/bigdata/status', async (req, res) => {
     res.json({
       configured: true,
       connected: test.success,
-      message: test.message,
-      keyPrefix: bigdataApiKey ? bigdataApiKey.slice(0, 8) + '...' : null
+      message: test.message
+      // keyPrefix intentionally omitted: never reveal any part of the key.
     });
   } catch (err) {
-    res.json({ configured: true, connected: false, message: err.message });
+    res.json({ configured: true, connected: false, message: 'Connection test failed.' });
   }
 });
 
-// POST /api/bigdata/key - Save BigData API key
-app.post('/api/bigdata/key', (req, res) => {
+// POST /api/bigdata/key - Save BigData API key (authenticated: server-global key)
+app.post('/api/bigdata/key', authLimiter, requireAuth, (req, res) => {
   const { apiKey } = req.body;
   if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 10) {
     return res.status(400).json({ error: 'Invalid API key format' });
@@ -1891,65 +2010,17 @@ app.delete('/api/user/api-keys/:id', requireAuth, async (req, res) => {
 // NEWS FEED ENDPOINT
 // ============================================
 
-const newsCache = { data: null, timestamp: 0 };
-const NEWS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-
-function generateMockNews(symbols) {
-  const now = Date.now();
-  const allNews = [
-    { headline: 'NVIDIA Surges on Record Data Center Revenue, AI Demand Accelerates', source: 'Reuters', time: now - 120000, sentiment: 'bullish', tickers: ['NVDA'], category: 'top' },
-    { headline: 'Federal Reserve Signals Patience on Rate Cuts Amid Sticky Inflation', source: 'Bloomberg', time: now - 300000, sentiment: 'bearish', tickers: ['SPY','QQQ'], category: 'top' },
-    { headline: 'Apple Announces New AI Features Coming to iPhone 17 Lineup', source: 'CNBC', time: now - 480000, sentiment: 'bullish', tickers: ['AAPL'], category: 'top' },
-    { headline: 'Tesla Deliveries Miss Estimates for Q1, Shares Under Pressure', source: 'MarketWatch', time: now - 720000, sentiment: 'bearish', tickers: ['TSLA'], category: 'top' },
-    { headline: 'Microsoft Azure Growth Reaccelerates, Cloud Spending Cycle Intact', source: 'The Information', time: now - 900000, sentiment: 'bullish', tickers: ['MSFT'], category: 'top' },
-    { headline: 'Amazon Web Services Wins Major Government Cloud Contract', source: 'WSJ', time: now - 1200000, sentiment: 'bullish', tickers: ['AMZN'], category: 'top' },
-    { headline: 'Meta Platforms Increases Capital Expenditure Guidance for AI Infrastructure', source: 'Reuters', time: now - 1500000, sentiment: 'neutral', tickers: ['META'], category: 'top' },
-    { headline: 'Palantir Secures $480M Pentagon Contract for AI Defense Platform', source: 'Defense News', time: now - 1800000, sentiment: 'bullish', tickers: ['PLTR'], category: 'top' },
-    { headline: 'JPMorgan Warns of Rising Credit Card Delinquencies in Consumer Banking', source: 'Financial Times', time: now - 2100000, sentiment: 'bearish', tickers: ['JPM'], category: 'top' },
-    { headline: 'Coinbase Volume Surges as Bitcoin Breaks New All-Time Highs', source: 'CoinDesk', time: now - 2400000, sentiment: 'bullish', tickers: ['COIN'], category: 'top' },
-    { headline: 'AMD Unveils Next-Gen MI400 AI Chip to Challenge NVIDIA Dominance', source: 'Tom\'s Hardware', time: now - 2700000, sentiment: 'bullish', tickers: ['AMD'], category: 'top' },
-    { headline: 'Disney Streaming Subscriber Growth Slows, Ad Tier Shows Promise', source: 'Variety', time: now - 3000000, sentiment: 'neutral', tickers: ['DIS'], category: 'top' },
-    { headline: 'Google Cloud Revenue Crosses $40B Annual Run Rate', source: 'TechCrunch', time: now - 3300000, sentiment: 'bullish', tickers: ['GOOGL'], category: 'top' },
-    { headline: 'VIX Spikes Above 20 Amid Geopolitical Uncertainty in Middle East', source: 'Bloomberg', time: now - 3600000, sentiment: 'bearish', tickers: ['SPY'], category: 'top' },
-    { headline: 'Semiconductor Equipment Orders Surge, Signaling Capacity Build-Out', source: 'SEMI', time: now - 4200000, sentiment: 'bullish', tickers: ['NVDA','AMD'], category: 'top' },
-    // Earnings-specific news
-    { headline: 'NVIDIA Q4 Earnings Preview: Street Expects Massive Beat on AI Momentum', source: 'Seeking Alpha', time: now - 600000, sentiment: 'bullish', tickers: ['NVDA'], category: 'earnings' },
-    { headline: 'Apple Earnings This Week: Services Revenue Key to Beating Estimates', source: 'Barron\'s', time: now - 900000, sentiment: 'neutral', tickers: ['AAPL'], category: 'earnings' },
-    { headline: 'AMD Earnings: Can Data Center Segment Offset PC Weakness?', source: 'Motley Fool', time: now - 1400000, sentiment: 'neutral', tickers: ['AMD'], category: 'earnings' },
-    { headline: 'Meta Earnings Expected to Show Strong Reels Monetization Progress', source: 'The Verge', time: now - 2000000, sentiment: 'bullish', tickers: ['META'], category: 'earnings' },
-  ];
-
-  let filtered = allNews;
-  if (symbols && symbols.length > 0) {
-    const symSet = new Set(symbols.map(s => s.toUpperCase()));
-    filtered = allNews.filter(n => n.tickers.some(t => symSet.has(t)));
-  }
-  return filtered;
-}
-
+// No news provider is configured. This endpoint used to return invented
+// headlines attributed to real outlets (Reuters, Bloomberg, WSJ, CNBC), which
+// is fabricated content. It now returns an empty, clearly-flagged result. To
+// enable real news, wire a licensed provider here and populate `articles`.
 app.get('/api/news', (req, res) => {
-  const symbols = req.query.symbols ? req.query.symbols.split(',') : [];
-  const category = req.query.category || 'all';
-
-  // Check cache
-  const now = Date.now();
-  if (newsCache.data && (now - newsCache.timestamp) < NEWS_CACHE_TTL && !symbols.length) {
-    let data = newsCache.data;
-    if (category !== 'all') data = data.filter(n => n.category === category);
-    return res.json({ news: data, cached: true });
-  }
-
-  // Generate fresh mock news
-  const news = generateMockNews(symbols);
-  if (!symbols.length) {
-    newsCache.data = news;
-    newsCache.timestamp = now;
-  }
-
-  let result = news;
-  if (category !== 'all') result = result.filter(n => n.category === category);
-
-  res.json({ news: result, cached: false });
+  res.json({
+    news: [],
+    articles: [],
+    source: 'none',
+    note: 'No news provider configured'
+  });
 });
 
 // ============================================
@@ -2010,6 +2081,27 @@ app.use(express.static(path.join(__dirname)));
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// ============================================
+// GLOBAL ERROR HANDLING
+// ============================================
+
+// Express error-handling middleware (must be last, 4-arg signature). Logs the
+// full error server-side and returns a generic message. Never leaks stack
+// traces or internals to the client.
+app.use(function (err, req, res, next) {
+  console.error('[Server] Unhandled route error:', err && err.stack ? err.stack : err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: 'INTERNAL', message: 'An unexpected error occurred.' });
+});
+
+// Keep the process alive on unexpected async failures; log for diagnosis.
+process.on('unhandledRejection', function (reason) {
+  console.error('[Server] Unhandled promise rejection:', reason);
+});
+process.on('uncaughtException', function (err) {
+  console.error('[Server] Uncaught exception:', err && err.stack ? err.stack : err);
 });
 
 app.listen(PORT, function () {

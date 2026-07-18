@@ -12,12 +12,12 @@
   // Spawn floating particles
   const particleContainer = document.getElementById('landingParticles');
   if (particleContainer) {
-    for (let i = 0; i < 80; i++) {
+    for (let i = 0; i < 50; i++) {
       const p = document.createElement('div');
       p.className = 'landing-particle';
       p.style.left = Math.random() * 100 + '%';
-      p.style.animationDelay = Math.random() * 6 + 's';
-      p.style.animationDuration = (4 + Math.random() * 5) + 's';
+      p.style.animationDelay = Math.random() * 7 + 's';
+      p.style.animationDuration = (5 + Math.random() * 5) + 's';
       particleContainer.appendChild(p);
     }
   }
@@ -133,33 +133,65 @@ setInterval(updateClock, 1000);
 updateClock();
 
 // ---- MARKET TICKER ----
-const tickerData = [
-  { sym: 'SPY', price: '584.23', chg: '+1.24%', dir: 'profit' },
-  { sym: 'QQQ', price: '497.81', chg: '+1.67%', dir: 'profit' },
-  { sym: 'DIA', price: '421.56', chg: '-0.32%', dir: 'loss' },
-  { sym: 'IWM', price: '207.43', chg: '+0.89%', dir: 'profit' },
-  { sym: 'VIX', price: '18.73', chg: '+8.42%', dir: 'loss' },
-  { sym: 'GLD', price: '214.87', chg: '+0.34%', dir: 'profit' },
-  { sym: 'TLT', price: '92.14', chg: '-0.67%', dir: 'loss' },
-  { sym: 'BTC', price: '72,841', chg: '+3.21%', dir: 'profit' },
-  { sym: 'ETH', price: '3,847', chg: '+2.14%', dir: 'profit' },
-  { sym: 'EUR/USD', price: '1.0892', chg: '+0.12%', dir: 'profit' },
-  { sym: 'OIL', price: '78.42', chg: '-1.23%', dir: 'loss' },
-  { sym: 'GOLD', price: '2,187', chg: '+0.41%', dir: 'profit' },
+const TICKER_TAPE_SYMBOLS = [
+  { sym: 'SPY', label: 'SPY' },
+  { sym: 'QQQ', label: 'QQQ' },
+  { sym: 'DIA', label: 'DIA' },
+  { sym: 'IWM', label: 'IWM' },
+  { sym: '^GSPTSE', label: 'TSX' },
+  { sym: '^JN0U.TO', label: 'TSX-V' },
+  { sym: '^VIX', label: 'VIX' },
+  { sym: 'GLD', label: 'GLD' },
+  { sym: 'TLT', label: 'TLT' },
+  { sym: 'BTC-USD', label: 'BTC' },
+  { sym: 'ETH-USD', label: 'ETH' },
+  { sym: 'CADUSD=X', label: 'CAD/USD' },
+  { sym: 'USDCAD=X', label: 'USD/CAD' },
+  { sym: 'EURUSD=X', label: 'EUR/USD' },
+  { sym: 'CL=F', label: 'OIL' },
+  { sym: 'GC=F', label: 'GOLD' },
 ];
 
 const tickerEl = document.getElementById('marketTicker');
-// Create scrolling wrapper with duplicate for seamless loop
 const tickerInner = document.createElement('div');
 tickerInner.className = 'topbar-ticker-inner';
-const allTickers = [...tickerData, ...tickerData]; // duplicate for seamless scroll
-allTickers.forEach(t => {
-  const item = document.createElement('div');
-  item.className = 'ticker-item';
-  item.innerHTML = `<span class="ticker-sym">${t.sym}</span><span class="ticker-price">${t.price}</span><span class="ticker-chg ${t.dir}">${t.chg}</span>`;
-  tickerInner.appendChild(item);
-});
+
+function buildTickerTape(data) {
+  tickerInner.innerHTML = '';
+  const items = [...data, ...data]; // duplicate for seamless scroll
+  items.forEach(t => {
+    const item = document.createElement('div');
+    item.className = 'ticker-item';
+    item.innerHTML = '<span class="ticker-sym">' + t.label + '</span><span class="ticker-price">' + t.price + '</span><span class="ticker-chg ' + t.dir + '">' + t.chg + '</span>';
+    tickerInner.appendChild(item);
+  });
+}
+
+// Render placeholder tape immediately
+buildTickerTape(TICKER_TAPE_SYMBOLS.map(t => ({ label: t.label, price: '--', chg: '--', dir: '' })));
 tickerEl.appendChild(tickerInner);
+
+// Fetch live ticker tape data
+async function refreshTickerTape() {
+  try {
+    const symbols = TICKER_TAPE_SYMBOLS.map(t => t.sym).join(',');
+    const resp = await fetch('/api/quotes?symbols=' + encodeURIComponent(symbols));
+    if (!resp.ok) return;
+    const quotes = await resp.json();
+    const tapeData = TICKER_TAPE_SYMBOLS.map(t => {
+      const q = quotes[t.sym] || quotes[t.sym.toUpperCase()] || {};
+      const price = q.price != null ? (Math.abs(q.price) < 10 ? q.price.toFixed(4) : q.price >= 1000 ? q.price.toLocaleString('en-US', {maximumFractionDigits: 0}) : q.price.toFixed(2)) : '--';
+      const chgPct = q.changePct != null ? (q.changePct >= 0 ? '+' : '') + q.changePct.toFixed(2) + '%' : '--';
+      const dir = q.changePct != null ? (q.changePct >= 0 ? 'profit' : 'loss') : '';
+      return { label: t.label, price: price, chg: chgPct, dir: dir };
+    });
+    buildTickerTape(tapeData);
+  } catch (e) {
+    console.warn('[Ticker] Tape refresh failed:', e.message);
+  }
+}
+refreshTickerTape();
+setInterval(refreshTickerTape, 30000);
 
 // ---- CAP SIZE TOGGLE ----
 document.querySelectorAll('.cap-toggle').forEach(group => {
@@ -297,6 +329,10 @@ function generateCandleData(count, startPrice, endPrice) {
   const candles = [];
   let price = startPrice;
   const trend = (endPrice - startPrice) / count;
+  // Generate timestamps: 5-min intervals ending at now
+  const now = Math.floor(Date.now() / 1000);
+  const intervalSec = 5 * 60;
+  const startTime = now - (count * intervalSec);
 
   for (let i = 0; i < count; i++) {
     const change = (Math.random() - 0.45) * 2.5 + trend;
@@ -304,7 +340,7 @@ function generateCandleData(count, startPrice, endPrice) {
     const close = price + change;
     const high = Math.max(open, close) + Math.random() * 1.5;
     const low = Math.min(open, close) - Math.random() * 1.5;
-    candles.push({ open, close, high, low, volume: Math.random() * 5000000 + 1000000 });
+    candles.push({ time: startTime + (i * intervalSec), open, close, high, low, volume: Math.random() * 5000000 + 1000000 });
     price = close;
   }
   return candles;
@@ -2026,7 +2062,7 @@ async function sendGsChat() {
   // Thinking indicator
   const thinkingDiv = document.createElement('div');
   thinkingDiv.className = 'gs-chat-message ai gs-thinking';
-  thinkingDiv.innerHTML = `<div class="gs-chat-avatar">GS</div><div class="gs-chat-content"><div class="gs-thinking-dots"><span></span><span></span><span></span></div></div>`;
+  thinkingDiv.innerHTML = `<div class="gs-chat-avatar"><svg width="16" height="16" viewBox="0 0 24 24" fill="#0D0D12"><path d="M12 2C12 2 12.8 5.6 13.6 7.2C14.4 8.8 16 10.4 17.6 11.2C19.2 12 22 12 22 12C22 12 19.2 12 17.6 12.8C16 13.6 14.4 15.2 13.6 16.8C12.8 18.4 12 22 12 22C12 22 11.2 18.4 10.4 16.8C9.6 15.2 8 13.6 6.4 12.8C4.8 12 2 12 2 12C2 12 4.8 12 6.4 11.2C8 10.4 9.6 8.8 10.4 7.2C11.2 5.6 12 2 12 2Z"/></svg></div><div class="gs-chat-content"><div class="gs-thinking-dots"><span></span><span></span><span></span></div></div>`;
   body.appendChild(thinkingDiv);
   body.scrollTop = body.scrollHeight;
 
@@ -2065,14 +2101,14 @@ async function sendGsChat() {
       } else {
         errorHtml = `<p style="color: var(--loss);">Error: ${result.message}</p>`;
       }
-      errorDiv.innerHTML = `<div class="gs-chat-avatar">GS</div><div class="gs-chat-content">${errorHtml}</div>`;
+      errorDiv.innerHTML = `<div class="gs-chat-avatar"><svg width="16" height="16" viewBox="0 0 24 24" fill="#0D0D12"><path d="M12 2C12 2 12.8 5.6 13.6 7.2C14.4 8.8 16 10.4 17.6 11.2C19.2 12 22 12 22 12C22 12 19.2 12 17.6 12.8C16 13.6 14.4 15.2 13.6 16.8C12.8 18.4 12 22 12 22C12 22 11.2 18.4 10.4 16.8C9.6 15.2 8 13.6 6.4 12.8C4.8 12 2 12 2 12C2 12 4.8 12 6.4 11.2C8 10.4 9.6 8.8 10.4 7.2C11.2 5.6 12 2 12 2Z"/></svg></div><div class="gs-chat-content">${errorHtml}</div>`;
       body.appendChild(errorDiv);
       body.scrollTop = body.scrollHeight;
     } else if (result.type === 'mock') {
       // Mock fallback response with typing effect
       const aiDiv = document.createElement('div');
       aiDiv.className = 'gs-chat-message ai';
-      aiDiv.innerHTML = `<div class="gs-chat-avatar">GS</div><div class="gs-chat-content"></div>`;
+      aiDiv.innerHTML = `<div class="gs-chat-avatar"><svg width="16" height="16" viewBox="0 0 24 24" fill="#0D0D12"><path d="M12 2C12 2 12.8 5.6 13.6 7.2C14.4 8.8 16 10.4 17.6 11.2C19.2 12 22 12 22 12C22 12 19.2 12 17.6 12.8C16 13.6 14.4 15.2 13.6 16.8C12.8 18.4 12 22 12 22C12 22 11.2 18.4 10.4 16.8C9.6 15.2 8 13.6 6.4 12.8C4.8 12 2 12 2 12C2 12 4.8 12 6.4 11.2C8 10.4 9.6 8.8 10.4 7.2C11.2 5.6 12 2 12 2Z"/></svg></div><div class="gs-chat-content"></div>`;
       body.appendChild(aiDiv);
       const contentDiv = aiDiv.querySelector('.gs-chat-content');
       await typewriteHtml(contentDiv, result.html, body);
@@ -2080,7 +2116,7 @@ async function sendGsChat() {
       // Streaming AI response
       const aiDiv = document.createElement('div');
       aiDiv.className = 'gs-chat-message ai';
-      aiDiv.innerHTML = `<div class="gs-chat-avatar">GS</div><div class="gs-chat-content"><span class="gs-stream-cursor"></span></div>`;
+      aiDiv.innerHTML = `<div class="gs-chat-avatar"><svg width="16" height="16" viewBox="0 0 24 24" fill="#0D0D12"><path d="M12 2C12 2 12.8 5.6 13.6 7.2C14.4 8.8 16 10.4 17.6 11.2C19.2 12 22 12 22 12C22 12 19.2 12 17.6 12.8C16 13.6 14.4 15.2 13.6 16.8C12.8 18.4 12 22 12 22C12 22 11.2 18.4 10.4 16.8C9.6 15.2 8 13.6 6.4 12.8C4.8 12 2 12 2 12C2 12 4.8 12 6.4 11.2C8 10.4 9.6 8.8 10.4 7.2C11.2 5.6 12 2 12 2Z"/></svg></div><div class="gs-chat-content"><span class="gs-stream-cursor"></span></div>`;
       body.appendChild(aiDiv);
       const contentDiv = aiDiv.querySelector('.gs-chat-content');
       let accumulatedText = '';
@@ -2110,7 +2146,7 @@ async function sendGsChat() {
     if (thinkingDiv.parentNode) thinkingDiv.remove();
     const errorDiv = document.createElement('div');
     errorDiv.className = 'gs-chat-message ai';
-    errorDiv.innerHTML = `<div class="gs-chat-avatar">GS</div><div class="gs-chat-content"><p style="color: var(--loss);">Connection error. Make sure the server is running (npm start).</p></div>`;
+    errorDiv.innerHTML = `<div class="gs-chat-avatar"><svg width="16" height="16" viewBox="0 0 24 24" fill="#0D0D12"><path d="M12 2C12 2 12.8 5.6 13.6 7.2C14.4 8.8 16 10.4 17.6 11.2C19.2 12 22 12 22 12C22 12 19.2 12 17.6 12.8C16 13.6 14.4 15.2 13.6 16.8C12.8 18.4 12 22 12 22C12 22 11.2 18.4 10.4 16.8C9.6 15.2 8 13.6 6.4 12.8C4.8 12 2 12 2 12C2 12 4.8 12 6.4 11.2C8 10.4 9.6 8.8 10.4 7.2C11.2 5.6 12 2 12 2Z"/></svg></div><div class="gs-chat-content"><p style="color: var(--loss);">Connection error. Make sure the server is running (npm start).</p></div>`;
     body.appendChild(errorDiv);
   }
 
@@ -2515,8 +2551,11 @@ const TIMEFRAME_MAP = {
   '15m': { interval: '15m', range: '1d' },
   '1H':  { interval: '60m', range: '5d' },
   '4H':  { interval: '60m', range: '1mo' },
-  '1D':  { interval: '1d',  range: '6mo' },
-  '1W':  { interval: '1wk', range: '2y' },
+  '1D':  { interval: '1d',  range: '5d' },
+  '1W':  { interval: '1d',  range: '5d' },
+  '1M':  { interval: '1d',  range: '1mo' },
+  '3M':  { interval: '1d',  range: '3mo' },
+  '6M':  { interval: '1d',  range: '6mo' },
   '1Y':  { interval: '1d',  range: '1y' },
   '2Y':  { interval: '1wk', range: '2y' },
   '3Y':  { interval: '1wk', range: '3y' },
@@ -2572,7 +2611,7 @@ function updateChartOverlay(candles) {
 function updateChartTitle(symbol, candles) {
   const titleEl = document.querySelector('.chart-panel .panel-title');
   const priceEl = document.querySelector('.chart-panel .panel-price');
-  if (titleEl) titleEl.textContent = symbol;
+  if (titleEl) titleEl.textContent = symbol.toUpperCase();
   if (priceEl && candles && candles.length > 0) {
     const last = candles[candles.length - 1];
     const first = candles[0];
@@ -2591,13 +2630,17 @@ function drawChartWithType(candles, chartType) {
   const canvas = document.getElementById('chartCanvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
   const rect = canvas.parentElement.getBoundingClientRect();
-  canvas.width = rect.width;
-  canvas.height = rect.height;
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+  ctx.scale(dpr, dpr);
 
-  const padding = { top: 50, right: 60, bottom: 10, left: 10 };
-  const chartW = canvas.width - padding.left - padding.right;
-  const chartH = canvas.height - padding.top - padding.bottom;
+  const padding = { top: 50, right: 60, bottom: 44, left: 10 };
+  const chartW = rect.width - padding.left - padding.right;
+  const chartH = rect.height - padding.top - padding.bottom;
 
   let min = Infinity, max = -Infinity;
   candles.forEach(c => { min = Math.min(min, c.low); max = Math.max(max, c.high); });
@@ -2607,10 +2650,8 @@ function drawChartWithType(candles, chartType) {
 
   const barWidth = chartW / candles.length;
 
-  // For large datasets, auto-switch to area chart since candles get too compressed
-  if (candles.length > 120 && chartType === 'candlestick') {
-    chartType = 'area';
-  }
+  const W = rect.width;
+  const H = rect.height;
 
   // Grid lines
   ctx.strokeStyle = '#1A1A24';
@@ -2619,17 +2660,95 @@ function drawChartWithType(candles, chartType) {
     const y = padding.top + (chartH / 5) * i;
     ctx.beginPath();
     ctx.moveTo(padding.left, y);
-    ctx.lineTo(canvas.width - padding.right, y);
+    ctx.lineTo(W - padding.right, y);
     ctx.stroke();
     const price = max - ((max - min) / 5) * i;
     ctx.fillStyle = '#5C5C6E';
     ctx.font = '10px JetBrains Mono';
     ctx.textAlign = 'left';
-    ctx.fillText(price.toFixed(2), canvas.width - padding.right + 5, y + 3);
+    ctx.fillText(price.toFixed(2), W - padding.right + 5, y + 3);
+  }
+
+  // ---- X-AXIS DATE/YEAR LABELS ----
+  if (candles[0].time != null) {
+    // Determine the total time span to decide label format
+    const firstTime = candles[0].time * 1000;
+    const lastTime = candles[candles.length - 1].time * 1000;
+    const spanDays = (lastTime - firstTime) / (1000 * 60 * 60 * 24);
+
+    // Build year boundary markers for multi-year charts
+    const yearBoundaries = [];
+    if (spanDays > 180) {
+      let prevYear = new Date(firstTime).getFullYear();
+      for (let i = 1; i < candles.length; i++) {
+        const yr = new Date(candles[i].time * 1000).getFullYear();
+        if (yr !== prevYear) {
+          yearBoundaries.push({ index: i, year: yr });
+          prevYear = yr;
+        }
+      }
+    }
+
+    // Draw year boundary lines and labels
+    if (yearBoundaries.length > 0) {
+      yearBoundaries.forEach(yb => {
+        const x = padding.left + yb.index * barWidth;
+        // Vertical dashed line
+        ctx.strokeStyle = 'rgba(92, 92, 110, 0.3)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x, padding.top);
+        ctx.lineTo(x, padding.top + chartH);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // Year label below chart
+        ctx.fillStyle = '#8A8A9A';
+        ctx.font = 'bold 11px JetBrains Mono';
+        ctx.textAlign = 'center';
+        ctx.fillText(String(yb.year), x, padding.top + chartH + 14);
+      });
+    }
+
+    // Date tick marks along x-axis
+    // Choose ~6-10 evenly spaced labels depending on span
+    const targetTicks = Math.min(10, Math.max(5, Math.floor(chartW / 90)));
+    const step = Math.max(1, Math.floor(candles.length / targetTicks));
+    ctx.fillStyle = '#5C5C6E';
+    ctx.font = '9px JetBrains Mono';
+    ctx.textAlign = 'center';
+    const yLabelPos = yearBoundaries.length > 0 ? padding.top + chartH + 28 : padding.top + chartH + 14;
+    for (let i = 0; i < candles.length; i += step) {
+      const d = new Date(candles[i].time * 1000);
+      const x = padding.left + i * barWidth + barWidth / 2;
+      let label;
+      if (spanDays <= 2) {
+        // Intraday: show HH:MM
+        label = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+      } else if (spanDays <= 90) {
+        // Short term: MM/DD
+        label = (d.getMonth() + 1) + '/' + d.getDate();
+      } else if (yearBoundaries.length > 0) {
+        // Multi-year: show month abbreviation only (year shown by boundary labels)
+        label = d.toLocaleDateString('en-US', { month: 'short' });
+      } else {
+        // Medium term (6mo-1yr): MM/DD/YY
+        label = (d.getMonth() + 1) + '/' + d.getDate() + '/' + String(d.getFullYear()).slice(2);
+      }
+      ctx.fillText(label, x, yLabelPos);
+      // Small tick mark
+      ctx.strokeStyle = 'rgba(92, 92, 110, 0.2)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, padding.top + chartH);
+      ctx.lineTo(x, padding.top + chartH + 4);
+      ctx.stroke();
+    }
   }
 
   if (chartType === 'candlestick') {
-    // Draw candles
+    // Draw candles - adapt padding for bar count
+    const gap = barWidth > 6 ? 2 : (barWidth > 3 ? 1 : 0);
     candles.forEach((c, i) => {
       const x = padding.left + i * barWidth;
       const bullish = c.close >= c.open;
@@ -2649,7 +2768,7 @@ function drawChartWithType(candles, chartType) {
 
       ctx.fillStyle = bullish ? 'rgba(16, 185, 129, 0.8)' : 'rgba(239, 68, 68, 0.8)';
       const bodyH = Math.max(1, bodyBottom - bodyTop);
-      ctx.fillRect(x + 2, bodyTop, barWidth - 4, bodyH);
+      ctx.fillRect(x + gap, bodyTop, Math.max(1, barWidth - gap * 2), bodyH);
     });
   } else if (chartType === 'line') {
     // Line chart - close prices
@@ -2705,17 +2824,17 @@ function drawChartWithType(candles, chartType) {
   ctx.setLineDash([4, 4]);
   ctx.beginPath();
   ctx.moveTo(padding.left, priceY);
-  ctx.lineTo(canvas.width - padding.right, priceY);
+  ctx.lineTo(W - padding.right, priceY);
   ctx.stroke();
   ctx.setLineDash([]);
 
   // Price label
   ctx.fillStyle = lastClose >= candles[0].open ? '#10B981' : '#EF4444';
-  ctx.fillRect(canvas.width - padding.right, priceY - 9, 56, 18);
+  ctx.fillRect(W - padding.right, priceY - 9, 56, 18);
   ctx.fillStyle = '#0D0D12';
   ctx.font = 'bold 10px JetBrains Mono';
   ctx.textAlign = 'left';
-  ctx.fillText(lastClose.toFixed(2), canvas.width - padding.right + 4, priceY + 3);
+  ctx.fillText(lastClose.toFixed(2), W - padding.right + 4, priceY + 3);
 
   // Draw indicator overlays (SMA, EMA, BB, VWAP)
   if (typeof drawIndicatorOverlays === 'function' && typeof activeIndicators !== 'undefined') {
@@ -2773,8 +2892,12 @@ function syncCrosshairCanvasSize() {
   if (!crosshairCanvas) return;
   const mainCanvas = document.getElementById('chartCanvas');
   if (!mainCanvas) return;
-  crosshairCanvas.width = mainCanvas.width;
-  crosshairCanvas.height = mainCanvas.height;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = mainCanvas.getBoundingClientRect();
+  crosshairCanvas.width = rect.width * dpr;
+  crosshairCanvas.height = rect.height * dpr;
+  crosshairCanvas.style.width = rect.width + 'px';
+  crosshairCanvas.style.height = rect.height + 'px';
 }
 
 function onCrosshairMove(e) {
@@ -2787,18 +2910,16 @@ function onCrosshairMove(e) {
   syncCrosshairCanvasSize();
 
   const rect = mainCanvas.getBoundingClientRect();
-  // Scale mouse position to canvas coordinates
-  const scaleX = mainCanvas.width / rect.width;
-  const scaleY = mainCanvas.height / rect.height;
-  const mouseX = (e.clientX - rect.left) * scaleX;
-  const mouseY = (e.clientY - rect.top) * scaleY;
+  // Mouse position in CSS pixels (matches our drawing coords after DPR scale)
+  const mouseX = e.clientX - rect.left;
+  const mouseY = e.clientY - rect.top;
 
-  const padding = { top: 50, right: 60, bottom: 10, left: 10 };
-  const chartW = mainCanvas.width - padding.left - padding.right;
-  const chartH = mainCanvas.height - padding.top - padding.bottom;
+  const padding = { top: 50, right: 60, bottom: 44, left: 10 };
+  const chartW = rect.width - padding.left - padding.right;
+  const chartH = rect.height - padding.top - padding.bottom;
 
   // Only show crosshair within chart area
-  if (mouseX < padding.left || mouseX > mainCanvas.width - padding.right ||
+  if (mouseX < padding.left || mouseX > rect.width - padding.right ||
       mouseY < padding.top || mouseY > padding.top + chartH) {
     clearCrosshair();
     return;
@@ -2822,9 +2943,11 @@ function onCrosshairMove(e) {
   // Price at mouse Y
   const priceAtMouse = max - ((mouseY - padding.top) / chartH) * (max - min);
 
-  // Draw crosshair on overlay canvas
+  // Draw crosshair on overlay canvas (scale for DPR)
+  const dpr = window.devicePixelRatio || 1;
   const ctx = crosshairCanvas.getContext('2d');
-  ctx.clearRect(0, 0, crosshairCanvas.width, crosshairCanvas.height);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, rect.width, rect.height);
 
   ctx.strokeStyle = '#5C5C6E';
   ctx.lineWidth = 1;
@@ -2840,18 +2963,18 @@ function onCrosshairMove(e) {
   // Horizontal line
   ctx.beginPath();
   ctx.moveTo(padding.left, mouseY);
-  ctx.lineTo(mainCanvas.width - padding.right, mouseY);
+  ctx.lineTo(rect.width - padding.right, mouseY);
   ctx.stroke();
 
   ctx.setLineDash([]);
 
   // Price label on Y-axis (right edge)
   ctx.fillStyle = '#2A2A38';
-  ctx.fillRect(mainCanvas.width - padding.right, mouseY - 9, 56, 18);
+  ctx.fillRect(rect.width - padding.right, mouseY - 9, 56, 18);
   ctx.fillStyle = '#A0A0B8';
   ctx.font = '10px JetBrains Mono';
   ctx.textAlign = 'left';
-  ctx.fillText(priceAtMouse.toFixed(2), mainCanvas.width - padding.right + 4, mouseY + 3);
+  ctx.fillText(priceAtMouse.toFixed(2), rect.width - padding.right + 4, mouseY + 3);
 
   // Time/index label on X-axis (bottom)
   let timeLabel = '' + (clampedIdx + 1);
@@ -2860,19 +2983,20 @@ function onCrosshairMove(e) {
     const hours = d.getHours().toString().padStart(2, '0');
     const mins = d.getMinutes().toString().padStart(2, '0');
     timeLabel = hours + ':' + mins;
-    // If daily+ timeframe, show date instead
-    if (['1D','1W','1Y','2Y','3Y','5Y','MAX'].includes(currentTimeframe)) {
+    // If daily+ timeframe, show date with year
+    if (['1D','1W','1M','3M','6M','1Y','2Y','3Y','5Y','MAX'].includes(currentTimeframe)) {
       const mon = (d.getMonth() + 1).toString().padStart(2, '0');
       const day = d.getDate().toString().padStart(2, '0');
-      timeLabel = mon + '/' + day;
+      const yr = String(d.getFullYear()).slice(2);
+      timeLabel = mon + '/' + day + '/' + yr;
     }
   }
-  const timeLabelWidth = ctx.measureText(timeLabel).width + 8;
+  const timeLabelWidth = ctx.measureText(timeLabel).width + 10;
   ctx.fillStyle = '#2A2A38';
-  ctx.fillRect(candleCenterX - timeLabelWidth / 2, padding.top + chartH, timeLabelWidth, 16);
+  ctx.fillRect(candleCenterX - timeLabelWidth / 2, padding.top + chartH + 1, timeLabelWidth, 20);
   ctx.fillStyle = '#A0A0B8';
   ctx.textAlign = 'center';
-  ctx.fillText(timeLabel, candleCenterX, padding.top + chartH + 11);
+  ctx.fillText(timeLabel, candleCenterX, padding.top + chartH + 14);
 
   // Update the overlay data to show hovered candle
   updateChartOverlay([candle]);
@@ -2925,20 +3049,24 @@ function drawVolumeChartFromCandles(candles) {
   const canvas = document.getElementById('volumeCanvas');
   if (!canvas || !candles || candles.length === 0) return;
   const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
   const rect = canvas.parentElement.getBoundingClientRect();
-  canvas.width = rect.width;
-  canvas.height = rect.height;
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+  ctx.scale(dpr, dpr);
 
   let maxVol = 0;
   candles.forEach(c => { maxVol = Math.max(maxVol, c.volume || 0); });
   if (maxVol === 0) return;
 
-  const barWidth = canvas.width / candles.length;
+  const barWidth = rect.width / candles.length;
   candles.forEach((c, i) => {
     const bullish = c.close >= c.open;
     ctx.fillStyle = bullish ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)';
-    const h = ((c.volume || 0) / maxVol) * canvas.height;
-    ctx.fillRect(i * barWidth + 1, canvas.height - h, barWidth - 2, h);
+    const h = ((c.volume || 0) / maxVol) * rect.height;
+    ctx.fillRect(i * barWidth + 1, rect.height - h, barWidth - 2, h);
   });
 }
 
@@ -2979,6 +3107,9 @@ function setupChartTypeButtons() {
 // ---- WATCHLIST CLICK-TO-CHART ----
 function setupWatchlistClickToChart() {
   document.querySelectorAll('.wl-row[data-ticker]').forEach(row => {
+    // Prevent duplicate handlers from stacking on repeated calls
+    if (row._chartClickBound) return;
+    row._chartClickBound = true;
     row.addEventListener('click', () => {
       const ticker = row.dataset.ticker;
       if (!ticker) return;
@@ -3394,8 +3525,11 @@ async function drawSparklinesReal() {
     'spark-sp500': { symbol: 'SPY', fallbackTrend: 'up', upColor: '#10B981', downColor: '#EF4444' },
     'spark-nasdaq': { symbol: 'QQQ', fallbackTrend: 'up', upColor: '#10B981', downColor: '#EF4444' },
     'spark-dow': { symbol: 'DIA', fallbackTrend: 'down', upColor: '#10B981', downColor: '#EF4444' },
+    'spark-russell': { symbol: 'IWM', fallbackTrend: 'up', upColor: '#10B981', downColor: '#EF4444' },
     'spark-vix': { symbol: '^VIX', fallbackTrend: 'up', upColor: '#EF4444', downColor: '#10B981' },
     'spark-yield': { symbol: 'TLT', fallbackTrend: 'flat', upColor: '#F59E0B', downColor: '#F59E0B' },
+    'spark-tsx': { symbol: '^GSPTSE', fallbackTrend: 'up', upColor: '#10B981', downColor: '#EF4444' },
+    'spark-cadusd': { symbol: 'CADUSD=X', fallbackTrend: 'flat', upColor: '#10B981', downColor: '#EF4444' },
   };
 
   for (const [id, config] of Object.entries(sparkConfig)) {
@@ -3583,12 +3717,65 @@ async function fetchAndDisplayFundamentals(symbol) {
     setVal('fundEPS', d.eps != null ? '$' + d.eps.toFixed(2) : '--');
     setVal('fundYield', d.dividendYield != null ? (d.dividendYield * 100).toFixed(2) + '%' : '--');
     setVal('fundBeta', d.beta != null ? d.beta.toFixed(2) : '--');
+
+    // Update company name and exchange in chart title
+    const nameEl = document.getElementById('companyName');
+    const exchEl = document.getElementById('companyExchange');
+    if (nameEl) nameEl.textContent = d.longName || d.shortName || '';
+    const exchMap = { NMS: 'NASDAQ', NGM: 'NASDAQ', NYQ: 'NYSE', PCX: 'ARCA', BTS: 'BATS', ASE: 'AMEX', OPR: 'OTC', PNK: 'OTC' };
+    const exchDisplay = exchMap[d.exchangeSymbol] || d.exchangeSymbol || d.exchange || '';
+    if (exchEl) exchEl.textContent = exchDisplay ? exchDisplay + ':' + symbol : symbol;
+
+    // Populate SEC filings links
+    populateFilingsLinks(symbol);
+    // Populate news links
+    populateNewsLinks(symbol);
+
   } catch (err) {
     console.warn('[Fundamentals] Failed for ' + symbol + ':', err.message);
     Object.keys(ids).forEach(id => {
       const el = document.getElementById(id);
       if (el) el.textContent = '--';
     });
+  }
+}
+
+function populateFilingsLinks(symbol) {
+  const el = document.getElementById('companyFilings');
+  if (!el) return;
+  const secBase = 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company=&CIK=' + encodeURIComponent(symbol) + '&type=';
+  el.innerHTML =
+    '<a href="' + secBase + '10-K&dateb=&owner=include&count=5&search_text=&action=getcompany" target="_blank"><span class="filing-type">10-K</span> Annual Report</a>' +
+    '<a href="' + secBase + '10-Q&dateb=&owner=include&count=5&search_text=&action=getcompany" target="_blank"><span class="filing-type">10-Q</span> Quarterly Report</a>' +
+    '<a href="' + secBase + '8-K&dateb=&owner=include&count=10&search_text=&action=getcompany" target="_blank"><span class="filing-type">8-K</span> Current Report</a>' +
+    '<a href="' + secBase + 'DEF+14A&dateb=&owner=include&count=5&search_text=&action=getcompany" target="_blank"><span class="filing-type">DEF 14A</span> Proxy Statement</a>' +
+    '<a href="https://finance.yahoo.com/quote/' + encodeURIComponent(symbol) + '/financials/" target="_blank"><span class="filing-type">YF</span> Financial Statements</a>' +
+    '<a href="https://finance.yahoo.com/quote/' + encodeURIComponent(symbol) + '/analysis/" target="_blank"><span class="filing-type">YF</span> Analyst Estimates</a>';
+}
+
+async function populateNewsLinks(symbol) {
+  const el = document.getElementById('companyNews');
+  if (!el) return;
+  el.innerHTML = '<span class="filings-placeholder">Loading news...</span>';
+
+  try {
+    const resp = await fetch('/api/news?symbols=' + encodeURIComponent(symbol));
+    if (!resp.ok) throw new Error('API error');
+    const data = await resp.json();
+    const articles = (data.news || []).slice(0, 6);
+    if (articles.length === 0) {
+      el.innerHTML = '<span class="filings-placeholder">No recent news found</span>';
+      return;
+    }
+    el.innerHTML = articles.map(a => {
+      const date = a.providerPublishTime ? new Date(a.providerPublishTime * 1000) : null;
+      const dateStr = date ? (date.getMonth() + 1) + '/' + date.getDate() : '';
+      const title = (a.title || 'Untitled').replace(/</g, '&lt;');
+      const link = a.link || '#';
+      return '<a href="' + link + '" target="_blank"><span class="news-date">' + dateStr + '</span>' + title + '</a>';
+    }).join('');
+  } catch (err) {
+    el.innerHTML = '<a href="https://finance.yahoo.com/quote/' + encodeURIComponent(symbol) + '/news/" target="_blank"><span class="news-date"></span>View news on Yahoo Finance</a>';
   }
 }
 
@@ -4013,9 +4200,6 @@ window.addEventListener('resize', () => {
     if (currentChartCandles) {
       drawChartWithType(currentChartCandles, currentChartType);
       drawVolumeChartFromCandles(currentChartCandles);
-    } else {
-      drawCandlestickChart();
-      drawVolumeChart();
     }
     drawAgentPerfChart();
     drawNetFlowChart();

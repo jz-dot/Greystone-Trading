@@ -2,3 +2,4 @@ node_modules/
 .claude/
 .mcp.json
 .env
+supabase/.temp/

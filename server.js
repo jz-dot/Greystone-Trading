@@ -21,6 +21,18 @@ const ALPACA_API_KEY = process.env.ALPACA_API_KEY || '';
 const ALPACA_API_SECRET = process.env.ALPACA_API_SECRET || '';
 const ALPACA_PAPER_MODE = process.env.ALPACA_PAPER_MODE !== 'false'; // default true
 
+// --- IBKR Config ---
+const IBKR_GATEWAY_URL = process.env.IBKR_GATEWAY_URL || 'https://localhost:5000/v1/api';
+const IBKR_ACCOUNT_ID = process.env.IBKR_ACCOUNT_ID || '';
+const IBKR_MAX_ORDER_QTY = parseInt(process.env.IBKR_MAX_ORDER_QTY || '1000');
+
+// --- Questrade Config ---
+let questradeRefreshToken = process.env.QUESTRADE_REFRESH_TOKEN || '';
+let questradeAccessToken = '';
+let questradeApiServer = '';
+const QUESTRADE_ACCOUNT_ID = process.env.QUESTRADE_ACCOUNT_ID || '';
+const QUESTRADE_MAX_ORDER_QTY = parseInt(process.env.QUESTRADE_MAX_ORDER_QTY || '1000');
+
 // --- BigData.com Config ---
 let bigdataApiKey = process.env.BIGDATA_API_KEY || '';
 const bigdata = createBigDataService(function () { return bigdataApiKey; });
@@ -159,6 +171,81 @@ function yahooFetch(urlPath) {
   });
 }
 
+// ---- Yahoo v7 Quote (crumb-based, for fundamentals) ----
+var yahooCrumb = { crumb: null, cookies: null, expiry: 0 };
+
+function httpGetRaw(opts) {
+  return new Promise(function (resolve, reject) {
+    https.get(opts, function (res) {
+      var cookies = (res.headers['set-cookie'] || []).map(function(c) { return c.split(';')[0]; }).join('; ');
+      var data = '';
+      res.on('data', function (c) { data += c; });
+      res.on('end', function () { resolve({ status: res.statusCode, cookies: cookies, body: data }); });
+    }).on('error', reject);
+  });
+}
+
+async function refreshYahooCrumb() {
+  if (yahooCrumb.crumb && Date.now() < yahooCrumb.expiry) return;
+  try {
+    var consent = await httpGetRaw({
+      hostname: 'fc.yahoo.com', path: '/',
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+    });
+    var crumbResp = await httpGetRaw({
+      hostname: 'query2.finance.yahoo.com', path: '/v1/test/getcrumb',
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36', 'Cookie': consent.cookies }
+    });
+    if (crumbResp.status === 200 && crumbResp.body.length > 0 && crumbResp.body.length < 50) {
+      yahooCrumb.crumb = crumbResp.body.trim();
+      yahooCrumb.cookies = [consent.cookies, crumbResp.cookies].filter(Boolean).join('; ');
+      yahooCrumb.expiry = Date.now() + 3600000; // 1 hour
+      console.log('[Yahoo] Crumb refreshed successfully');
+    }
+  } catch (e) {
+    console.warn('[Yahoo] Crumb refresh failed:', e.message);
+  }
+}
+
+async function yahooV7Quote(symbols) {
+  await refreshYahooCrumb();
+  if (!yahooCrumb.crumb) return {};
+
+  var resp = await httpGetRaw({
+    hostname: 'query2.finance.yahoo.com',
+    path: '/v7/finance/quote?symbols=' + encodeURIComponent(symbols) + '&crumb=' + encodeURIComponent(yahooCrumb.crumb),
+    headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 'Cookie': yahooCrumb.cookies }
+  });
+
+  if (resp.status === 401) {
+    // Crumb expired, force refresh
+    yahooCrumb.expiry = 0;
+    await refreshYahooCrumb();
+    if (!yahooCrumb.crumb) return {};
+    resp = await httpGetRaw({
+      hostname: 'query2.finance.yahoo.com',
+      path: '/v7/finance/quote?symbols=' + encodeURIComponent(symbols) + '&crumb=' + encodeURIComponent(yahooCrumb.crumb),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 'Cookie': yahooCrumb.cookies }
+    });
+  }
+
+  if (resp.status !== 200) return {};
+  try {
+    var j = JSON.parse(resp.body);
+    var results = j.quoteResponse && j.quoteResponse.result;
+    if (!results || results.length === 0) return {};
+    // Return first result (for single symbol) or map by symbol
+    var map = {};
+    results.forEach(function (q) { map[q.symbol] = q; });
+    return map;
+  } catch (e) {
+    return {};
+  }
+}
+
+// Pre-fetch crumb on startup
+refreshYahooCrumb();
+
 // Ticker search / autocomplete
 app.get('/api/search', async function (req, res) {
   var query = (req.query.q || '').trim();
@@ -261,7 +348,7 @@ app.get('/api/chart/:symbol', async function (req, res) {
   var range = req.query.range || '1d';
 
   var validIntervals = ['1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h', '1d', '5d', '1wk', '1mo'];
-  var validRanges = ['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max'];
+  var validRanges = ['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '3y', '5y', '10y', 'ytd', 'max'];
 
   if (validIntervals.indexOf(interval) === -1) interval = '5m';
   if (validRanges.indexOf(range) === -1) range = '1d';
@@ -783,8 +870,40 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     paperMode: ALPACA_PAPER_MODE,
     alpacaConfigured: ALPACA_API_KEY.length > 0 && ALPACA_API_SECRET.length > 0,
+    ibkrConfigured: IBKR_ACCOUNT_ID.length > 0,
+    ibkrGateway: IBKR_GATEWAY_URL,
+    questradeConfigured: QUESTRADE_ACCOUNT_ID.length > 0,
     supabaseConfigured: !!SUPABASE_URL && !!SUPABASE_ANON_KEY,
     timestamp: new Date().toISOString(),
+  });
+});
+
+// --- Broker status (both brokers) ---
+app.get('/api/broker/status', (req, res) => {
+  res.json({
+    alpaca: {
+      configured: ALPACA_API_KEY.length > 0 && ALPACA_API_SECRET.length > 0,
+      mode: ALPACA_PAPER_MODE ? 'paper' : 'live',
+    },
+    questrade: {
+      configured: QUESTRADE_ACCOUNT_ID.length > 0,
+      accountId: QUESTRADE_ACCOUNT_ID || null,
+      authenticated: !!questradeAccessToken,
+    },
+    ibkr: {
+      configured: IBKR_ACCOUNT_ID.length > 0,
+      accountId: IBKR_ACCOUNT_ID || null,
+      gatewayUrl: IBKR_GATEWAY_URL,
+    },
+    routing: {
+      usEquities: 'alpaca',
+      usOptions: 'alpaca',
+      canadianEquities: 'questrade',
+      international: 'ibkr',
+      futures: 'ibkr',
+      forex: 'ibkr',
+      dataFeed: 'ibkr (non-US), yahoo + alpaca (US)',
+    },
   });
 });
 
@@ -918,6 +1037,491 @@ app.post('/api/alpaca/proxy', optionalAuth, async (req, res) => {
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: 'NETWORK', message: err.message });
+  }
+});
+
+// ============================================
+// IBKR TRADING API PROXY
+// ============================================
+
+// Helper: forward requests to IB Gateway
+async function ibkrFetch(method, path, body) {
+  const url = IBKR_GATEWAY_URL + path;
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    // IB Gateway uses self-signed certs locally
+  };
+  if (body) opts.body = JSON.stringify(body);
+
+  // For Node 18+, handle self-signed cert on localhost
+  if (url.startsWith('https://localhost')) {
+    const agent = new (require('https').Agent)({ rejectUnauthorized: false });
+    opts.agent = agent;
+  }
+
+  const response = await fetch(url, opts);
+  const data = await response.json();
+  if (!response.ok) {
+    const err = new Error(data.error || 'IBKR request failed');
+    err.status = response.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+// --- IBKR: Auth status ---
+app.get('/api/ibkr/auth/status', async (req, res) => {
+  if (!IBKR_ACCOUNT_ID) {
+    return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
+  }
+  try {
+    const data = await ibkrFetch('GET', '/iserver/auth/status');
+    res.json(data);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: 'IBKR_AUTH', message: err.message });
+  }
+});
+
+// --- IBKR: Keep session alive ---
+app.post('/api/ibkr/tickle', async (req, res) => {
+  try {
+    const data = await ibkrFetch('POST', '/tickle');
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'IBKR_TICKLE', message: err.message });
+  }
+});
+
+// --- IBKR: Accounts ---
+app.get('/api/ibkr/accounts', async (req, res) => {
+  if (!IBKR_ACCOUNT_ID) {
+    return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
+  }
+  try {
+    const data = await ibkrFetch('GET', '/iserver/accounts');
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'NETWORK', message: err.message });
+  }
+});
+
+// --- IBKR: Account summary ---
+app.get('/api/ibkr/account/summary', async (req, res) => {
+  if (!IBKR_ACCOUNT_ID) {
+    return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
+  }
+  try {
+    const data = await ibkrFetch('GET', '/portfolio/' + IBKR_ACCOUNT_ID + '/summary');
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'NETWORK', message: err.message });
+  }
+});
+
+// --- IBKR: Positions ---
+app.get('/api/ibkr/positions', async (req, res) => {
+  if (!IBKR_ACCOUNT_ID) {
+    return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
+  }
+  const page = req.query.page || 0;
+  try {
+    const data = await ibkrFetch('GET', '/portfolio/' + IBKR_ACCOUNT_ID + '/positions/' + page);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'NETWORK', message: err.message });
+  }
+});
+
+// --- IBKR: Place Order --- (requires auth when Supabase configured)
+app.post('/api/ibkr/order', optionalAuth, async (req, res) => {
+  if (!IBKR_ACCOUNT_ID) {
+    return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
+  }
+
+  // Require explicit confirmation header for live trades
+  if (req.headers['x-confirm-live-trade'] !== 'true') {
+    return res.status(403).json({
+      error: 'LIVE_TRADE_BLOCKED',
+      message: 'IBKR live trading requires explicit confirmation. Set X-Confirm-Live-Trade: true header.',
+    });
+  }
+
+  const orderBody = req.body;
+
+  // Server-side guardrails
+  if (parseInt(orderBody.quantity || orderBody.qty) > IBKR_MAX_ORDER_QTY) {
+    return res.status(400).json({
+      error: 'GUARDRAIL',
+      message: 'Order quantity exceeds server max of ' + IBKR_MAX_ORDER_QTY,
+    });
+  }
+
+  try {
+    const data = await ibkrFetch('POST', '/iserver/account/' + IBKR_ACCOUNT_ID + '/orders', {
+      orders: [orderBody],
+    });
+    res.json(data);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: 'ORDER_FAILED', message: err.message, data: err.data });
+  }
+});
+
+// --- IBKR: Confirm order reply ---
+app.post('/api/ibkr/order/reply/:replyId', optionalAuth, async (req, res) => {
+  try {
+    const data = await ibkrFetch('POST', '/iserver/reply/' + req.params.replyId, {
+      confirmed: req.body.confirmed !== false,
+    });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'CONFIRM_FAILED', message: err.message });
+  }
+});
+
+// --- IBKR: Cancel Order ---
+app.delete('/api/ibkr/order/:id', optionalAuth, async (req, res) => {
+  if (!IBKR_ACCOUNT_ID) {
+    return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
+  }
+  try {
+    const data = await ibkrFetch('DELETE', '/iserver/account/' + IBKR_ACCOUNT_ID + '/order/' + req.params.id);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'NETWORK', message: err.message });
+  }
+});
+
+// --- IBKR: List Orders ---
+app.get('/api/ibkr/orders', async (req, res) => {
+  if (!IBKR_ACCOUNT_ID) {
+    return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
+  }
+  try {
+    const data = await ibkrFetch('GET', '/iserver/account/orders');
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'NETWORK', message: err.message });
+  }
+});
+
+// --- IBKR: Contract search (for international symbols) ---
+app.get('/api/ibkr/search', async (req, res) => {
+  const symbol = req.query.symbol;
+  if (!symbol) return res.status(400).json({ error: 'Missing symbol parameter' });
+  try {
+    const data = await ibkrFetch('GET', '/iserver/secdef/search?symbol=' + encodeURIComponent(symbol));
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'SEARCH_FAILED', message: err.message });
+  }
+});
+
+// --- IBKR: Market data snapshot ---
+app.get('/api/ibkr/snapshot', async (req, res) => {
+  const conids = req.query.conids;
+  if (!conids) return res.status(400).json({ error: 'Missing conids parameter' });
+  try {
+    const fields = '31,55,70,71,82,83,84,85,86,87,88';
+    const data = await ibkrFetch('GET', '/iserver/marketdata/snapshot?conids=' + conids + '&fields=' + fields);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'SNAPSHOT_FAILED', message: err.message });
+  }
+});
+
+// --- IBKR: Historical data ---
+app.get('/api/ibkr/history', async (req, res) => {
+  const { conid, period, bar } = req.query;
+  if (!conid) return res.status(400).json({ error: 'Missing conid parameter' });
+  try {
+    const params = new URLSearchParams({ conid, period: period || '1d', bar: bar || '1d' });
+    const data = await ibkrFetch('GET', '/iserver/marketdata/history?' + params.toString());
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'HISTORY_FAILED', message: err.message });
+  }
+});
+
+// --- IBKR: Options chain ---
+app.get('/api/ibkr/options/strikes', async (req, res) => {
+  const { conid, month, exchange } = req.query;
+  if (!conid) return res.status(400).json({ error: 'Missing conid parameter' });
+  try {
+    const params = new URLSearchParams({ conid });
+    if (month) params.append('month', month);
+    if (exchange) params.append('exchange', exchange);
+    const data = await ibkrFetch('GET', '/iserver/secdef/strikes?' + params.toString());
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'OPTIONS_FAILED', message: err.message });
+  }
+});
+
+// --- IBKR: FX rates ---
+app.get('/api/ibkr/fx', async (req, res) => {
+  const { from, to } = req.query;
+  if (!from || !to) return res.status(400).json({ error: 'Missing from/to parameters' });
+  try {
+    const pair = from + '.' + to;
+    const search = await ibkrFetch('GET', '/iserver/secdef/search?symbol=' + encodeURIComponent(pair));
+    if (!search || !search.length) {
+      return res.status(404).json({ error: 'FX pair not found: ' + pair });
+    }
+    const conid = search[0].conid || search[0].conId;
+    const fields = '31,55,84,85,86';
+    const data = await ibkrFetch('GET', '/iserver/marketdata/snapshot?conids=' + conid + '&fields=' + fields);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'FX_FAILED', message: err.message });
+  }
+});
+
+// --- IBKR: Generic proxy ---
+app.post('/api/ibkr/proxy', optionalAuth, async (req, res) => {
+  if (!IBKR_ACCOUNT_ID) {
+    return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
+  }
+  const { method, endpoint, body } = req.body;
+  try {
+    const data = await ibkrFetch(method || 'GET', endpoint, body);
+    res.json(data);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: 'PROXY_FAILED', message: err.message });
+  }
+});
+
+// ============================================
+// QUESTRADE TRADING API PROXY
+// ============================================
+
+// Helper: exchange refresh token for access token
+async function questradeRefresh() {
+  if (!questradeRefreshToken) {
+    throw new Error('No Questrade refresh token configured');
+  }
+  const resp = await fetch('https://login.questrade.com/oauth2/token?grant_type=refresh_token&refresh_token=' + encodeURIComponent(questradeRefreshToken), {
+    method: 'GET',
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error('Questrade auth failed: ' + text);
+  }
+  const data = await resp.json();
+  questradeAccessToken = data.access_token;
+  questradeRefreshToken = data.refresh_token; // Questrade issues a new refresh token each time
+  questradeApiServer = data.api_server; // e.g., https://api01.iq.questrade.com/
+  console.log('[Questrade] Authenticated. API server: ' + questradeApiServer);
+  return data;
+}
+
+// Helper: forward requests to Questrade API
+async function questradeFetch(method, path, body) {
+  if (!questradeAccessToken || !questradeApiServer) {
+    // Try to authenticate first
+    await questradeRefresh();
+  }
+
+  var url = questradeApiServer + path;
+  var opts = {
+    method: method,
+    headers: {
+      'Authorization': 'Bearer ' + questradeAccessToken,
+      'Content-Type': 'application/json',
+    },
+  };
+  if (body) opts.body = JSON.stringify(body);
+
+  var response = await fetch(url, opts);
+
+  // If 401, try refreshing token once
+  if (response.status === 401) {
+    await questradeRefresh();
+    opts.headers['Authorization'] = 'Bearer ' + questradeAccessToken;
+    url = questradeApiServer + path;
+    response = await fetch(url, opts);
+  }
+
+  var data = await response.json();
+  if (!response.ok) {
+    var err = new Error(data.message || 'Questrade request failed');
+    err.status = response.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+// Auto-authenticate on startup if refresh token is configured
+if (questradeRefreshToken) {
+  questradeRefresh().catch(function (err) {
+    console.warn('[Questrade] Auto-auth failed:', err.message);
+  });
+}
+
+// --- Questrade: Auth status ---
+app.get('/api/questrade/auth/status', (req, res) => {
+  res.json({
+    configured: !!questradeRefreshToken,
+    authenticated: !!questradeAccessToken,
+    accountId: QUESTRADE_ACCOUNT_ID || null,
+    apiServer: questradeApiServer || null,
+  });
+});
+
+// --- Questrade: Refresh auth ---
+app.post('/api/questrade/auth/refresh', async (req, res) => {
+  if (!questradeRefreshToken) {
+    return res.status(400).json({ error: 'No refresh token configured' });
+  }
+  try {
+    var data = await questradeRefresh();
+    res.json({ success: true, api_server: data.api_server });
+  } catch (err) {
+    res.status(401).json({ error: 'AUTH_FAILED', message: err.message });
+  }
+});
+
+// --- Questrade: Accounts ---
+app.get('/api/questrade/accounts', async (req, res) => {
+  if (!QUESTRADE_ACCOUNT_ID) {
+    return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
+  }
+  try {
+    var data = await questradeFetch('GET', '/v1/accounts');
+    res.json(data);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: 'NETWORK', message: err.message });
+  }
+});
+
+// --- Questrade: Account balances ---
+app.get('/api/questrade/account/balances', async (req, res) => {
+  if (!QUESTRADE_ACCOUNT_ID) {
+    return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
+  }
+  try {
+    var data = await questradeFetch('GET', '/v1/accounts/' + QUESTRADE_ACCOUNT_ID + '/balances');
+    res.json(data);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: 'NETWORK', message: err.message });
+  }
+});
+
+// --- Questrade: Positions ---
+app.get('/api/questrade/positions', async (req, res) => {
+  if (!QUESTRADE_ACCOUNT_ID) {
+    return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
+  }
+  try {
+    var data = await questradeFetch('GET', '/v1/accounts/' + QUESTRADE_ACCOUNT_ID + '/positions');
+    res.json(data);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: 'NETWORK', message: err.message });
+  }
+});
+
+// --- Questrade: Place Order ---
+app.post('/api/questrade/order', optionalAuth, async (req, res) => {
+  if (!QUESTRADE_ACCOUNT_ID) {
+    return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
+  }
+
+  // Require explicit confirmation header for live trades
+  if (req.headers['x-confirm-live-trade'] !== 'true') {
+    return res.status(403).json({
+      error: 'LIVE_TRADE_BLOCKED',
+      message: 'Questrade live trading requires explicit confirmation. Set X-Confirm-Live-Trade: true header.',
+    });
+  }
+
+  var orderBody = req.body;
+
+  // Server-side guardrails
+  if (parseInt(orderBody.quantity || orderBody.qty) > QUESTRADE_MAX_ORDER_QTY) {
+    return res.status(400).json({
+      error: 'GUARDRAIL',
+      message: 'Order quantity exceeds server max of ' + QUESTRADE_MAX_ORDER_QTY,
+    });
+  }
+
+  try {
+    var data = await questradeFetch('POST', '/v1/accounts/' + QUESTRADE_ACCOUNT_ID + '/orders', orderBody);
+    res.json(data);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: 'ORDER_FAILED', message: err.message, data: err.data });
+  }
+});
+
+// --- Questrade: Cancel Order ---
+app.delete('/api/questrade/order/:id', optionalAuth, async (req, res) => {
+  if (!QUESTRADE_ACCOUNT_ID) {
+    return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
+  }
+  try {
+    var data = await questradeFetch('DELETE', '/v1/accounts/' + QUESTRADE_ACCOUNT_ID + '/orders/' + req.params.id);
+    res.json(data);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: 'NETWORK', message: err.message });
+  }
+});
+
+// --- Questrade: List Orders ---
+app.get('/api/questrade/orders', async (req, res) => {
+  if (!QUESTRADE_ACCOUNT_ID) {
+    return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
+  }
+  var stateFilter = req.query.state || 'All';
+  try {
+    var data = await questradeFetch('GET', '/v1/accounts/' + QUESTRADE_ACCOUNT_ID + '/orders?stateFilter=' + stateFilter);
+    res.json(data);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: 'NETWORK', message: err.message });
+  }
+});
+
+// --- Questrade: Symbol search ---
+app.get('/api/questrade/symbols/search', async (req, res) => {
+  var prefix = req.query.prefix;
+  if (!prefix) return res.status(400).json({ error: 'Missing prefix parameter' });
+  try {
+    var data = await questradeFetch('GET', '/v1/symbols/search?prefix=' + encodeURIComponent(prefix));
+    res.json(data);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: 'SEARCH_FAILED', message: err.message });
+  }
+});
+
+// --- Questrade: Executions (trade history) ---
+app.get('/api/questrade/executions', async (req, res) => {
+  if (!QUESTRADE_ACCOUNT_ID) {
+    return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
+  }
+  try {
+    var qs = '';
+    if (req.query.startTime) qs += '?startTime=' + encodeURIComponent(req.query.startTime);
+    if (req.query.endTime) qs += (qs ? '&' : '?') + 'endTime=' + encodeURIComponent(req.query.endTime);
+    var data = await questradeFetch('GET', '/v1/accounts/' + QUESTRADE_ACCOUNT_ID + '/executions' + qs);
+    res.json(data);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: 'NETWORK', message: err.message });
+  }
+});
+
+// --- Questrade: Generic proxy ---
+app.post('/api/questrade/proxy', optionalAuth, async (req, res) => {
+  if (!QUESTRADE_ACCOUNT_ID) {
+    return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
+  }
+  var method = req.body.method || 'GET';
+  var endpoint = req.body.endpoint;
+  var body = req.body.body;
+  try {
+    var data = await questradeFetch(method, endpoint, body);
+    res.json(data);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: 'PROXY_FAILED', message: err.message });
   }
 });
 
@@ -1359,39 +1963,36 @@ app.get('/api/fundamentals/:symbol', async function (req, res) {
   if (cached) return res.json(cached);
 
   try {
-    // Use v8 chart API for 52-week data + v6 quote for fundamentals
-    var chartData = await yahooFetch('/v8/finance/chart/' + encodeURIComponent(symbol) + '?interval=1d&range=1y');
-    var meta = (chartData.chart && chartData.chart.result && chartData.chart.result[0] && chartData.chart.result[0].meta) || {};
-    var closes = [];
-    try {
-      closes = chartData.chart.result[0].indicators.quote[0].close.filter(function(v) { return v !== null; });
-    } catch(e) {}
-    var high52 = closes.length ? Math.max.apply(null, closes) : null;
-    var low52 = closes.length ? Math.min.apply(null, closes) : null;
+    // Fetch v8 chart meta (always works, no auth) + v7 quote (crumb-based, has fundamentals)
+    var chartPromise = yahooFetch('/v8/finance/chart/' + encodeURIComponent(symbol) + '?interval=1d&range=1y');
+    var quotePromise = yahooV7Quote(symbol);
 
-    // Try v6 quote for additional data
-    var quoteData = {};
-    try {
-      var qResp = await yahooFetch('/v6/finance/quote?symbols=' + encodeURIComponent(symbol));
-      quoteData = (qResp.quoteResponse && qResp.quoteResponse.result && qResp.quoteResponse.result[0]) || {};
-    } catch(e) {
-      // v6 might also fail, use chart meta as fallback
-    }
+    var chartData = await chartPromise;
+    var meta = (chartData.chart && chartData.chart.result && chartData.chart.result[0] && chartData.chart.result[0].meta) || {};
+
+    var v7Map = await quotePromise;
+    var q = v7Map[symbol] || {};
 
     var result = {
-      marketCap: quoteData.marketCap || null,
-      fiftyTwoWeekHigh: quoteData.fiftyTwoWeekHigh || high52,
-      fiftyTwoWeekLow: quoteData.fiftyTwoWeekLow || low52,
-      bid: quoteData.bid || null,
-      ask: quoteData.ask || null,
-      volume: quoteData.regularMarketVolume || meta.regularMarketVolume || null,
-      averageVolume: quoteData.averageDailyVolume10Day || null,
-      trailingPE: quoteData.trailingPE || null,
-      dividendYield: quoteData.dividendYield || quoteData.trailingAnnualDividendYield || null,
-      eps: quoteData.epsTrailingTwelveMonths || null,
-      beta: null, // not available in v6/v8
-      open: meta.regularMarketPrice || quoteData.regularMarketOpen || null,
-      previousClose: meta.chartPreviousClose || meta.previousClose || quoteData.regularMarketPreviousClose || null
+      longName: q.longName || q.shortName || meta.longName || meta.shortName || '',
+      shortName: q.shortName || meta.shortName || '',
+      exchange: q.fullExchangeName || q.exchange || meta.fullExchangeName || meta.exchangeName || '',
+      exchangeSymbol: meta.exchangeName || q.exchange || '',
+      quoteType: q.quoteType || 'EQUITY',
+      marketCap: q.marketCap || null,
+      fiftyTwoWeekHigh: q.fiftyTwoWeekHigh || meta.fiftyTwoWeekHigh || null,
+      fiftyTwoWeekLow: q.fiftyTwoWeekLow || meta.fiftyTwoWeekLow || null,
+      bid: q.bid || null,
+      ask: q.ask || null,
+      volume: q.regularMarketVolume || meta.regularMarketVolume || null,
+      averageVolume: q.averageDailyVolume10Day || q.averageDailyVolume3Month || null,
+      trailingPE: q.trailingPE || null,
+      forwardPE: q.forwardPE || null,
+      dividendYield: q.trailingAnnualDividendYield || q.dividendYield || null,
+      eps: q.epsTrailingTwelveMonths || null,
+      beta: q.beta || null,
+      open: q.regularMarketOpen || meta.regularMarketPrice || null,
+      previousClose: q.regularMarketPreviousClose || meta.chartPreviousClose || meta.previousClose || null
     };
     setCache(cacheKey, result);
     res.json(result);
@@ -1455,13 +2056,38 @@ app.listen(PORT, function () {
   console.log('    GET  /api/bigdata/sectors');
   console.log('    POST /api/bigdata/key');
   console.log('');
-  console.log('  Alpaca Trading:');
+  console.log('  Alpaca Trading (US equities + options):');
   console.log('    Mode: ' + (ALPACA_PAPER_MODE ? 'PAPER' : 'LIVE'));
   console.log('    Configured: ' + (ALPACA_API_KEY ? 'Yes' : 'No (simulation only)'));
   console.log('    GET  /api/alpaca/account');
   console.log('    GET  /api/alpaca/positions');
   console.log('    POST /api/alpaca/order');
   console.log('    GET  /api/alpaca/orders');
+  console.log('');
+  console.log('  Questrade Trading (Canadian equities):');
+  console.log('    Configured: ' + (QUESTRADE_ACCOUNT_ID ? 'Yes (Account: ' + QUESTRADE_ACCOUNT_ID + ')' : 'No'));
+  console.log('    Authenticated: ' + (questradeAccessToken ? 'Yes' : 'No'));
+  console.log('    GET  /api/questrade/auth/status');
+  console.log('    POST /api/questrade/auth/refresh');
+  console.log('    GET  /api/questrade/positions');
+  console.log('    POST /api/questrade/order');
+  console.log('    GET  /api/questrade/orders');
+  console.log('    GET  /api/questrade/symbols/search?prefix=RY');
+  console.log('');
+  console.log('  IBKR Trading (international + futures + forex):');
+  console.log('    Configured: ' + (IBKR_ACCOUNT_ID ? 'Yes (Account: ' + IBKR_ACCOUNT_ID + ')' : 'No'));
+  console.log('    Gateway: ' + IBKR_GATEWAY_URL);
+  console.log('    GET  /api/ibkr/accounts');
+  console.log('    GET  /api/ibkr/positions');
+  console.log('    POST /api/ibkr/order');
+  console.log('    GET  /api/ibkr/orders');
+  console.log('    GET  /api/ibkr/search?symbol=RY');
+  console.log('    GET  /api/ibkr/snapshot?conids=...');
+  console.log('    GET  /api/ibkr/options/strikes?conid=...');
+  console.log('    GET  /api/ibkr/fx?from=CAD&to=USD');
+  console.log('');
+  console.log('  Broker Router:');
+  console.log('    GET  /api/broker/status');
   console.log('    GET  /api/health');
   console.log('');
   console.log('  News Feed:');

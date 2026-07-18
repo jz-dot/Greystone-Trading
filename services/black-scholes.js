@@ -4,11 +4,20 @@
    ============================================ */
 
 /**
- * Standard Normal CDF approximation
- * Uses Abramowitz & Stegun approximation (error < 7.5e-8)
+ * Standard Normal CDF.
+ * Phi(x) = 0.5 * (1 + erf(x / sqrt(2))), with erf via the Abramowitz & Stegun
+ * 7.1.26 approximation (max abs error ~1.5e-7).
+ *
+ * NOTE: the A&S 7.1.26 polynomial approximates erf(z), so its argument must be
+ * z = x / sqrt(2) and the exponential term must be exp(-z^2). An earlier version
+ * fed the raw x into the polynomial while using exp(-x^2/2), which mismatched the
+ * two and overpriced options by ~30%. Keep the sqrt(2) scaling.
  */
 function normalCDF(x) {
-  if (x === 0) return 0.5;
+  const z = x / Math.SQRT2;
+  const sign = z < 0 ? -1 : 1;
+  const absZ = Math.abs(z);
+
   const a1 = 0.254829592;
   const a2 = -0.284496736;
   const a3 = 1.421413741;
@@ -16,16 +25,12 @@ function normalCDF(x) {
   const a5 = 1.061405429;
   const p = 0.3275911;
 
-  const sign = x < 0 ? -1 : 1;
-  const absX = Math.abs(x);
-  const t = 1.0 / (1.0 + p * absX);
-  const t2 = t * t;
-  const t3 = t2 * t;
-  const t4 = t3 * t;
-  const t5 = t4 * t;
+  const t = 1.0 / (1.0 + p * absZ);
+  // Horner form of (a1 t + a2 t^2 + a3 t^3 + a4 t^4 + a5 t^5)
+  const poly = ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t;
+  const erf = 1.0 - poly * Math.exp(-absZ * absZ);
 
-  const y = 1.0 - (a1 * t + a2 * t2 + a3 * t3 + a4 * t4 + a5 * t5) * Math.exp(-absX * absX / 2);
-  return 0.5 * (1.0 + sign * y);
+  return 0.5 * (1.0 + sign * erf);
 }
 
 /**

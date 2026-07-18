@@ -1051,7 +1051,11 @@
       <div class="panel pf-holdings-panel">
         <div class="panel-header">
           <h3 class="panel-title">Holdings</h3>
-          <span class="panel-subtitle" id="pfHoldingsCount">0 positions</span>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button class="agent-btn" id="pfExportHoldingsBtn" style="font-size:10px;padding:3px 8px;" title="Download current holdings as CSV">Export Holdings</button>
+            <button class="agent-btn" id="pfExportTxnsBtn" style="font-size:10px;padding:3px 8px;" title="Download the full transaction ledger as CSV (re-importable)">Export Transactions</button>
+            <span class="panel-subtitle" id="pfHoldingsCount">0 positions</span>
+          </div>
         </div>
         <div class="pf-table-wrap">
           <table class="pf-table" id="pfHoldingsTable">
@@ -2891,6 +2895,7 @@
      tracker can sync on sign-in and normalize import previews. -->
 <script src="services/portfolio-sync.js"></script>
 <script src="services/broker-import.js"></script>
+<script src="services/csv-io.js"></script>
 <script src="app.js"></script>
 <script src="services/auth-ui.js"></script>
 
@@ -3180,18 +3185,29 @@
 
 <!-- Import from Broker Modal (read-only: previews positions, never places orders) -->
 <div class="modal-overlay" id="importBrokerModal">
-  <div class="modal-content" style="max-width: 640px;">
+  <div class="modal-content" style="max-width: 720px;">
     <div class="modal-header">
       <h2>Import from Broker</h2>
       <button class="modal-close" onclick="closeModal('importBrokerModal')">&times;</button>
     </div>
     <div class="modal-body">
       <div class="auth-field" style="margin-bottom:12px;">
+        <label for="importSourceSelect">Source</label>
+        <select id="importSourceSelect">
+          <option value="broker">Broker connection (Questrade / IBKR)</option>
+          <option value="csv">CSV file (transaction history export)</option>
+        </select>
+      </div>
+      <div class="auth-field" style="margin-bottom:12px;" id="importBrokerRow">
         <label for="importBrokerSelect">Broker</label>
         <select id="importBrokerSelect">
           <option value="questrade">Questrade</option>
           <option value="ibkr">Interactive Brokers</option>
         </select>
+      </div>
+      <div class="auth-field" style="margin-bottom:12px;display:none;" id="importCsvRow">
+        <label for="importCsvFile">CSV file</label>
+        <input type="file" id="importCsvFile" accept=".csv,text/csv">
       </div>
       <div class="auth-field" style="margin-bottom:12px;">
         <label for="importBrokerAccount">Import into account</label>

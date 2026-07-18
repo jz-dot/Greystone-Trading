@@ -9187,6 +9187,10 @@ const PortfolioManager = (function() {
 
     function resetImportModal() {
       importPreview = null;
+      csvPreview = null;
+      if (importSourceSel) importSourceSel.value = 'broker';
+      if (importCsvFile) importCsvFile.value = '';
+      syncImportSource();
       importStatus('Choose a broker and load positions. Uses the broker connection configured on your server.');
       if (importWrapEl) importWrapEl.innerHTML = '';
       if (importSkippedEl) importSkippedEl.textContent = '';
@@ -9266,7 +9270,11 @@ const PortfolioManager = (function() {
     }
 
     if (importConfirmBtn) {
-      importConfirmBtn.addEventListener('click', () => {
+      importConfirmBtn.addEventListener('click', async () => {
+        if (importSourceSel && importSourceSel.value === 'csv') {
+          if (csvPreview) await applyCsvImport();
+          return;
+        }
         if (!importPreview || !importWrapEl) return;
         const checks = importWrapEl.querySelectorAll('.pf-import-check:checked');
         let imported = 0;
@@ -9291,6 +9299,158 @@ const PortfolioManager = (function() {
         }
         closeModal('importBrokerModal');
         renderPortfolio();
+      });
+    }
+
+    // --- CSV import (full transaction history -> the ACB ledger) ---
+    const importSourceSel = document.getElementById('importSourceSelect');
+    const importBrokerRow = document.getElementById('importBrokerRow');
+    const importCsvRow = document.getElementById('importCsvRow');
+    const importCsvFile = document.getElementById('importCsvFile');
+    let csvPreview = null;
+
+    function syncImportSource() {
+      const mode = (importSourceSel && importSourceSel.value) || 'broker';
+      if (importBrokerRow) importBrokerRow.style.display = mode === 'broker' ? '' : 'none';
+      if (importCsvRow) importCsvRow.style.display = mode === 'csv' ? '' : 'none';
+      if (importLoadBtn) importLoadBtn.style.display = mode === 'broker' ? '' : 'none';
+      if (importWrapEl) importWrapEl.innerHTML = '';
+      if (importSkippedEl) importSkippedEl.textContent = '';
+      if (importConfirmBtn) importConfirmBtn.disabled = true;
+      if (mode === 'csv') {
+        importStatus('Choose a CSV exported from your broker (transaction or activity history). Buys and sells import in date order with the Bank of Canada rate for each trade date.');
+      } else {
+        importStatus('Choose a broker and load positions. Uses the broker connection configured on your server.');
+      }
+    }
+    if (importSourceSel) importSourceSel.addEventListener('change', () => { csvPreview = null; importPreview = null; syncImportSource(); });
+
+    if (importCsvFile) {
+      importCsvFile.addEventListener('change', () => {
+        const f = importCsvFile.files && importCsvFile.files[0];
+        if (!f || typeof CsvIO === 'undefined') return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            const parsed = CsvIO.parseCsv(String(reader.result || ''));
+            const mapping = CsvIO.guessMapping(parsed.headers);
+            csvPreview = CsvIO.normalizeRows(parsed.rows, mapping);
+            renderCsvPreview();
+          } catch (e) {
+            importStatus('Could not read CSV: ' + ((e && e.message) || 'parse error'));
+          }
+        };
+        reader.readAsText(f);
+      });
+    }
+
+    function renderCsvPreview() {
+      if (!importWrapEl || !csvPreview) return;
+      const txns = csvPreview.txns || [];
+      const errs = csvPreview.errors || [];
+      importStatus(txns.length + ' transaction' + (txns.length === 1 ? '' : 's') + ' recognized' +
+        (errs.length ? '; ' + errs.length + ' row' + (errs.length === 1 ? '' : 's') + ' listed below could not be imported' : '') + '.');
+      let html = '<table class="pf-import-table"><thead><tr><th></th><th>Type</th><th>Symbol</th><th>Date</th><th class="num">Shares</th><th class="num">Price</th><th class="num">Comm</th><th>Ccy</th><th>Account</th></tr></thead><tbody>';
+      txns.forEach((t, i) => {
+        html += '<tr>' +
+          '<td><input type="checkbox" class="pf-csv-check" data-idx="' + i + '" checked></td>' +
+          '<td>' + escImp(t.type.toUpperCase()) + '</td>' +
+          '<td>' + escImp(t.symbol) + '</td>' +
+          '<td>' + escImp(t.date) + '</td>' +
+          '<td class="num">' + escImp(t.shares) + '</td>' +
+          '<td class="num">' + escImp(t.price) + '</td>' +
+          '<td class="num">' + escImp(t.commission || 0) + '</td>' +
+          '<td>' + escImp(t.currency || 'auto') + '</td>' +
+          '<td>' + escImp(t.account || '(selected above)') + '</td>' +
+          '</tr>';
+      });
+      html += '</tbody></table>';
+      importWrapEl.innerHTML = html;
+      if (importSkippedEl) {
+        importSkippedEl.textContent = errs.length
+          ? ('Not importable: ' + errs.map(e => 'line ' + e.line + ' (' + e.reason + ')').join('; '))
+          : '';
+      }
+      if (importConfirmBtn) importConfirmBtn.disabled = txns.length === 0;
+    }
+
+    // Broker account labels vary; map recognizable ones onto the tracker's
+    // account types and let anything unknown fall back to the modal setting.
+    function normalizeCsvAccount(a) {
+      if (!a) return null;
+      const s = String(a).toLowerCase();
+      if (s.indexOf('tfsa') !== -1) return 'TFSA';
+      if (s.indexOf('fhsa') !== -1) return 'FHSA';
+      if (s.indexOf('rrsp') !== -1 || /\brsp\b/.test(s)) return 'RRSP';
+      if (s.indexOf('resp') !== -1 || s.indexOf('lira') !== -1 || s.indexOf('rrif') !== -1 || s.indexOf('rif') !== -1) return 'other-registered';
+      if (s.indexOf('margin') !== -1 || s.indexOf('cash') !== -1 || s.indexOf('individual') !== -1 || s.indexOf('non') !== -1) return 'non-registered';
+      return null;
+    }
+
+    async function applyCsvImport() {
+      const checks = importWrapEl ? importWrapEl.querySelectorAll('.pf-csv-check:checked') : [];
+      const chosen = [];
+      checks.forEach(cb => { const t = csvPreview.txns[Number(cb.dataset.idx)]; if (t) chosen.push(t); });
+      if (!chosen.length) { showToast('Nothing selected to import', 'info'); return; }
+      const defaultAcct = (document.getElementById('importBrokerAccount') || {}).value || 'non-registered';
+      // Chronological apply so every sell finds its shares.
+      chosen.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+      // Resolve each USD trade date's BoC rate once, up front.
+      const fxByDate = {};
+      const usdDates = Array.from(new Set(chosen
+        .filter(t => (t.currency || PortfolioManager.inferCurrency(t.symbol)) === 'USD')
+        .map(t => t.date)));
+      importStatus('Importing... resolving ' + usdDates.length + ' Bank of Canada rate' + (usdDates.length === 1 ? '' : 's') + '.');
+      await Promise.all(usdDates.map(d => resolveTxnFx('USD', d).then(fx => { fxByDate[d] = fx; })));
+      let buys = 0, sells = 0, failed = 0;
+      chosen.forEach(t => {
+        const currency = t.currency || PortfolioManager.inferCurrency(t.symbol);
+        const fx = currency === 'USD' ? (fxByDate[t.date] || { rate: undefined, estimated: true }) : { rate: undefined, estimated: false };
+        const acct = normalizeCsvAccount(t.account) || defaultAcct;
+        if (t.type === 'buy') {
+          const ok = PortfolioManager.addPosition(t.symbol, t.shares, t.price, {
+            currency: currency, account: acct, date: t.date, commission: t.commission || 0,
+            fxRate: fx.rate, fxEstimated: fx.estimated, source: 'csv-import'
+          });
+          if (ok) buys++; else failed++;
+        } else {
+          const res = PortfolioManager.sellPosition(t.symbol, t.shares, t.price, {
+            account: acct, date: t.date, commission: t.commission || 0,
+            fxRate: fx.rate, fxEstimated: fx.estimated
+          });
+          if (res && res.ok) sells++; else failed++;
+        }
+      });
+      showToast('Imported ' + buys + ' buy' + (buys === 1 ? '' : 's') + ' and ' + sells + ' sell' + (sells === 1 ? '' : 's') +
+        (failed ? ' (' + failed + ' failed)' : ''), failed ? 'info' : 'success');
+      closeModal('importBrokerModal');
+      renderPortfolio();
+    }
+
+    // --- CSV exports (holdings snapshot + full re-importable ledger) ---
+    function downloadCsv(name, text) {
+      const blob = new Blob([text], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+    }
+    const expHoldBtn = document.getElementById('pfExportHoldingsBtn');
+    if (expHoldBtn) {
+      expHoldBtn.addEventListener('click', () => {
+        if (typeof CsvIO === 'undefined') return;
+        downloadCsv('gsp-holdings-' + new Date().toISOString().slice(0, 10) + '.csv',
+          CsvIO.holdingsToCsv(PortfolioManager.getHoldings()));
+      });
+    }
+    const expTxnBtn = document.getElementById('pfExportTxnsBtn');
+    if (expTxnBtn) {
+      expTxnBtn.addEventListener('click', () => {
+        if (typeof CsvIO === 'undefined') return;
+        downloadCsv('gsp-transactions-' + new Date().toISOString().slice(0, 10) + '.csv',
+          CsvIO.txnsToCsv(PortfolioManager.getPositions()));
       });
     }
   }

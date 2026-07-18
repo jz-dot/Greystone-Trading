@@ -8291,7 +8291,7 @@ const PortfolioManager = (function() {
     syncFromCloud: syncFromCloud,
     pushToCloud: pushToCloud,
 
-    // opts: { currency, fxRate, commission, date }
+    // opts: { currency, fxRate, commission, date, source }
     addPosition: function(sym, shares, avgCost, opts) {
       opts = opts || {};
       sym = String(sym || '').toUpperCase().trim();
@@ -8306,6 +8306,9 @@ const PortfolioManager = (function() {
         commission: Number(opts.commission) || 0,
         date: opts.date || todayISO(), fxRate: fxRate
       };
+      // Flags lots whose cost basis is a broker's average cost (approximate
+      // ACB) rather than a user-entered transaction.
+      if (opts.source) txn.source = opts.source;
       if (pos) {
         pos.txns.push(txn);
         recomputeAggregate(pos);
@@ -9033,6 +9036,130 @@ const PortfolioManager = (function() {
         const hintEl = document.getElementById('pfSellCostHint');
         if (hintEl) hintEl.textContent = '';
         closeModal('sellPositionModal');
+        renderPortfolio();
+      });
+    }
+
+    // --- Import from Broker (read-only preview -> selected lots) ---
+    const importOpenBtn = document.getElementById('importBrokerBtn');
+    const importLoadBtn = document.getElementById('importBrokerLoadBtn');
+    const importConfirmBtn = document.getElementById('importBrokerConfirmBtn');
+    const importStatusEl = document.getElementById('importBrokerStatus');
+    const importWrapEl = document.getElementById('importBrokerTableWrap');
+    const importSkippedEl = document.getElementById('importBrokerSkipped');
+    let importPreview = null;
+
+    function escImp(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    function importStatus(msg) { if (importStatusEl) importStatusEl.textContent = msg || ''; }
+
+    function resetImportModal() {
+      importPreview = null;
+      importStatus('Choose a broker and load positions. Uses the broker connection configured on your server.');
+      if (importWrapEl) importWrapEl.innerHTML = '';
+      if (importSkippedEl) importSkippedEl.textContent = '';
+      if (importConfirmBtn) importConfirmBtn.disabled = true;
+    }
+
+    function renderImportTable() {
+      if (!importWrapEl || !importPreview) return;
+      const held = {};
+      PortfolioManager.getPositions().forEach(p => { held[p.symbol] = true; });
+      const rows = importPreview.positions || [];
+      if (!rows.length) {
+        importStatus('No importable long stock positions in this account.');
+      } else {
+        importStatus(rows.length + ' position' + (rows.length === 1 ? '' : 's') + ' found. Already-held symbols start unticked; ticking one replaces that holding with the broker lot.');
+      }
+      let html = '<table class="pf-import-table"><thead><tr>' +
+        '<th></th><th>Symbol</th><th class="num">Qty</th><th class="num">Avg Cost</th><th>Ccy</th><th class="num">Mkt Value</th><th></th></tr></thead><tbody>';
+      rows.forEach((p, i) => {
+        const dup = !!held[p.symbol];
+        html += '<tr>' +
+          '<td><input type="checkbox" class="pf-import-check" data-idx="' + i + '"' + (dup ? '' : ' checked') + '></td>' +
+          '<td>' + escImp(p.symbol) + '</td>' +
+          '<td class="num">' + escImp(p.qty) + '</td>' +
+          '<td class="num">' + (p.avgPrice ? Number(p.avgPrice).toFixed(2) : '-') + '</td>' +
+          '<td>' + escImp(p.currency) + '</td>' +
+          '<td class="num">' + (p.marketValue ? Number(p.marketValue).toLocaleString('en-CA', { maximumFractionDigits: 0 }) : '-') + '</td>' +
+          '<td class="pf-import-note">' + (dup ? 'already held - replaces' : '') + '</td>' +
+          '</tr>';
+      });
+      html += '</tbody></table>';
+      importWrapEl.innerHTML = html;
+      if (importSkippedEl) {
+        const sk = importPreview.skipped || [];
+        importSkippedEl.textContent = sk.length ? ('Not imported: ' + sk.map(s => s.symbol + ' (' + s.reason + ')').join('; ')) : '';
+      }
+      if (importConfirmBtn) importConfirmBtn.disabled = rows.length === 0;
+    }
+
+    if (importOpenBtn) {
+      importOpenBtn.addEventListener('click', () => {
+        resetImportModal();
+        const modal = document.getElementById('importBrokerModal');
+        if (modal) modal.classList.add('active');
+      });
+    }
+
+    if (importLoadBtn) {
+      importLoadBtn.addEventListener('click', async () => {
+        if (typeof SupabaseClient === 'undefined' || !SupabaseClient.isAuthenticated || !SupabaseClient.isAuthenticated()) {
+          importStatus('Sign in first: broker import uses your authenticated session.');
+          return;
+        }
+        const brokerSel = document.getElementById('importBrokerSelect');
+        const broker = (brokerSel && brokerSel.value) || 'questrade';
+        importStatus('Loading positions from ' + (broker === 'ibkr' ? 'Interactive Brokers' : 'Questrade') + '...');
+        if (importWrapEl) importWrapEl.innerHTML = '';
+        if (importSkippedEl) importSkippedEl.textContent = '';
+        if (importConfirmBtn) importConfirmBtn.disabled = true;
+        try {
+          const res = await SupabaseClient.fetchWithAuth('/api/broker/import/preview?broker=' + encodeURIComponent(broker));
+          const data = await res.json();
+          if (!res.ok || (data && data.error)) {
+            if (data && data.error === 'NOT_CONFIGURED') {
+              importStatus((data.message || 'Broker not configured.') + ' Set the connection in your server .env (see .env.example).');
+            } else {
+              importStatus('Could not load positions: ' + ((data && data.message) || ('HTTP ' + res.status)));
+            }
+            return;
+          }
+          importPreview = data;
+          renderImportTable();
+        } catch (e) {
+          importStatus('Could not load positions: ' + ((e && e.message) || 'network error'));
+        }
+      });
+    }
+
+    if (importConfirmBtn) {
+      importConfirmBtn.addEventListener('click', () => {
+        if (!importPreview || !importWrapEl) return;
+        const checks = importWrapEl.querySelectorAll('.pf-import-check:checked');
+        let imported = 0;
+        checks.forEach(cb => {
+          const p = importPreview.positions[Number(cb.dataset.idx)];
+          if (!p) return;
+          // Replace semantics for already-held symbols: the broker lot becomes
+          // the position (the user opted in via the unticked-by-default row).
+          const exists = PortfolioManager.getPositions().some(x => x.symbol === p.symbol);
+          if (exists) PortfolioManager.removePosition(p.symbol);
+          const ok = PortfolioManager.addPosition(p.symbol, p.qty, p.avgPrice, {
+            currency: p.currency, source: 'broker-import'
+          });
+          if (ok) imported++;
+        });
+        if (imported > 0) {
+          showToast('Imported ' + imported + ' position' + (imported === 1 ? '' : 's') + ' from ' + (importPreview.broker === 'ibkr' ? 'IBKR' : 'Questrade'), 'success');
+        } else {
+          showToast('Nothing selected to import', 'info');
+        }
+        closeModal('importBrokerModal');
         renderPortfolio();
       });
     }

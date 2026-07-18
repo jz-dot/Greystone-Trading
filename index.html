@@ -958,6 +958,10 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
             Add Position
           </button>
+          <button class="agent-btn" id="importBrokerBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Import from Broker
+          </button>
           <button class="agent-btn" id="importAlpacaBtn" style="display:none;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             Import from Alpaca
@@ -3139,6 +3143,38 @@
     <div class="modal-footer">
       <button class="agent-btn" onclick="closeModal('sellPositionModal')">Cancel</button>
       <button class="btn-primary" id="modalSellPosBtn">Confirm Sale</button>
+    </div>
+  </div>
+</div>
+
+<!-- Import from Broker Modal (read-only: previews positions, never places orders) -->
+<div class="modal-overlay" id="importBrokerModal">
+  <div class="modal-content" style="max-width: 640px;">
+    <div class="modal-header">
+      <h2>Import from Broker</h2>
+      <button class="modal-close" onclick="closeModal('importBrokerModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="auth-field" style="margin-bottom:12px;">
+        <label for="importBrokerSelect">Broker</label>
+        <select id="importBrokerSelect">
+          <option value="questrade">Questrade</option>
+          <option value="ibkr">Interactive Brokers</option>
+        </select>
+      </div>
+      <div id="importBrokerStatus" style="font-size:12px;color:var(--text-muted);margin-bottom:10px;min-height:16px;line-height:1.4;"></div>
+      <div id="importBrokerTableWrap" style="max-height:300px;overflow-y:auto;"></div>
+      <div id="importBrokerSkipped" style="font-size:11px;color:var(--text-dim);margin-top:8px;line-height:1.4;"></div>
+      <div class="pf-cost-hint" style="font-size:11px;color:var(--text-dim);margin-top:10px;line-height:1.4;">
+        Import is read-only: nothing is placed, changed, or cancelled at your broker. A broker's average
+        cost approximates your ACB for that account only; CRA ACB pools identical property across all your
+        accounts. Imported lots are flagged so you can backfill exact history later.
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="agent-btn" onclick="closeModal('importBrokerModal')">Cancel</button>
+      <button class="agent-btn" id="importBrokerLoadBtn">Load Positions</button>
+      <button class="btn-primary" id="importBrokerConfirmBtn" disabled>Import Selected</button>
     </div>
   </div>
 </div>

@@ -472,6 +472,7 @@ input, select, button { font-family: inherit; }
 }
 .view-title h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
 .view-subtitle { font-size: 12px; color: var(--text-muted); }
+.view-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* Cap Toggle */
 .cap-toggle { display: flex; gap: 2px; background: var(--bg-tertiary); border-radius: var(--radius-sm); padding: 2px; }
@@ -5519,3 +5520,23 @@ kbd {
 .ot-pos-pnl.profit { color: var(--profit); }
 .ot-pos-pnl.loss { color: var(--loss); }
 .ot-acct-note { font-size: 11px; color: var(--text-muted); padding: 4px 0; }
+
+/* ============================================
+   IMPORT FROM BROKER MODAL
+   ============================================ */
+.pf-import-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.pf-import-table th {
+  text-align: left; padding: 6px 8px; font-size: 10px; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted);
+  border-bottom: 1px solid var(--border); position: sticky; top: 0;
+  background: var(--bg-secondary); z-index: 1;
+}
+.pf-import-table td {
+  padding: 6px 8px; color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-faint);
+}
+.pf-import-table th.num, .pf-import-table td.num {
+  text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+}
+.pf-import-table td:nth-child(2) { font-weight: 600; color: var(--text-primary); }
+.pf-import-note { font-size: 10px; color: var(--text-dim); }

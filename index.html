@@ -2982,6 +2982,7 @@
 <script src="services/broker-import.js"></script>
 <script src="services/csv-io.js"></script>
 <script src="services/fee-xray.js"></script>
+<script src="services/corporate-actions.js"></script>
 <script src="app.js"></script>
 <script src="services/auth-ui.js"></script>
 
@@ -3318,6 +3319,50 @@
       <button class="agent-btn" onclick="closeModal('importBrokerModal')">Cancel</button>
       <button class="agent-btn" id="importBrokerLoadBtn">Load Positions</button>
       <button class="btn-primary" id="importBrokerConfirmBtn" disabled>Import Selected</button>
+    </div>
+  </div>
+</div>
+
+<!-- Record Event Modal (dividend / DRIP / return of capital / split) -->
+<div class="modal-overlay" id="eventModal">
+  <div class="modal-content" style="max-width: 460px;">
+    <div class="modal-header">
+      <h2>Record Event</h2>
+      <button class="modal-close" onclick="closeModal('eventModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="evtSymbol"><input type="hidden" id="evtAccount">
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;" id="evtContext"></div>
+      <div class="auth-field" style="margin-bottom:12px;">
+        <label for="evtType">Event type</label>
+        <select id="evtType">
+          <option value="dividend">Cash dividend / distribution</option>
+          <option value="drip">DRIP reinvestment</option>
+          <option value="roc">Return of capital (T3 box 42)</option>
+          <option value="split">Stock split</option>
+        </select>
+      </div>
+      <div class="auth-field" style="margin-bottom:12px;" id="evtAmountRow">
+        <label for="evtAmount">Total amount received (position currency)</label>
+        <input type="number" id="evtAmount" min="0" step="0.01" placeholder="0.00">
+      </div>
+      <div class="auth-field" style="margin-bottom:12px;display:none;" id="evtSharesRow">
+        <label for="evtShares">Shares received</label>
+        <input type="number" id="evtShares" min="0" step="0.0001" placeholder="0.0000">
+      </div>
+      <div class="auth-field" style="margin-bottom:12px;display:none;" id="evtRatioRow">
+        <label for="evtRatio">New shares per old share (2 = 2-for-1, 0.25 = 1-for-4)</label>
+        <input type="number" id="evtRatio" min="0" step="0.0001" placeholder="2">
+      </div>
+      <div class="auth-field" style="margin-bottom:12px;">
+        <label for="evtDate">Date</label>
+        <input type="date" id="evtDate">
+      </div>
+      <div class="pf-cost-hint" id="evtHint" style="font-size:11px;color:var(--text-dim);margin-top:4px;min-height:16px;line-height:1.4;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="agent-btn" onclick="closeModal('eventModal')">Cancel</button>
+      <button class="btn-primary" id="evtConfirmBtn">Record</button>
     </div>
   </div>
 </div>

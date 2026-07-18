@@ -8026,6 +8026,7 @@ const PortfolioManager = (function() {
 
   // ---- REAL QUOTES + MULTI-CURRENCY + ACB ----
   const REALIZED_KEY = 'gs_portfolio_realized';
+  const INCOME_KEY = 'gs_portfolio_income';
   const BASE_CURRENCY = 'CAD';
   // Fallback used only until the live USDCAD quote loads. Not a fabricated
   // price: it just keeps a USD trade convertible before the fetch returns.
@@ -8087,17 +8088,17 @@ const PortfolioManager = (function() {
   // Map a position's transactions to ACB-engine input. Native = same-currency
   // (fxRate 1). Base = converted to CAD using each transaction's own fxRate.
   function nativeTxns(pos) {
-    return (pos.txns || []).map(t => ({
-      type: t.type, date: t.date || todayISO(), shares: t.shares,
-      price: t.price, commission: t.commission || 0, fxRate: 1
-    }));
+    return (pos.txns || []).map(t => t.type === 'roc'
+      ? { type: 'roc', date: t.date || todayISO(), amount: t.amount, fxRate: 1 }
+      : { type: t.type, date: t.date || todayISO(), shares: t.shares,
+          price: t.price, commission: t.commission || 0, fxRate: 1 });
   }
   function baseTxns(pos) {
-    return (pos.txns || []).map(t => ({
-      type: t.type, date: t.date || todayISO(), shares: t.shares,
-      price: t.price, commission: t.commission || 0,
-      fxRate: (pos.currency === 'USD') ? (t.fxRate || getUsdCadRate()) : 1
-    }));
+    const fxOf = t => (pos.currency === 'USD') ? (t.fxRate || getUsdCadRate()) : 1;
+    return (pos.txns || []).map(t => t.type === 'roc'
+      ? { type: 'roc', date: t.date || todayISO(), amount: t.amount, fxRate: fxOf(t) }
+      : { type: t.type, date: t.date || todayISO(), shares: t.shares,
+          price: t.price, commission: t.commission || 0, fxRate: fxOf(t) });
   }
 
   // Pooled average cost in the position's OWN currency (for the Avg Cost column).
@@ -8545,6 +8546,95 @@ const PortfolioManager = (function() {
     },
     getActivities: function() { return _load(ACTIVITY_KEY) || []; },
 
+    // ---- INCOME & CORPORATE ACTIONS ----
+    addIncome: function(entry) {
+      const arr = _load(INCOME_KEY) || [];
+      arr.unshift(entry);
+      if (arr.length > 500) arr.length = 500;
+      _save(INCOME_KEY, arr);
+    },
+    getIncome: function() { return _load(INCOME_KEY) || []; },
+    getIncomeTotalCad: function() { return (_load(INCOME_KEY) || []).reduce((s, e) => s + (Number(e.amountCad) || 0), 0); },
+
+    // Cash dividend: income only, ACB untouched.
+    recordDividend: function(sym, account, opts) {
+      opts = opts || {};
+      const positions = (_load(STORAGE_KEY) || []).map(normalizePosition);
+      const pos = positions.find(p => p.symbol === sym && (p.account || 'non-registered') === (account || 'non-registered'));
+      if (!pos) return { ok: false, error: 'Position not found' };
+      try {
+        const fx = (pos.currency === 'USD') ? (Number(opts.fxRate) || getUsdCadRate()) : 1;
+        const entry = CorporateActions.incomeEntry({
+          symbol: sym, account: pos.account, currency: pos.currency, kind: 'dividend',
+          date: opts.date, amount: opts.amount, fxRate: fx, fxEstimated: opts.fxEstimated
+        });
+        this.addIncome(entry);
+        this.addActivity('DIV', sym, 0, Number(opts.amount) || 0, { currency: pos.currency });
+        return { ok: true, amountCad: entry.amountCad };
+      } catch (e) { return { ok: false, error: e.message }; }
+    },
+
+    // DRIP: zero-commission buy at amount/shares, plus an income entry.
+    recordDrip: function(sym, account, opts) {
+      opts = opts || {};
+      const positions = (_load(STORAGE_KEY) || []).map(normalizePosition);
+      const pos = positions.find(p => p.symbol === sym && (p.account || 'non-registered') === (account || 'non-registered'));
+      if (!pos) return { ok: false, error: 'Position not found' };
+      try {
+        const fx = (pos.currency === 'USD') ? (Number(opts.fxRate) || getUsdCadRate()) : 1;
+        const txn = CorporateActions.dripTxn({
+          date: opts.date, shares: opts.shares, amount: opts.amount,
+          fxRate: fx, fxEstimated: opts.fxEstimated
+        });
+        pos.txns.push(txn);
+        pos.status = 'open';
+        recomputeAggregate(pos);
+        _save(STORAGE_KEY, positions);
+        this.addIncome(CorporateActions.incomeEntry({
+          symbol: sym, account: pos.account, currency: pos.currency, kind: 'drip',
+          date: opts.date, amount: opts.amount, fxRate: fx, fxEstimated: opts.fxEstimated
+        }));
+        this.addActivity('DRIP', sym, Number(opts.shares) || 0, txn.price, { currency: pos.currency });
+        return { ok: true, price: txn.price };
+      } catch (e) { return { ok: false, error: e.message }; }
+    },
+
+    // Return of capital (T3 box 42): reduces ACB; excess realizes a gain.
+    recordRoc: function(sym, account, opts) {
+      opts = opts || {};
+      const positions = (_load(STORAGE_KEY) || []).map(normalizePosition);
+      const pos = positions.find(p => p.symbol === sym && (p.account || 'non-registered') === (account || 'non-registered'));
+      if (!pos) return { ok: false, error: 'Position not found' };
+      try {
+        const fx = (pos.currency === 'USD') ? (Number(opts.fxRate) || getUsdCadRate()) : 1;
+        const beforeGain = acbBaseSummary(pos).totalRealizedGain;
+        pos.txns.push(CorporateActions.rocTxn({
+          date: opts.date, amount: opts.amount, fxRate: fx, fxEstimated: opts.fxEstimated
+        }));
+        const excessGain = acbBaseSummary(pos).totalRealizedGain - beforeGain;
+        recomputeAggregate(pos);
+        _save(STORAGE_KEY, positions);
+        this.addActivity('ROC', sym, 0, Number(opts.amount) || 0, { currency: pos.currency, realized: excessGain > 0.005 ? excessGain : null });
+        return { ok: true, excessGain: excessGain };
+      } catch (e) { return { ok: false, error: e.message }; }
+    },
+
+    // Stock split: adjusts pre-split lots; total ACB invariant.
+    recordSplit: function(sym, account, opts) {
+      opts = opts || {};
+      const positions = (_load(STORAGE_KEY) || []).map(normalizePosition);
+      const pos = positions.find(p => p.symbol === sym && (p.account || 'non-registered') === (account || 'non-registered'));
+      if (!pos) return { ok: false, error: 'Position not found' };
+      try {
+        const r = CorporateActions.applySplit(pos.txns, opts.date, opts.ratio);
+        pos.txns = r.txns;
+        recomputeAggregate(pos);
+        _save(STORAGE_KEY, positions);
+        this.addActivity('SPLIT', sym, Number(opts.ratio) || 0, 0, { currency: pos.currency });
+        return { ok: true, affected: r.affected, shares: pos.shares };
+      } catch (e) { return { ok: false, error: e.message }; }
+    },
+
     getNameMap: function() { return nameMap; },
     getSectorMap: function() { return sectorMap; }
   };
@@ -8646,6 +8736,7 @@ const PortfolioManager = (function() {
         <td class="pf-right"><div class="pf-actions-cell">
           <button class="pf-action-btn trade" data-sym="${h.symbol}" title="Open the order ticket (paper)">Trade</button>
           <button class="pf-action-btn sell" data-sym="${h.symbol}" data-acct="${h.account}" title="Sell / record disposition">Sell</button>
+          <button class="pf-action-btn event" data-sym="${h.symbol}" data-acct="${h.account}" title="Record dividend / DRIP / return of capital / split">Div+</button>
           <button class="pf-action-btn delete" data-sym="${h.symbol}" data-acct="${h.account}" title="Remove (forget entry, no realized gain)">&#x2715;</button>
         </div></td>
       </tr>`;
@@ -8664,6 +8755,14 @@ const PortfolioManager = (function() {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         openSellModal(btn.dataset.sym, btn.dataset.acct);
+      });
+    });
+
+    // Event buttons (dividend / DRIP / ROC / split)
+    tbody.querySelectorAll('.pf-action-btn.event').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (typeof window.gsOpenEventModal === 'function') window.gsOpenEventModal(btn.dataset.sym, btn.dataset.acct);
       });
     });
 
@@ -9299,6 +9398,76 @@ const PortfolioManager = (function() {
         }
         closeModal('importBrokerModal');
         renderPortfolio();
+      });
+    }
+
+    // --- Record Event modal (dividend / DRIP / ROC / split) ---
+    const EVT_HINTS = {
+      dividend: 'Cash income. Recorded to the income ledger; ACB is untouched.',
+      drip: 'Reinvested distribution: adds a zero-commission buy at amount divided by shares, and records the income.',
+      roc: 'Return of capital (T3 box 42): reduces ACB dollar for dollar; anything above remaining ACB realizes a capital gain.',
+      split: 'Adjusts every pre-split lot (shares multiplied, price divided). Total ACB does not change.'
+    };
+
+    function syncEventFields() {
+      const t = (document.getElementById('evtType') || {}).value || 'dividend';
+      const amountRow = document.getElementById('evtAmountRow');
+      const sharesRow = document.getElementById('evtSharesRow');
+      const ratioRow = document.getElementById('evtRatioRow');
+      if (amountRow) amountRow.style.display = t === 'split' ? 'none' : '';
+      if (sharesRow) sharesRow.style.display = t === 'drip' ? '' : 'none';
+      if (ratioRow) ratioRow.style.display = t === 'split' ? '' : 'none';
+      const hint = document.getElementById('evtHint');
+      if (hint) hint.textContent = EVT_HINTS[t] || '';
+    }
+    const evtTypeSel = document.getElementById('evtType');
+    if (evtTypeSel) evtTypeSel.addEventListener('change', syncEventFields);
+
+    window.gsOpenEventModal = function (sym, acct) {
+      const h = PortfolioManager.getHoldings().find(x => x.symbol === sym && (!acct || x.account === acct));
+      if (!h) return;
+      document.getElementById('evtSymbol').value = h.symbol;
+      document.getElementById('evtAccount').value = h.account;
+      const ctx = document.getElementById('evtContext');
+      if (ctx) ctx.textContent = h.symbol + ' - ' + h.account + ' (' + h.currency + ', ' + h.shares.toLocaleString('en-US', { maximumFractionDigits: 4 }) + ' shares held)';
+      const dEl = document.getElementById('evtDate');
+      if (dEl) dEl.value = new Date().toISOString().slice(0, 10);
+      ['evtAmount', 'evtShares', 'evtRatio'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+      if (evtTypeSel) evtTypeSel.value = 'dividend';
+      syncEventFields();
+      const modal = document.getElementById('eventModal');
+      if (modal) modal.classList.add('active');
+    };
+
+    const evtConfirmBtn = document.getElementById('evtConfirmBtn');
+    if (evtConfirmBtn) {
+      evtConfirmBtn.addEventListener('click', async () => {
+        const sym = (document.getElementById('evtSymbol') || {}).value;
+        const acct = (document.getElementById('evtAccount') || {}).value;
+        const type = (document.getElementById('evtType') || {}).value;
+        const date = (document.getElementById('evtDate') || {}).value;
+        const amount = parseFloat((document.getElementById('evtAmount') || {}).value);
+        const shares = parseFloat((document.getElementById('evtShares') || {}).value);
+        const ratio = parseFloat((document.getElementById('evtRatio') || {}).value);
+        if (!sym || !date) return;
+        const h = PortfolioManager.getHoldings().find(x => x.symbol === sym && x.account === acct);
+        const fx = await resolveTxnFx(h ? h.currency : 'CAD', date);
+        let res;
+        if (type === 'dividend') {
+          res = PortfolioManager.recordDividend(sym, acct, { amount: amount, date: date, fxRate: fx.rate, fxEstimated: fx.estimated });
+          if (res && res.ok && typeof showToast === 'function') showToast('Dividend recorded: $' + (Number(amount) || 0).toFixed(2) + ' ' + (h ? h.currency : ''), 'success');
+        } else if (type === 'drip') {
+          res = PortfolioManager.recordDrip(sym, acct, { amount: amount, shares: shares, date: date, fxRate: fx.rate, fxEstimated: fx.estimated });
+          if (res && res.ok && typeof showToast === 'function') showToast('DRIP recorded: ' + shares + ' ' + sym + ' @ $' + res.price.toFixed(4), 'success');
+        } else if (type === 'roc') {
+          res = PortfolioManager.recordRoc(sym, acct, { amount: amount, date: date, fxRate: fx.rate, fxEstimated: fx.estimated });
+          if (res && res.ok && typeof showToast === 'function') showToast('Return of capital recorded' + (res.excessGain > 0.005 ? ' - excess over ACB realized $' + res.excessGain.toFixed(2) + ' CAD gain' : ' - ACB reduced'), 'success');
+        } else if (type === 'split') {
+          res = PortfolioManager.recordSplit(sym, acct, { ratio: ratio, date: date });
+          if (res && res.ok && typeof showToast === 'function') showToast('Split applied: ' + res.affected + ' lot' + (res.affected === 1 ? '' : 's') + ' adjusted, now ' + res.shares.toLocaleString('en-US', { maximumFractionDigits: 4 }) + ' shares', 'success');
+        }
+        if (res && !res.ok && typeof showToast === 'function') showToast(res.error || 'Could not record event', 'error');
+        if (res && res.ok) { closeModal('eventModal'); renderPortfolio(); }
       });
     }
 

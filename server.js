@@ -9,12 +9,22 @@
 
 const express = require('express');
 const https = require('https');
+const crypto = require('crypto');
 const path = require('path');
 const helmet = require('helmet');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const { createClient } = require('@supabase/supabase-js');
 const { createBigDataService } = require('./services/bigdata-client');
+const aiTools = require('./services/ai-tools');
+
+// Official Anthropic SDK. Resolve the constructor across CJS export shapes.
+const AnthropicSDK = require('@anthropic-ai/sdk');
+const Anthropic = AnthropicSDK.Anthropic || AnthropicSDK.default || AnthropicSDK;
+
+// Current Opus-tier model id (per the claude-api reference). One constant so
+// every Grey Sankore call stays in sync.
+const AI_MODEL = 'claude-opus-4-8';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -80,6 +90,79 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
   supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false }
   });
+}
+
+// ============================================
+// SECRET ENCRYPTION AT REST (AES-256-GCM)
+// ============================================
+// Per-user API credentials stored in Supabase (api_credentials) are encrypted
+// with a server-held MASTER_KEY before they touch the database. The column was
+// historically named "encrypted_*" but stored plaintext; these helpers make it
+// real. Format of a ciphertext string:  v1:gcm:<ivB64>:<tagB64>:<cipherB64>.
+const MASTER_KEY = process.env.MASTER_KEY || '';
+const ENC_PREFIX = 'v1:gcm:';
+
+// Resolve MASTER_KEY (hex or base64) to a 32-byte Buffer, or null if unusable.
+function getMasterKeyBuffer() {
+  if (!MASTER_KEY) return null;
+  try {
+    if (/^[0-9a-fA-F]{64}$/.test(MASTER_KEY)) return Buffer.from(MASTER_KEY, 'hex');
+    const b = Buffer.from(MASTER_KEY, 'base64');
+    if (b.length === 32) return b;
+    // Last resort: derive a stable 32-byte key from an arbitrary passphrase.
+    return crypto.createHash('sha256').update(MASTER_KEY).digest();
+  } catch (e) {
+    return null;
+  }
+}
+
+// Encrypt a plaintext secret. Returns a self-describing ciphertext string. If
+// no MASTER_KEY is configured, returns the plaintext unchanged and warns once,
+// so the endpoint keeps working (encryption disabled) rather than failing.
+let warnedNoMasterKey = false;
+function encryptSecret(plaintext) {
+  if (plaintext == null) return plaintext;
+  const key = getMasterKeyBuffer();
+  if (!key) {
+    if (!warnedNoMasterKey) {
+      console.warn('[Security] MASTER_KEY not set: API credentials are stored WITHOUT encryption. Set MASTER_KEY to enable encryption at rest.');
+      warnedNoMasterKey = true;
+    }
+    return String(plaintext);
+  }
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const ct = Buffer.concat([cipher.update(String(plaintext), 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return ENC_PREFIX + iv.toString('base64') + ':' + tag.toString('base64') + ':' + ct.toString('base64');
+}
+
+// Decrypt a stored secret. A value that is not in our ciphertext format is
+// treated as a legacy plaintext value and returned unchanged, so existing rows
+// keep working. Returns null if a real ciphertext cannot be decrypted.
+function decryptSecret(stored) {
+  if (stored == null) return null;
+  const s = String(stored);
+  if (s.indexOf(ENC_PREFIX) !== 0) return s; // legacy plaintext passthrough
+  const key = getMasterKeyBuffer();
+  if (!key) {
+    console.warn('[Security] Encrypted credential found but MASTER_KEY is not set; cannot decrypt.');
+    return null;
+  }
+  try {
+    const parts = s.slice(ENC_PREFIX.length).split(':');
+    if (parts.length !== 3) return null;
+    const iv = Buffer.from(parts[0], 'base64');
+    const tag = Buffer.from(parts[1], 'base64');
+    const ct = Buffer.from(parts[2], 'base64');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(tag);
+    const pt = Buffer.concat([decipher.update(ct), decipher.final()]);
+    return pt.toString('utf8');
+  } catch (e) {
+    console.error('[Security] Credential decryption failed:', e.message);
+    return null;
+  }
 }
 
 // ============================================
@@ -716,30 +799,179 @@ RESPONSE FORMAT:
 COMPLIANCE:
 - GSP Trading is open-source software for research and education, is not investment advice, and GSP Trading Inc. is not a registered investment dealer or adviser.`;
 
-// POST /api/ai/chat - Streaming chat proxy (guest-accessible, rate limited)
-app.post('/api/ai/chat', async (req, res) => {
-  const { message, context, history, systemPrompt } = req.body;
+// --- Grey Sankore tool-use plumbing -------------------------------------
 
-  if (!anthropicApiKey) {
+// Minimal, education-first note appended to whatever system prompt is in play
+// on the chat path, so the model knows its tools exist and keeps the
+// not-advice stance even when tool-grounded numbers are involved.
+const TOOL_USE_ADDENDUM = `
+
+LIVE DATA TOOLS:
+You can call server-side tools to ground your analysis in real platform data: get_quote and get_price_history for live and historical prices, get_options_chain for an options summary with implied volatility and Black-Scholes Greeks, and compare_broker_costs, estimate_fx_drag, and norberts_gambit_savings for all-in Canadian broker trading costs including the hidden currency-conversion fee. Prefer calling a tool over guessing whenever a concrete number would strengthen the explanation, and cite the figures you retrieve. Any tool-grounded number is still educational analysis, not investment advice, a price prediction, or a recommendation to trade; keep the not-advice framing in every answer. Portfolio or position details in the market context come from the user's own browser; treat them as background, never as a suitability mandate.`;
+
+// Cap on server-side tool rounds per request. After this the model is forced
+// to answer without further tool calls.
+const MAX_TOOL_ROUNDS = 5;
+
+const ANTHROPIC_CREDENTIAL_TYPE = 'anthropic';
+
+// Internal market-data helpers the tools call. They reuse the same Yahoo
+// fetch + parse + cache path as the public routes, so a tool call and a UI
+// request share results and rate-limit protection.
+async function aiFetchQuote(symbol) {
+  symbol = String(symbol || '').toUpperCase();
+  const cacheKey = 'quote:' + symbol;
+  const cached = getCached(cacheKey);
+  if (cached) return cached;
+  const data = await yahooFetch('/v8/finance/chart/' + encodeURIComponent(symbol) + '?interval=1d&range=1d');
+  const result = parseQuote(data, symbol);
+  setCache(cacheKey, result);
+  return result;
+}
+
+async function aiFetchChart(symbol, interval, range) {
+  symbol = String(symbol || '').toUpperCase();
+  const validIntervals = ['1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h', '1d', '5d', '1wk', '1mo'];
+  const validRanges = ['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '3y', '5y', '10y', 'ytd', 'max'];
+  if (validIntervals.indexOf(interval) === -1) interval = '1d';
+  if (validRanges.indexOf(range) === -1) range = '1mo';
+  const cacheKey = 'chart:' + symbol + ':' + interval + ':' + range;
+  const cached = getCached(cacheKey);
+  if (cached) return cached;
+  const data = await yahooFetch('/v8/finance/chart/' + encodeURIComponent(symbol) + '?interval=' + interval + '&range=' + range);
+  const result = parseChart(data, symbol);
+  setCache(cacheKey, result);
+  return result;
+}
+
+// Dependencies injected into the tool layer (services/ai-tools.js).
+const AI_TOOL_DEPS = {
+  getQuote: aiFetchQuote,
+  getChart: aiFetchChart,
+  getOptions: getOptionsData,
+};
+
+// Resolve the caller's Anthropic key. Authenticated path: decrypt the user's
+// stored BYO key from api_credentials. Guest/preview fallback: the server
+// env/global key. Never throws; returns { key, source }.
+async function resolveAnthropicKey(req) {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.indexOf('Bearer ') === 0 && supabaseAdmin) {
+    const token = authHeader.slice(7);
+    try {
+      const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
+      if (!userErr && userData && userData.user) {
+        const { data: cred } = await supabaseAdmin
+          .from('api_credentials')
+          .select('encrypted_key')
+          .eq('user_id', userData.user.id)
+          .eq('credential_type', ANTHROPIC_CREDENTIAL_TYPE)
+          .maybeSingle();
+        if (cred && cred.encrypted_key) {
+          const key = decryptSecret(cred.encrypted_key);
+          if (key && key.trim()) return { key: key.trim(), source: 'user' };
+        }
+      }
+    } catch (e) {
+      console.warn('[Grey Sankore] BYO key resolution failed; falling back to server key:', e.message);
+    }
+  }
+  if (anthropicApiKey) return { key: anthropicApiKey, source: 'server' };
+  return { key: null, source: 'none' };
+}
+
+function extractAssistantText(resp) {
+  if (!resp || !Array.isArray(resp.content)) return '';
+  return resp.content.filter(b => b.type === 'text').map(b => b.text).join('');
+}
+
+// Agentic tool loop. Runs the model, executes any tool calls server-side,
+// feeds results back, and returns the final assistant text. Tool errors come
+// back as tool_result blocks with is_error so the model can recover.
+async function runToolLoop(client, system, messages, tools) {
+  const convo = messages.slice();
+  for (let round = 0; ; round++) {
+    const allowTools = round < MAX_TOOL_ROUNDS;
+    const params = {
+      model: AI_MODEL,
+      max_tokens: 2048,
+      system: system,
+      messages: convo,
+      tools: tools,
+    };
+    // Past the cap, force a plain text answer (no further tool calls).
+    if (!allowTools) params.tool_choice = { type: 'none' };
+
+    const resp = await client.messages.create(params);
+
+    if (resp.stop_reason === 'tool_use' && allowTools) {
+      convo.push({ role: 'assistant', content: resp.content });
+      const toolResults = [];
+      for (const block of resp.content) {
+        if (block.type !== 'tool_use') continue;
+        let content;
+        let isError = false;
+        try {
+          const result = await aiTools.executeTool(block.name, block.input, AI_TOOL_DEPS);
+          content = JSON.stringify(result);
+        } catch (e) {
+          content = JSON.stringify({ error: (e && e.message) ? e.message : String(e) });
+          isError = true;
+        }
+        toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: content, is_error: isError });
+      }
+      convo.push({ role: 'user', content: toolResults });
+      continue;
+    }
+
+    // Terminal turn (end_turn / max_tokens / forced final): return its text.
+    return extractAssistantText(resp);
+  }
+}
+
+// Write assistant text to the client as the existing SSE { type:'text' } events.
+// Chunked so the payload streams rather than arriving as one large write; the
+// client accumulates text events until the [DONE] sentinel.
+function sseWriteText(res, text) {
+  if (!text) return;
+  const CHUNK = 240;
+  for (let i = 0; i < text.length; i += CHUNK) {
+    res.write('data: ' + JSON.stringify({ type: 'text', text: text.slice(i, i + CHUNK) }) + '\n\n');
+  }
+}
+
+// POST /api/ai/chat - Server-side tool-use agent, streamed to the client.
+// The browser contract is unchanged: an SSE stream of { type:'text' } events
+// terminated by a [DONE] sentinel. Tool calls happen entirely server-side;
+// only the final assistant text reaches the client.
+app.post('/api/ai/chat', async (req, res) => {
+  const { message, context, history, systemPrompt } = req.body || {};
+
+  // Resolve the key BEFORE any SSE headers so the no-key path can return a
+  // JSON 401 (the client uses that to fall back to clearly-marked demo output).
+  const resolved = await resolveAnthropicKey(req);
+  if (!resolved.key) {
     return res.status(401).json({
       error: 'no_api_key',
-      message: 'AI is not configured on this server. An Anthropic API key must be set.'
+      message: 'AI is not configured. Add your Anthropic API key in Settings, or set one on the server.'
     });
   }
 
-  // Honor a caller-supplied system prompt (quick-chat sends one); else default.
-  const systemForRequest = (systemPrompt && typeof systemPrompt === 'string' && systemPrompt.trim())
-    ? systemPrompt
-    : GREY_SANKORE_SYSTEM;
-
-  if (!message) {
+  if (!message || typeof message !== 'string') {
     return res.status(400).json({ error: 'missing_message', message: 'Message is required.' });
   }
 
+  // Honor a caller-supplied system prompt (quick-chat sends one); else default.
+  const systemText = (systemPrompt && typeof systemPrompt === 'string' && systemPrompt.trim())
+    ? systemPrompt
+    : GREY_SANKORE_SYSTEM;
+
   const messages = [];
-  if (history && Array.isArray(history)) {
+  if (Array.isArray(history)) {
     history.forEach(h => {
-      messages.push({ role: h.role, content: h.content });
+      if (h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string') {
+        messages.push({ role: h.role, content: h.content });
+      }
     });
   }
 
@@ -750,6 +982,10 @@ app.post('/api/ai/chat', async (req, res) => {
     if (context.capSize) parts.push(`Active Universe: ${context.capSize} Cap`);
     if (context.marketData) parts.push(`Market Context: ${JSON.stringify(context.marketData)}`);
     if (context.recentPrices) parts.push(`Recent Prices: ${JSON.stringify(context.recentPrices)}`);
+    // Portfolio / positions stay CONTEXT from the browser (the server cannot
+    // read localStorage), never a server tool.
+    if (context.portfolio) parts.push(`Portfolio (from the user's browser): ${JSON.stringify(context.portfolio)}`);
+    if (context.positions) parts.push(`Positions (from the user's browser): ${JSON.stringify(context.positions)}`);
 
     // BigData.com premium data enrichment
     if (context.bigdataAvailable) {
@@ -776,109 +1012,36 @@ app.post('/api/ai/chat', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
 
-  const postData = JSON.stringify({
-    model: 'claude-opus-4-8',
-    max_tokens: 2048,
-    system: systemForRequest,
-    messages: messages,
-    stream: true
-  });
+  try {
+    const client = new Anthropic({ apiKey: resolved.key });
+    // System as a cached block: it is re-sent on every tool round, so
+    // cache_control avoids re-billing it each turn (once the prefix clears the
+    // model's minimum cacheable size).
+    const system = [{ type: 'text', text: systemText + TOOL_USE_ADDENDUM, cache_control: { type: 'ephemeral' } }];
+    const tools = aiTools.getToolDefinitions();
 
-  const options = {
-    hostname: 'api.anthropic.com',
-    port: 443,
-    path: '/v1/messages',
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': anthropicApiKey,
-      'anthropic-version': '2023-06-01',
-      'Content-Length': Buffer.byteLength(postData)
-    }
-  };
-
-  const apiReq = https.request(options, (apiRes) => {
-    if (apiRes.statusCode !== 200) {
-      let errorBody = '';
-      apiRes.on('data', chunk => { errorBody += chunk; });
-      apiRes.on('end', () => {
-        // Log the raw upstream error server-side; return a generic message.
-        console.error('[Grey Sankore] Anthropic API error ' + apiRes.statusCode + ':', errorBody);
-        res.write(`data: ${JSON.stringify({ type: 'error', error: 'AI service error (' + apiRes.statusCode + '). Please try again.' })}\n\n`);
-        res.write('data: [DONE]\n\n');
-        res.end();
-      });
-      return;
-    }
-
-    let buffer = '';
-    apiRes.on('data', (chunk) => {
-      buffer += chunk.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6).trim();
-          if (data === '[DONE]') {
-            res.write('data: [DONE]\n\n');
-            continue;
-          }
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed.type === 'content_block_delta' && parsed.delta && parsed.delta.text) {
-              res.write(`data: ${JSON.stringify({ type: 'text', text: parsed.delta.text })}\n\n`);
-            } else if (parsed.type === 'message_stop') {
-              res.write('data: [DONE]\n\n');
-            } else if (parsed.type === 'error') {
-              console.error('[Grey Sankore] Anthropic stream error:', parsed.error);
-              res.write(`data: ${JSON.stringify({ type: 'error', error: 'AI service error. Please try again.' })}\n\n`);
-              res.write('data: [DONE]\n\n');
-            }
-          } catch (e) {}
-        }
-      }
-    });
-
-    apiRes.on('end', () => {
-      if (buffer.trim()) {
-        const lines = buffer.split('\n');
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6).trim();
-            try {
-              const parsed = JSON.parse(data);
-              if (parsed.type === 'content_block_delta' && parsed.delta && parsed.delta.text) {
-                res.write(`data: ${JSON.stringify({ type: 'text', text: parsed.delta.text })}\n\n`);
-              }
-            } catch (e) {}
-          }
-        }
-      }
-      res.write('data: [DONE]\n\n');
-      res.end();
-    });
-  });
-
-  apiReq.on('error', (err) => {
-    console.error('[Grey Sankore] Anthropic request error:', err.message);
-    res.write(`data: ${JSON.stringify({ type: 'error', error: 'AI service is unreachable. Please try again.' })}\n\n`);
+    const finalText = await runToolLoop(client, system, messages, tools);
+    sseWriteText(res, finalText || '');
     res.write('data: [DONE]\n\n');
     res.end();
-  });
-
-  apiReq.write(postData);
-  apiReq.end();
+  } catch (err) {
+    // Log the detail server-side; stream a generic error event to the client.
+    console.error('[Grey Sankore] chat error:', err && err.message ? err.message : err);
+    res.write(`data: ${JSON.stringify({ type: 'error', error: 'AI service error. Please try again.' })}\n\n`);
+    res.write('data: [DONE]\n\n');
+    res.end();
+  }
 });
 
 // POST /api/ai/analyze - Non-streaming analysis (guest-accessible, rate limited)
 app.post('/api/ai/analyze', async (req, res) => {
-  const { prompt, type } = req.body;
+  const { prompt, type } = req.body || {};
 
-  if (!anthropicApiKey) {
+  const resolved = await resolveAnthropicKey(req);
+  if (!resolved.key) {
     return res.status(401).json({
       error: 'no_api_key',
-      message: 'AI is not configured on this server. An Anthropic API key must be set.'
+      message: 'AI is not configured. Add your Anthropic API key in Settings, or set one on the server.'
     });
   }
 
@@ -886,60 +1049,22 @@ app.post('/api/ai/analyze', async (req, res) => {
     return res.status(400).json({ error: 'missing_prompt', message: 'Prompt is required.' });
   }
 
-  const postData = JSON.stringify({
-    model: 'claude-opus-4-8',
-    max_tokens: 1024,
-    system: GREY_SANKORE_SYSTEM,
-    messages: [{ role: 'user', content: prompt }]
-  });
-
-  const options = {
-    hostname: 'api.anthropic.com',
-    port: 443,
-    path: '/v1/messages',
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': anthropicApiKey,
-      'anthropic-version': '2023-06-01',
-      'Content-Length': Buffer.byteLength(postData)
-    }
-  };
-
-  return new Promise((resolve) => {
-    const apiReq = https.request(options, (apiRes) => {
-      let body = '';
-      apiRes.on('data', chunk => { body += chunk; });
-      apiRes.on('end', () => {
-        try {
-          const parsed = JSON.parse(body);
-          if (apiRes.statusCode === 200 && parsed.content && parsed.content[0]) {
-            res.json({ text: parsed.content[0].text, type });
-          } else {
-            // Log the upstream detail; return a generic message.
-            console.error('[Grey Sankore] Anthropic analyze error ' + apiRes.statusCode + ':', parsed.error ? parsed.error.message : body);
-            res.status(apiRes.statusCode || 502).json({
-              error: 'ai_error',
-              message: 'AI service error. Please try again.'
-            });
-          }
-        } catch (e) {
-          console.error('[Grey Sankore] Failed to parse Anthropic response:', e.message);
-          res.status(502).json({ error: 'ai_error', message: 'AI service returned an unreadable response.' });
-        }
-        resolve();
-      });
+  try {
+    const client = new Anthropic({ apiKey: resolved.key });
+    const resp = await client.messages.create({
+      model: AI_MODEL,
+      max_tokens: 1024,
+      system: [{ type: 'text', text: GREY_SANKORE_SYSTEM, cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: prompt }],
     });
-
-    apiReq.on('error', (err) => {
-      console.error('[Grey Sankore] Anthropic analyze request error:', err.message);
-      res.status(502).json({ error: 'ai_error', message: 'AI service is unreachable. Please try again.' });
-      resolve();
-    });
-
-    apiReq.write(postData);
-    apiReq.end();
-  });
+    const text = extractAssistantText(resp);
+    res.json({ text: text, type: type });
+  } catch (err) {
+    // Log the detail server-side; return a generic error to the client.
+    const status = (err && typeof err.status === 'number') ? err.status : 502;
+    console.error('[Grey Sankore] analyze error ' + status + ':', err && err.message ? err.message : err);
+    res.status(status || 502).json({ error: 'ai_error', message: 'AI service error. Please try again.' });
+  }
 });
 
 // POST /api/ai/key - Set API key (authenticated: writes a server-global key)
@@ -1971,13 +2096,15 @@ app.post('/api/user/api-keys', requireAuth, async (req, res) => {
   }
 
   try {
+    // Encrypt at rest with the server MASTER_KEY (AES-256-GCM). The client
+    // sends the raw secret in these fields; the column stores real ciphertext.
     const { data, error } = await supabaseAdmin
       .from('api_credentials')
       .upsert({
         user_id: req.user.id,
         credential_type: credential_type,
-        encrypted_key: encrypted_key,
-        encrypted_secret: encrypted_secret || null,
+        encrypted_key: encryptSecret(encrypted_key),
+        encrypted_secret: encrypted_secret ? encryptSecret(encrypted_secret) : null,
         metadata: metadata || {},
         updated_at: new Date().toISOString()
       }, { onConflict: 'user_id,credential_type' })

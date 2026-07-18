@@ -934,8 +934,7 @@
       <div class="view-header">
         <div class="view-title">
           <h1>Portfolio</h1>
-          <span class="view-subtitle">Track your holdings and performance</span>
-          <span class="sample-badge" title="Seeded demo positions with simulated prices">Sample Portfolio</span>
+          <span class="view-subtitle">Track your holdings and performance. Values shown in CAD.</span>
         </div>
         <div class="view-actions">
           <button class="btn-primary" id="addPositionBtn">
@@ -972,12 +971,12 @@
           <div class="pf-card-sparkline" id="pfSparkReturn"></div>
         </div>
         <div class="pf-summary-card">
-          <span class="pf-card-label">Cash Balance</span>
+          <span class="pf-card-label">Realized P&amp;L</span>
           <span class="pf-card-value" id="pfCashBalance">$0.00</span>
           <div class="pf-card-sparkline" id="pfSparkCash"></div>
         </div>
         <div class="pf-summary-card">
-          <span class="pf-card-label">Buying Power</span>
+          <span class="pf-card-label">Book Cost (ACB)</span>
           <span class="pf-card-value" id="pfBuyingPower">$0.00</span>
           <div class="pf-card-sparkline" id="pfSparkBP"></div>
         </div>
@@ -2847,6 +2846,8 @@
 </div>
 
 <script src="services/black-scholes.js"></script>
+<script src="services/acb.js"></script>
+<script src="services/fee-model.js"></script>
 <script src="services/options-data.js"></script>
 <script src="services/alpaca-client.js"></script>
 <script src="services/ibkr-client.js"></script>
@@ -3072,10 +3073,47 @@
         <label for="modalPosCost">Average Cost per Share</label>
         <input type="number" id="modalPosCost" placeholder="e.g. 150.00" min="0" step="0.01">
       </div>
+      <div class="auth-field" style="margin-bottom:12px;">
+        <label for="modalPosCurrency">Currency</label>
+        <select id="modalPosCurrency">
+          <option value="auto">Auto-detect (.TO / .V = CAD, else USD)</option>
+          <option value="CAD">CAD</option>
+          <option value="USD">USD</option>
+        </select>
+      </div>
+      <div class="pf-cost-hint" id="pfAddCostHint" style="font-size:11px;color:var(--text-dim);margin-top:4px;min-height:16px;line-height:1.4;"></div>
     </div>
     <div class="modal-footer">
       <button class="agent-btn" onclick="closeModal('addPositionModal')">Cancel</button>
       <button class="btn-primary" id="modalAddPosBtn">Add to Portfolio</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="sellPositionModal">
+  <div class="modal-content" style="max-width: 440px;">
+    <div class="modal-header">
+      <h2>Sell / Record Disposition</h2>
+      <button class="modal-close" onclick="closeModal('sellPositionModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="auth-field" style="margin-bottom:12px;">
+        <label for="sellPosTicker">Ticker</label>
+        <input type="text" id="sellPosTicker" readonly>
+      </div>
+      <div class="auth-field" style="margin-bottom:12px;">
+        <label for="sellPosShares">Shares to Sell (<span id="sellPosHeld">0</span> held)</label>
+        <input type="number" id="sellPosShares" placeholder="e.g. 50" min="0" step="0.0001">
+      </div>
+      <div class="auth-field" style="margin-bottom:12px;">
+        <label for="sellPosPrice">Sell Price per Share (<span id="sellPosCcy">USD</span>)</label>
+        <input type="number" id="sellPosPrice" placeholder="e.g. 175.00" min="0" step="0.01">
+      </div>
+      <div class="pf-cost-hint" id="pfSellCostHint" style="font-size:11px;color:var(--text-dim);margin-top:4px;min-height:16px;line-height:1.4;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="agent-btn" onclick="closeModal('sellPositionModal')">Cancel</button>
+      <button class="btn-primary" id="modalSellPosBtn">Confirm Sale</button>
     </div>
   </div>
 </div>

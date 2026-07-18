@@ -5375,14 +5375,11 @@ var DEFAULT_PORTFOLIO = [
   { symbol: 'PLTR', shares: 200, avgCost: 22.50 }
 ];
 
-/* Ensure default portfolio exists in localStorage */
-(function initDefaultPortfolio() {
-  var existing = null;
-  try { existing = JSON.parse(localStorage.getItem('gs_portfolio')); } catch(e) {}
-  if (!existing || !Array.isArray(existing) || existing.length === 0) {
-    localStorage.setItem('gs_portfolio', JSON.stringify(DEFAULT_PORTFOLIO));
-  }
-})();
+/* NOTE: We intentionally do NOT seed gs_portfolio here. A new user starts with
+   an empty portfolio and sees the empty state in the Portfolio view. The Risk
+   Analytics view (which carries its own "Sample Data" badge) falls back to
+   DEFAULT_PORTFOLIO in memory only, without writing to gs_portfolio, so the
+   Portfolio and Risk views no longer collide on the same storage key. */
 
 /* Generate or retrieve equity curve for drawdown chart */
 function getEquityCurve() {
@@ -7819,16 +7816,139 @@ const PortfolioManager = (function() {
     try { localStorage.setItem(key, JSON.stringify(data)); } catch(e) {}
   }
 
-  // Simulated current prices (in production, fetch from market data)
-  const priceCache = {};
-  function getSimPrice(sym) {
-    if (priceCache[sym]) return priceCache[sym];
-    // Seed deterministic but varied prices
-    const seed = sym.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-    const base = 50 + (seed % 400);
-    const dayChg = ((seed % 7) - 3) * 0.4;
-    priceCache[sym] = { price: base + Math.random() * 10, dayChgPct: dayChg };
-    return priceCache[sym];
+  // ---- REAL QUOTES + MULTI-CURRENCY + ACB ----
+  const REALIZED_KEY = 'gs_portfolio_realized';
+  const BASE_CURRENCY = 'CAD';
+  // Fallback used only until the live USDCAD quote loads. Not a fabricated
+  // price: it just keeps a USD trade convertible before the fetch returns.
+  const DEFAULT_USDCAD = 1.36;
+
+  // Live quote snapshot: symbol -> { price, changePct, currency, ts }.
+  // Populated by refreshQuotes() from the real /api/quotes endpoint.
+  let quoteCache = {};
+  let usdCadRate = null;
+  let quotesInFlight = null;
+
+  function todayISO() { return new Date().toISOString().slice(0, 10); }
+
+  // Heuristic: TSX (.TO), TSX Venture (.V), CSE (.CN) and NEO (.NE) list in CAD;
+  // everything else defaults to USD. The user can override on add.
+  function inferCurrency(sym) {
+    sym = String(sym || '').toUpperCase();
+    if (/\.(TO|V|CN|NE)$/.test(sym)) return 'CAD';
+    return 'USD';
+  }
+
+  function getUsdCadRate() {
+    return (usdCadRate && usdCadRate > 0) ? usdCadRate : DEFAULT_USDCAD;
+  }
+
+  // Fetch real quotes for every held symbol plus USDCAD, into quoteCache.
+  function refreshQuotes() {
+    if (quotesInFlight) return quotesInFlight;
+    const positions = _load(STORAGE_KEY) || [];
+    const syms = [];
+    positions.forEach(p => { if (p.symbol && syms.indexOf(p.symbol) === -1) syms.push(p.symbol); });
+    syms.push('USDCAD=X');
+    const url = '/api/quotes?symbols=' + encodeURIComponent(syms.join(','));
+    quotesInFlight = fetch(url)
+      .then(r => r.ok ? r.json() : {})
+      .then(quotes => {
+        Object.keys(quotes || {}).forEach(k => {
+          const q = quotes[k];
+          if (q && typeof q.price === 'number' && q.price > 0) {
+            quoteCache[k.toUpperCase()] = {
+              price: q.price,
+              changePct: (typeof q.changePct === 'number') ? q.changePct : 0,
+              currency: q.currency || 'USD',
+              ts: Date.now()
+            };
+          }
+        });
+        const fx = quoteCache['USDCAD=X'];
+        if (fx && fx.price > 0) usdCadRate = fx.price;
+        return quoteCache;
+      })
+      .catch(() => quoteCache)
+      .then(v => { quotesInFlight = null; return v; });
+    return quotesInFlight;
+  }
+
+  function getQuote(sym) { return quoteCache[String(sym || '').toUpperCase()] || null; }
+
+  // Map a position's transactions to ACB-engine input. Native = same-currency
+  // (fxRate 1). Base = converted to CAD using each transaction's own fxRate.
+  function nativeTxns(pos) {
+    return (pos.txns || []).map(t => ({
+      type: t.type, date: t.date || todayISO(), shares: t.shares,
+      price: t.price, commission: t.commission || 0, fxRate: 1
+    }));
+  }
+  function baseTxns(pos) {
+    return (pos.txns || []).map(t => ({
+      type: t.type, date: t.date || todayISO(), shares: t.shares,
+      price: t.price, commission: t.commission || 0,
+      fxRate: (pos.currency === 'USD') ? (t.fxRate || getUsdCadRate()) : 1
+    }));
+  }
+
+  // Pooled average cost in the position's OWN currency (for the Avg Cost column).
+  function acbNative(pos) {
+    if (typeof ACB !== 'undefined') return ACB.currentACB(nativeTxns(pos));
+    let sh = 0, cost = 0;
+    (pos.txns || []).forEach(t => {
+      if (t.type === 'buy') { sh += t.shares; cost += t.shares * t.price + (t.commission || 0); }
+      else if (t.type === 'sell') { const per = sh > 0 ? cost / sh : 0; cost -= per * t.shares; sh -= t.shares; }
+    });
+    return { shares: sh, totalACB: cost, acbPerShare: sh > 0 ? cost / sh : 0 };
+  }
+
+  // Full ACB run in CAD (base): book value, per-share ACB, realized gains, ledger.
+  function acbBaseSummary(pos) {
+    if (typeof ACB !== 'undefined') {
+      const r = ACB.computeACB(baseTxns(pos));
+      return {
+        currentShares: r.summary.currentShares,
+        currentBookValue: r.summary.currentBookValue,
+        currentACBPerShare: r.summary.currentACBPerShare,
+        totalRealizedGain: r.summary.totalRealizedGain,
+        ledger: r.ledger
+      };
+    }
+    let sh = 0, cost = 0, realized = 0;
+    (pos.txns || []).forEach(t => {
+      const fx = (pos.currency === 'USD') ? (t.fxRate || getUsdCadRate()) : 1;
+      if (t.type === 'buy') { sh += t.shares; cost += (t.shares * t.price + (t.commission || 0)) * fx; }
+      else if (t.type === 'sell') {
+        const per = sh > 0 ? cost / sh : 0;
+        realized += (t.shares * t.price - (t.commission || 0)) * fx - per * t.shares;
+        cost -= per * t.shares; sh -= t.shares;
+      }
+    });
+    return { currentShares: sh, currentBookValue: cost, currentACBPerShare: sh > 0 ? cost / sh : 0, totalRealizedGain: realized, ledger: [] };
+  }
+
+  function recomputeAggregate(pos) {
+    const nat = acbNative(pos);
+    pos.shares = nat.shares;
+    pos.avgCost = nat.acbPerShare;
+    return pos;
+  }
+
+  // Upgrade a legacy aggregate position ({symbol, shares, avgCost}) in place to
+  // the transaction-series model so ACB has something to compute from.
+  function normalizePosition(pos) {
+    if (!pos.currency) pos.currency = inferCurrency(pos.symbol);
+    if (!Array.isArray(pos.txns) || pos.txns.length === 0) {
+      const dateISO = pos.addedAt ? new Date(pos.addedAt).toISOString().slice(0, 10) : todayISO();
+      pos.txns = [{
+        type: 'buy', shares: pos.shares || 0, price: pos.avgCost || 0,
+        commission: 0, date: dateISO,
+        fxRate: (pos.currency === 'USD') ? getUsdCadRate() : 1
+      }];
+    }
+    recomputeAggregate(pos);
+    return pos;
   }
 
   // Company name lookup (subset)
@@ -7857,70 +7977,136 @@ const PortfolioManager = (function() {
     getPositions: function() { return _load(STORAGE_KEY) || []; },
     savePositions: function(positions) { _save(STORAGE_KEY, positions); },
 
-    addPosition: function(sym, shares, avgCost) {
-      sym = sym.toUpperCase().trim();
-      if (!sym || shares <= 0) return false;
-      const positions = this.getPositions();
-      const existing = positions.find(p => p.symbol === sym);
-      if (existing) {
-        const totalShares = existing.shares + shares;
-        existing.avgCost = ((existing.avgCost * existing.shares) + (avgCost * shares)) / totalShares;
-        existing.shares = totalShares;
+    refreshQuotes: refreshQuotes,
+    getQuote: getQuote,
+    getUsdCadRate: getUsdCadRate,
+    getBaseCurrency: function() { return BASE_CURRENCY; },
+    inferCurrency: inferCurrency,
+
+    // opts: { currency, fxRate, commission, date }
+    addPosition: function(sym, shares, avgCost, opts) {
+      opts = opts || {};
+      sym = String(sym || '').toUpperCase().trim();
+      shares = Number(shares); avgCost = Number(avgCost);
+      if (!sym || !(shares > 0) || !(avgCost >= 0)) return false;
+      const positions = (_load(STORAGE_KEY) || []).map(normalizePosition);
+      let pos = positions.find(p => p.symbol === sym);
+      const currency = pos ? pos.currency : (opts.currency || inferCurrency(sym));
+      const fxRate = (currency === 'USD') ? (Number(opts.fxRate) || getUsdCadRate()) : 1;
+      const txn = {
+        type: 'buy', shares: shares, price: avgCost,
+        commission: Number(opts.commission) || 0,
+        date: opts.date || todayISO(), fxRate: fxRate
+      };
+      if (pos) {
+        pos.txns.push(txn);
+        recomputeAggregate(pos);
       } else {
-        positions.push({ symbol: sym, shares: shares, avgCost: avgCost, addedAt: Date.now() });
+        pos = { symbol: sym, currency: currency, addedAt: Date.now(), txns: [txn] };
+        recomputeAggregate(pos);
+        positions.push(pos);
       }
-      this.savePositions(positions);
-      this.addActivity('BUY', sym, shares, avgCost);
+      _save(STORAGE_KEY, positions);
+      this.addActivity('BUY', sym, shares, avgCost, { currency: pos.currency });
       return true;
     },
 
+    // Sell realizes a capital gain/loss via the ACB engine and reduces (or
+    // closes) the position. Supports partial sells. opts: { fxRate, commission, date }
+    sellPosition: function(sym, shares, price, opts) {
+      opts = opts || {};
+      sym = String(sym || '').toUpperCase().trim();
+      shares = Number(shares); price = Number(price);
+      const positions = (_load(STORAGE_KEY) || []).map(normalizePosition);
+      const pos = positions.find(p => p.symbol === sym);
+      if (!pos) return { ok: false, error: 'Position not found' };
+      if (!(shares > 0) || !(price >= 0)) return { ok: false, error: 'Invalid sell input' };
+      if (shares > pos.shares + 1e-9) shares = pos.shares; // cap at shares held
+      const currency = pos.currency;
+      const fxRate = (currency === 'USD') ? (Number(opts.fxRate) || getUsdCadRate()) : 1;
+      pos.txns.push({
+        type: 'sell', shares: shares, price: price,
+        commission: Number(opts.commission) || 0,
+        date: opts.date || todayISO(), fxRate: fxRate
+      });
+      const base = acbBaseSummary(pos);
+      let realized = 0;
+      if (base.ledger && base.ledger.length) {
+        const last = base.ledger[base.ledger.length - 1];
+        if (last && last.type === 'sell') realized = last.capitalGain;
+      }
+      recomputeAggregate(pos);
+      this.addRealized({ symbol: sym, shares: shares, price: price, currency: currency, realized: realized, date: opts.date || todayISO() });
+      // Drop the position entirely once fully closed.
+      const remaining = positions.filter(p => p.symbol !== sym || (p.shares || 0) > 1e-9);
+      _save(STORAGE_KEY, remaining);
+      this.addActivity('SELL', sym, shares, price, { currency: currency, realized: realized });
+      return { ok: true, realized: realized, currency: currency, shares: shares };
+    },
+
+    // Forget a position without realizing a gain (for correcting a bad entry).
     removePosition: function(sym) {
-      const positions = this.getPositions().filter(p => p.symbol !== sym);
-      this.savePositions(positions);
+      const positions = (_load(STORAGE_KEY) || []).filter(p => p.symbol !== sym);
+      _save(STORAGE_KEY, positions);
       return true;
     },
 
     getHoldings: function() {
-      const positions = this.getPositions();
-      const totalMktVal = positions.reduce((sum, p) => {
-        const sp = getSimPrice(p.symbol);
-        return sum + (sp.price * p.shares);
-      }, 0);
-
-      return positions.map(p => {
-        const sp = getSimPrice(p.symbol);
-        const mktVal = sp.price * p.shares;
-        const totalPL = (sp.price - p.avgCost) * p.shares;
-        const plPct = p.avgCost > 0 ? ((sp.price - p.avgCost) / p.avgCost) * 100 : 0;
-        const dayChg = sp.dayChgPct;
-        const weight = totalMktVal > 0 ? (mktVal / totalMktVal) * 100 : 0;
+      const rate = getUsdCadRate();
+      const positions = (_load(STORAGE_KEY) || []).map(normalizePosition).filter(p => (p.shares || 0) > 1e-9);
+      let totalBaseMV = 0;
+      const rows = positions.map(pos => {
+        const q = getQuote(pos.symbol);
+        const hasQuote = !!(q && typeof q.price === 'number' && q.price > 0);
+        const nativePrice = hasQuote ? q.price : pos.avgCost; // cost-basis fallback, never a fake price
+        const fx = (pos.currency === 'USD') ? rate : 1;
+        const base = acbBaseSummary(pos);
+        const shares = pos.shares;
+        const mvNative = nativePrice * shares;
+        const mvBase = mvNative * fx;
+        const bookBase = base.currentBookValue;
+        const unrealBase = mvBase - bookBase;
+        const plPct = bookBase > 0 ? (unrealBase / bookBase) * 100 : 0;
+        totalBaseMV += mvBase;
         return {
-          symbol: p.symbol,
-          name: nameMap[p.symbol] || p.symbol,
-          sector: sectorMap[p.symbol] || 'Other',
-          shares: p.shares,
-          avgCost: p.avgCost,
-          currentPrice: sp.price,
-          marketValue: mktVal,
-          dayChange: dayChg,
-          totalPL: totalPL,
+          symbol: pos.symbol,
+          name: nameMap[pos.symbol] || pos.symbol,
+          sector: sectorMap[pos.symbol] || 'Other',
+          currency: pos.currency,
+          shares: shares,
+          avgCost: pos.avgCost,                    // native ACB per share
+          acbPerShareBase: base.currentACBPerShare, // CAD ACB per share
+          currentPrice: nativePrice,               // native
+          hasQuote: hasQuote,
+          marketValue: mvBase,                     // CAD (base currency)
+          marketValueNative: mvNative,
+          bookValueBase: bookBase,                 // CAD ACB book value
+          dayChange: hasQuote ? q.changePct : 0,
+          totalPL: unrealBase,                     // CAD unrealized gain/loss
           plPct: plPct,
-          weight: weight
+          realizedPL: base.totalRealizedGain,      // CAD realized within this lot
+          fxRate: fx,
+          weight: 0
         };
       });
+      rows.forEach(h => { h.weight = totalBaseMV > 0 ? (h.marketValue / totalBaseMV) * 100 : 0; });
+      return rows;
     },
 
     getSummary: function() {
       const holdings = this.getHoldings();
-      const totalValue = holdings.reduce((s, h) => s + h.marketValue, 0);
-      const totalCost = holdings.reduce((s, h) => s + (h.avgCost * h.shares), 0);
-      const totalReturn = totalValue - totalCost;
+      const totalValue = holdings.reduce((s, h) => s + h.marketValue, 0);   // CAD
+      const totalCost = holdings.reduce((s, h) => s + h.bookValueBase, 0);  // CAD
+      const totalReturn = totalValue - totalCost;                          // unrealized CAD
       const dayPL = holdings.reduce((s, h) => s + (h.marketValue * h.dayChange / 100), 0);
       const dayPLPct = totalValue > 0 ? (dayPL / totalValue) * 100 : 0;
       return {
         totalValue, totalReturn, dayPL, dayPLPct,
-        cashBalance: 10000, buyingPower: 20000,
-        positionCount: holdings.length
+        bookCost: totalCost,
+        realized: this.getRealizedTotal(),
+        baseCurrency: BASE_CURRENCY,
+        positionCount: holdings.length,
+        quotesReady: holdings.length > 0 && holdings.every(h => h.hasQuote)
       };
     },
 
@@ -7930,7 +8116,18 @@ const PortfolioManager = (function() {
     getProfile: function() { return _load(PROFILE_KEY) || {}; },
     saveProfile: function(profile) { _save(PROFILE_KEY, profile); },
 
-    addActivity: function(action, sym, shares, price) {
+    // Persistent realized-gains ledger (survives position closure).
+    addRealized: function(entry) {
+      const arr = _load(REALIZED_KEY) || [];
+      arr.unshift(Object.assign({ time: new Date().toISOString() }, entry));
+      if (arr.length > 200) arr.length = 200;
+      _save(REALIZED_KEY, arr);
+    },
+    getRealized: function() { return _load(REALIZED_KEY) || []; },
+    getRealizedTotal: function() { return (_load(REALIZED_KEY) || []).reduce((s, e) => s + (Number(e.realized) || 0), 0); },
+
+    addActivity: function(action, sym, shares, price, meta) {
+      meta = meta || {};
       const activities = _load(ACTIVITY_KEY) || [];
       activities.unshift({
         time: new Date().toISOString(),
@@ -7938,7 +8135,9 @@ const PortfolioManager = (function() {
         symbol: sym,
         shares: shares,
         price: price,
-        total: shares * price
+        total: shares * price,
+        currency: meta.currency || null,
+        realized: (typeof meta.realized === 'number') ? meta.realized : null
       });
       if (activities.length > 50) activities.length = 50;
       _save(ACTIVITY_KEY, activities);
@@ -7981,8 +8180,9 @@ const PortfolioManager = (function() {
     setVal('pfDayPL', fmt$(s.dayPL), s.dayPL >= 0 ? 'profit' : 'loss');
     setVal('pfDayPLPct', fmtPct(s.dayPLPct), s.dayPLPct >= 0 ? 'profit' : 'loss');
     setVal('pfTotalReturn', fmt$(s.totalReturn), s.totalReturn >= 0 ? 'profit' : 'loss');
-    setVal('pfCashBalance', fmt$(s.cashBalance));
-    setVal('pfBuyingPower', fmt$(s.buyingPower));
+    // Repurposed cards: Realized P&L and Book Cost (ACB), all in CAD.
+    setVal('pfCashBalance', fmt$(s.realized), s.realized >= 0 ? 'profit' : 'loss');
+    setVal('pfBuyingPower', fmt$(s.bookCost));
   }
 
   function renderHoldings() {
@@ -8007,101 +8207,187 @@ const PortfolioManager = (function() {
       return 0;
     });
 
+    const ccyTag = (c) => `<span style="font-size:9px;color:var(--text-dim);margin-left:5px;letter-spacing:0.04em;">${c}</span>`;
     tbody.innerHTML = holdings.map(h => {
       const plCls = h.totalPL >= 0 ? 'pf-profit' : 'pf-loss';
       const dayCls = h.dayChange >= 0 ? 'pf-profit' : 'pf-loss';
+      const priceStr = h.hasQuote ? fmt$(h.currentPrice) : fmt$(h.currentPrice) + '<span style="font-size:9px;color:var(--text-dim);margin-left:3px;" title="Live quote unavailable; showing book cost">n/a</span>';
       return `<tr>
-        <td class="pf-sym">${h.symbol}</td>
+        <td class="pf-sym">${h.symbol}${ccyTag(h.currency)}</td>
         <td class="pf-name">${h.name}</td>
         <td class="pf-right">${h.shares.toLocaleString('en-US', {maximumFractionDigits: 2})}</td>
         <td class="pf-right">${fmt$(h.avgCost)}</td>
-        <td class="pf-right">${fmt$(h.currentPrice)}</td>
+        <td class="pf-right">${priceStr}</td>
         <td class="pf-right">${fmt$(h.marketValue)}</td>
         <td class="pf-right ${dayCls}">${fmtPct(h.dayChange)}</td>
         <td class="pf-right ${plCls}">${fmt$(h.totalPL)}</td>
         <td class="pf-right ${plCls}">${fmtPct(h.plPct)}</td>
         <td class="pf-right">${h.weight.toFixed(1)}%</td>
         <td class="pf-right"><div class="pf-actions-cell">
-          <button class="pf-action-btn delete" data-sym="${h.symbol}" title="Remove">&#x2715;</button>
+          <button class="pf-action-btn sell" data-sym="${h.symbol}" title="Sell / record disposition">Sell</button>
+          <button class="pf-action-btn delete" data-sym="${h.symbol}" title="Remove (forget entry, no realized gain)">&#x2715;</button>
         </div></td>
       </tr>`;
     }).join('');
 
-    // Delete buttons
+    // Sell buttons
+    tbody.querySelectorAll('.pf-action-btn.sell').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openSellModal(btn.dataset.sym);
+      });
+    });
+
+    // Delete (forget) buttons
     tbody.querySelectorAll('.pf-action-btn.delete').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        PortfolioManager.removePosition(btn.dataset.sym);
+        const sym = btn.dataset.sym;
+        const ok = (typeof confirm === 'function') ? confirm('Remove ' + sym + ' from your portfolio? This forgets the entry without recording a realized gain. Use Sell to record a disposition.') : true;
+        if (!ok) return;
+        PortfolioManager.removePosition(sym);
         renderPortfolio();
       });
     });
   }
 
-  function renderPerfChart() {
-    const canvas = document.getElementById('pfPerfChart');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const w = canvas.width = canvas.parentElement.clientWidth;
-    const h = canvas.height = 260;
-    ctx.clearRect(0, 0, w, h);
+  // ---- REAL PERFORMANCE CHART (current holdings vs SPY) ----
+  // Reconstructs the value of the CURRENT holdings over the selected window
+  // using real historical closes from /api/chart, converted to CAD, and plots
+  // it against the real SPY series. This is an illustrative "current-holdings"
+  // valuation (today's share counts held constant across the period), clearly
+  // labeled as such, not a fabricated realized track record.
+  const perfCache = {};
 
-    // Generate mock performance data
-    const points = 30;
-    const portfolioData = [];
-    const benchData = [];
-    let pVal = 100, bVal = 100;
-    for (let i = 0; i < points; i++) {
-      pVal += (Math.random() - 0.45) * 3;
-      bVal += (Math.random() - 0.47) * 2;
-      portfolioData.push(pVal);
-      benchData.push(bVal);
+  function perfRangeParams(range) {
+    switch (range) {
+      case '1D': return { interval: '5m', range: '1d' };
+      case '1W': return { interval: '30m', range: '5d' };
+      case '1M': return { interval: '1d', range: '1mo' };
+      case '3M': return { interval: '1d', range: '3mo' };
+      case '6M': return { interval: '1d', range: '6mo' };
+      case '1Y': return { interval: '1d', range: '1y' };
+      case 'ALL': return { interval: '1wk', range: '5y' };
+      default: return { interval: '1d', range: '1mo' };
     }
+  }
 
-    const allVals = [...portfolioData, ...benchData];
-    const minV = Math.min(...allVals) - 2;
-    const maxV = Math.max(...allVals) + 2;
-    const pad = { top: 20, right: 20, bottom: 30, left: 50 };
+  function fetchChart(sym, rp) {
+    return fetch('/api/chart/' + encodeURIComponent(sym) + '?interval=' + rp.interval + '&range=' + rp.range)
+      .then(r => r.ok ? r.json() : null)
+      .catch(() => null);
+  }
 
-    function xPos(i) { return pad.left + (i / (points - 1)) * (w - pad.left - pad.right); }
-    function yPos(v) { return pad.top + (1 - (v - minV) / (maxV - minV)) * (h - pad.top - pad.bottom); }
+  // Forward-fill a symbol's closes onto the benchmark time axis.
+  function alignCloses(baseTimes, candles) {
+    const out = new Array(baseTimes.length).fill(null);
+    let j = 0;
+    let last = candles.length ? candles[0].close : null;
+    for (let i = 0; i < baseTimes.length; i++) {
+      const t = baseTimes[i];
+      while (j < candles.length && candles[j].time <= t) { last = candles[j].close; j++; }
+      out[i] = last;
+    }
+    return out;
+  }
 
-    // Grid lines
-    ctx.strokeStyle = 'rgba(42,42,56,0.5)';
+  async function buildPerfSeries(holdings, range) {
+    const rp = perfRangeParams(range);
+    const rate = PortfolioManager.getUsdCadRate();
+    const symbols = holdings.map(h => h.symbol);
+    const results = await Promise.all([fetchChart('SPY', rp)].concat(symbols.map(s => fetchChart(s, rp))));
+    const spyData = results[0];
+    const symData = results.slice(1);
+    if (!spyData || !spyData.candles || !spyData.candles.length) return null;
+    const spyCandles = spyData.candles.filter(c => c.close != null);
+    if (!spyCandles.length) return null;
+    const baseTimes = spyCandles.map(c => c.time);
+    const spyCloses = spyCandles.map(c => c.close);
+
+    const portValues = new Array(baseTimes.length).fill(0);
+    let anyData = false;
+    holdings.forEach((h, idx) => {
+      const data = symData[idx];
+      if (!data || !data.candles || !data.candles.length) return;
+      anyData = true;
+      const cndl = data.candles.filter(c => c.close != null);
+      const aligned = alignCloses(baseTimes, cndl);
+      const fx = (h.currency === 'USD') ? rate : 1;
+      for (let i = 0; i < baseTimes.length; i++) {
+        if (aligned[i] != null) portValues[i] += aligned[i] * h.shares * fx;
+      }
+    });
+    if (!anyData) return null;
+    return {
+      port: baseTimes.map((t, i) => ({ t: t, v: portValues[i] })),
+      spy: baseTimes.map((t, i) => ({ t: t, v: spyCloses[i] }))
+    };
+  }
+
+  function drawPerfMessage(ctx, w, h, msg) {
+    ctx.fillStyle = '#5C5C6E';
+    ctx.font = '12px Inter';
+    ctx.textAlign = 'center';
+    ctx.fillText(msg, w / 2, h / 2);
+  }
+
+  function drawPerfSeries(ctx, w, h, series, mode) {
+    const port = series.port, spy = series.spy;
+    const n = port.length;
+    if (!n) return;
+    const p0 = port[0].v || 1;
+    const s0 = spy[0].v || 1;
+    let pArr, bArr, yLabelFmt;
+    if (mode === 'percent') {
+      pArr = port.map(d => (d.v / p0) * 100);
+      bArr = spy.map(d => (d.v / s0) * 100);
+      yLabelFmt = (v) => v.toFixed(0);
+    } else {
+      pArr = port.map(d => d.v);
+      bArr = spy.map(d => (d.v / s0) * p0); // SPY rebased to portfolio starting CAD value
+      yLabelFmt = (v) => v >= 1000 ? '$' + (v / 1000).toFixed(1) + 'k' : '$' + v.toFixed(0);
+    }
+    const all = pArr.concat(bArr);
+    let minV = Math.min.apply(null, all);
+    let maxV = Math.max.apply(null, all);
+    if (minV === maxV) { minV -= 1; maxV += 1; }
+    const padV = (maxV - minV) * 0.08;
+    minV -= padV; maxV += padV;
+    const pad = { top: 22, right: 16, bottom: 26, left: 56 };
+    const xPos = (i) => pad.left + (i / Math.max(n - 1, 1)) * (w - pad.left - pad.right);
+    const yPos = (v) => pad.top + (1 - (v - minV) / (maxV - minV)) * (h - pad.top - pad.bottom);
+
+    // Grid + y-axis labels
+    ctx.strokeStyle = 'rgba(120,120,140,0.15)';
     ctx.lineWidth = 0.5;
+    ctx.font = '10px "JetBrains Mono"';
+    ctx.textAlign = 'right';
     for (let i = 0; i < 5; i++) {
       const y = pad.top + i * ((h - pad.top - pad.bottom) / 4);
       ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(w - pad.right, y); ctx.stroke();
       const val = maxV - i * ((maxV - minV) / 4);
-      ctx.fillStyle = '#5C5C6E';
-      ctx.font = '10px "JetBrains Mono"';
-      ctx.textAlign = 'right';
-      ctx.fillText(val.toFixed(1), pad.left - 8, y + 3);
+      ctx.fillStyle = '#7A818E';
+      ctx.fillText(yLabelFmt(val), pad.left - 8, y + 3);
     }
 
-    // Draw benchmark line
+    // Benchmark (SPY) dashed blue
     ctx.beginPath();
     ctx.strokeStyle = '#3B82F6';
     ctx.lineWidth = 1.5;
     ctx.setLineDash([4, 4]);
-    benchData.forEach((v, i) => {
-      if (i === 0) ctx.moveTo(xPos(i), yPos(v));
-      else ctx.lineTo(xPos(i), yPos(v));
-    });
+    bArr.forEach((v, i) => { i === 0 ? ctx.moveTo(xPos(i), yPos(v)) : ctx.lineTo(xPos(i), yPos(v)); });
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Draw portfolio line
+    // Portfolio gold
     ctx.beginPath();
     ctx.strokeStyle = '#F59E0B';
     ctx.lineWidth = 2;
-    portfolioData.forEach((v, i) => {
-      if (i === 0) ctx.moveTo(xPos(i), yPos(v));
-      else ctx.lineTo(xPos(i), yPos(v));
-    });
+    pArr.forEach((v, i) => { i === 0 ? ctx.moveTo(xPos(i), yPos(v)) : ctx.lineTo(xPos(i), yPos(v)); });
     ctx.stroke();
 
-    // Fill area under portfolio
-    ctx.lineTo(xPos(points - 1), h - pad.bottom);
+    // Fill under portfolio
+    ctx.lineTo(xPos(n - 1), h - pad.bottom);
     ctx.lineTo(xPos(0), h - pad.bottom);
     ctx.closePath();
     const grad = ctx.createLinearGradient(0, pad.top, 0, h - pad.bottom);
@@ -8109,6 +8395,50 @@ const PortfolioManager = (function() {
     grad.addColorStop(1, 'rgba(245,158,11,0)');
     ctx.fillStyle = grad;
     ctx.fill();
+
+    // Honesty label
+    ctx.fillStyle = '#7A818E';
+    ctx.font = '9px Inter';
+    ctx.textAlign = 'left';
+    ctx.fillText('Current holdings valued over the period at today\'s share counts. Illustrative, not a realized track record.', pad.left, h - 6);
+  }
+
+  async function renderPerfChart() {
+    const canvas = document.getElementById('pfPerfChart');
+    if (!canvas || !canvas.parentElement) return;
+    const ctx = canvas.getContext('2d');
+    let w = canvas.width = canvas.parentElement.clientWidth;
+    let h = canvas.height = 260;
+    ctx.clearRect(0, 0, w, h);
+
+    const holdings = PortfolioManager.getHoldings();
+    const rangeBtn = document.querySelector('.pf-tf-btn.active');
+    const range = rangeBtn ? rangeBtn.dataset.range : '1M';
+    const modeBtn = document.querySelector('#pfPerfToggle .pf-toggle-btn.active');
+    const mode = modeBtn ? modeBtn.dataset.mode : 'dollar';
+
+    if (holdings.length === 0) {
+      drawPerfMessage(ctx, w, h, 'Add positions to see your holdings valued against SPY.');
+      return;
+    }
+
+    const sig = range + '|' + holdings.map(hh => hh.symbol + ':' + hh.shares + ':' + hh.currency).join(',');
+    let series = (perfCache[sig] && (Date.now() - perfCache[sig].ts < 120000)) ? perfCache[sig].data : null;
+    if (!series) {
+      drawPerfMessage(ctx, w, h, 'Loading performance...');
+      try { series = await buildPerfSeries(holdings, range); } catch (e) { series = null; }
+      if (series) perfCache[sig] = { data: series, ts: Date.now() };
+    }
+
+    // Re-measure in case the panel resized during the fetch.
+    w = canvas.width = canvas.parentElement.clientWidth;
+    h = canvas.height = 260;
+    ctx.clearRect(0, 0, w, h);
+    if (!series || !series.port.length) {
+      drawPerfMessage(ctx, w, h, 'Performance data unavailable right now.');
+      return;
+    }
+    drawPerfSeries(ctx, w, h, series, mode);
   }
 
   function renderAllocChart() {
@@ -8214,24 +8544,166 @@ const PortfolioManager = (function() {
       const timeStr = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
       const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       const actionCls = a.action === 'BUY' ? 'buy' : 'sell';
+      let realizedNote = '';
+      if (a.action === 'SELL' && typeof a.realized === 'number') {
+        const rc = a.realized >= 0 ? 'profit' : 'loss';
+        realizedNote = `<span class="${rc}" style="display:block;font-size:9px;">${a.realized >= 0 ? '+' : '-'}$${Math.abs(a.realized).toFixed(2)} CAD gain</span>`;
+      }
       return `<div class="pf-activity-item">
         <span class="pf-activity-time">${dateStr} ${timeStr}</span>
         <span class="pf-activity-action ${actionCls}">${a.action}</span>
         <span class="pf-activity-ticker">${a.symbol}</span>
         <span>${a.shares}</span>
         <span>$${a.price.toFixed(2)}</span>
-        <span style="text-align:right">$${a.total.toFixed(2)}</span>
+        <span style="text-align:right">$${a.total.toFixed(2)}${realizedNote}</span>
       </div>`;
     }).join('');
   }
 
-  function renderPortfolio() {
+  async function renderPortfolio() {
+    // Pull real quotes first so market value, day P&L and allocation use live prices.
+    try { await PortfolioManager.refreshQuotes(); } catch (e) {}
     renderSummary();
     renderHoldings();
     renderPerfChart();
     renderAllocChart();
     renderActivity();
   }
+
+  // ---- COST-TO-TRADE HINT (fee model) ----
+  function tradeCostHint(el, ticker, shares, price, currency) {
+    if (!el) return;
+    if (typeof FeeModel === 'undefined') { el.textContent = ''; return; }
+    ticker = String(ticker || '').toUpperCase();
+    shares = Number(shares); price = Number(price);
+    if (!ticker || !(shares > 0) || !(price > 0)) { el.textContent = ''; return; }
+    if (!currency || currency === 'auto') currency = PortfolioManager.inferCurrency(ticker);
+    try {
+      const results = FeeModel.compareBrokers({ quantity: shares, price: price, currency: currency, accountCurrency: PortfolioManager.getBaseCurrency() });
+      if (!results.length) { el.textContent = ''; return; }
+      const best = results[0];
+      const notional = shares * price;
+      let msg = 'Est. cost to trade ' + shares + ' ' + ticker + ' (~' + fmt$(notional) + ' ' + currency + '): cheapest is '
+        + best.brokerName + ' at ' + fmt$(best.total) + ' ' + currency;
+      if (best.crossCurrency && best.fxCost > 0) msg += ' (includes ' + fmt$(best.fxCost) + ' FX conversion)';
+      el.textContent = msg;
+    } catch (e) { el.textContent = ''; }
+  }
+
+  function currentAddCurrency() {
+    const ccySel = document.getElementById('modalPosCurrency');
+    const ticker = (document.getElementById('modalPosTicker') || {}).value || '';
+    let currency = ccySel ? ccySel.value : 'auto';
+    if (currency === 'auto') currency = PortfolioManager.inferCurrency(ticker.trim().toUpperCase());
+    return currency;
+  }
+  function updateAddHint() {
+    tradeCostHint(
+      document.getElementById('pfAddCostHint'),
+      (document.getElementById('modalPosTicker') || {}).value,
+      parseFloat((document.getElementById('modalPosShares') || {}).value),
+      parseFloat((document.getElementById('modalPosCost') || {}).value),
+      currentAddCurrency()
+    );
+  }
+
+  // ---- SELL MODAL ----
+  function openSellModal(sym) {
+    const holdings = PortfolioManager.getHoldings();
+    const h = holdings.find(x => x.symbol === sym);
+    if (!h) return;
+    const modal = document.getElementById('sellPositionModal');
+    const tEl = document.getElementById('sellPosTicker');
+    const heldEl = document.getElementById('sellPosHeld');
+    const ccyEl = document.getElementById('sellPosCcy');
+    const sharesEl = document.getElementById('sellPosShares');
+    const priceEl = document.getElementById('sellPosPrice');
+    if (tEl) tEl.value = h.symbol;
+    if (heldEl) heldEl.textContent = h.shares.toLocaleString('en-US', { maximumFractionDigits: 4 });
+    if (ccyEl) ccyEl.textContent = h.currency;
+    if (sharesEl) sharesEl.value = h.shares;
+    if (priceEl) priceEl.value = h.hasQuote ? h.currentPrice.toFixed(2) : '';
+    updateSellHint();
+    if (modal) modal.classList.add('active');
+  }
+  function updateSellHint() {
+    const ticker = (document.getElementById('sellPosTicker') || {}).value;
+    const h = PortfolioManager.getHoldings().find(x => x.symbol === (ticker || '').toUpperCase());
+    tradeCostHint(
+      document.getElementById('pfSellCostHint'),
+      ticker,
+      parseFloat((document.getElementById('sellPosShares') || {}).value),
+      parseFloat((document.getElementById('sellPosPrice') || {}).value),
+      h ? h.currency : 'auto'
+    );
+  }
+  // The Add and Sell modals live later in the DOM than the app.js script tag,
+  // so their elements do not exist when this IIFE first runs. Wire them once
+  // the document has finished parsing.
+  function onReady(fn) {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once: true });
+    else fn();
+  }
+  function wireModals() {
+    // Add-position: cost hint inputs
+    ['modalPosTicker', 'modalPosShares', 'modalPosCost', 'modalPosCurrency'].forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('input', updateAddHint);
+      if (el.tagName === 'SELECT') el.addEventListener('change', updateAddHint);
+    });
+    // Add-position: confirm
+    const modalAddBtn = document.getElementById('modalAddPosBtn');
+    if (modalAddBtn) {
+      modalAddBtn.addEventListener('click', () => {
+        const ticker = document.getElementById('modalPosTicker').value.trim().toUpperCase();
+        const shares = parseFloat(document.getElementById('modalPosShares').value);
+        const cost = parseFloat(document.getElementById('modalPosCost').value);
+        if (!ticker || isNaN(shares) || shares <= 0 || isNaN(cost) || cost <= 0) return;
+        const currency = currentAddCurrency();
+        PortfolioManager.addPosition(ticker, shares, cost, { currency: currency });
+        document.getElementById('modalPosTicker').value = '';
+        document.getElementById('modalPosShares').value = '';
+        document.getElementById('modalPosCost').value = '';
+        const ccySel = document.getElementById('modalPosCurrency');
+        if (ccySel) ccySel.value = 'auto';
+        const hintEl = document.getElementById('pfAddCostHint');
+        if (hintEl) hintEl.textContent = '';
+        closeModal('addPositionModal');
+        renderPortfolio();
+      });
+    }
+    // Sell: cost hint inputs
+    ['sellPosShares', 'sellPosPrice'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('input', updateSellHint);
+    });
+    // Sell: confirm
+    const modalSellBtn = document.getElementById('modalSellPosBtn');
+    if (modalSellBtn) {
+      modalSellBtn.addEventListener('click', () => {
+        const ticker = (document.getElementById('sellPosTicker') || {}).value.trim().toUpperCase();
+        const shares = parseFloat((document.getElementById('sellPosShares') || {}).value);
+        const price = parseFloat((document.getElementById('sellPosPrice') || {}).value);
+        if (!ticker || isNaN(shares) || shares <= 0 || isNaN(price) || price < 0) return;
+        const res = PortfolioManager.sellPosition(ticker, shares, price);
+        if (res && res.ok) {
+          if (typeof showToast === 'function') {
+            const g = res.realized;
+            const gStr = (g >= 0 ? '+$' : '-$') + Math.abs(g).toFixed(2) + ' CAD';
+            showToast('Sold ' + res.shares + ' ' + ticker + ' - realized ' + gStr, g >= 0 ? 'success' : 'info');
+          }
+        } else if (typeof showToast === 'function') {
+          showToast((res && res.error) || 'Sell failed', 'error');
+        }
+        const hintEl = document.getElementById('pfSellCostHint');
+        if (hintEl) hintEl.textContent = '';
+        closeModal('sellPositionModal');
+        renderPortfolio();
+      });
+    }
+  }
+  onReady(wireModals);
 
   // Sort header clicks
   document.querySelectorAll('.pf-sortable').forEach(th => {
@@ -8279,22 +8751,8 @@ const PortfolioManager = (function() {
     });
   }
 
-  // Modal add position
-  const modalAddBtn = document.getElementById('modalAddPosBtn');
-  if (modalAddBtn) {
-    modalAddBtn.addEventListener('click', () => {
-      const ticker = document.getElementById('modalPosTicker').value.trim().toUpperCase();
-      const shares = parseFloat(document.getElementById('modalPosShares').value);
-      const cost = parseFloat(document.getElementById('modalPosCost').value);
-      if (!ticker || isNaN(shares) || shares <= 0 || isNaN(cost) || cost <= 0) return;
-      PortfolioManager.addPosition(ticker, shares, cost);
-      document.getElementById('modalPosTicker').value = '';
-      document.getElementById('modalPosShares').value = '';
-      document.getElementById('modalPosCost').value = '';
-      closeModal('addPositionModal');
-      renderPortfolio();
-    });
-  }
+  // (Add/Sell modal confirm buttons are wired in wireModals via onReady, since
+  // those modal elements are parsed after this script.)
 
   // Show Alpaca import button if keys configured
   const alpKey = localStorage.getItem('alpaca_api_key');
@@ -8747,6 +9205,11 @@ const PortfolioManager = (function() {
   function renderHoldings() {
     var body = document.getElementById('spHoldingsBody');
     if (!body || typeof PortfolioManager === 'undefined') return;
+    // Warm the live-quote cache once so this secondary surface shows real prices.
+    if (!body._pfQuotesTried && PortfolioManager.refreshQuotes) {
+      body._pfQuotesTried = true;
+      PortfolioManager.refreshQuotes().then(function() { renderHoldings(); });
+    }
     var holdings = PortfolioManager.getHoldings();
 
     if (holdings.length === 0) {

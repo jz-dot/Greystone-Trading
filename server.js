@@ -17,6 +17,7 @@ const rateLimit = require('express-rate-limit');
 const { createClient } = require('@supabase/supabase-js');
 const { createBigDataService } = require('./services/bigdata-client');
 const aiTools = require('./services/ai-tools');
+const { createPaperBroker } = require('./services/paper-broker');
 
 // Official Anthropic SDK. Resolve the constructor across CJS export shapes.
 const AnthropicSDK = require('@anthropic-ai/sdk');
@@ -2201,6 +2202,88 @@ app.get('/api/fundamentals/:symbol', async function (req, res) {
 });
 
 // ============================================
+// PAPER TRADING (SIMULATED EXECUTION)
+// ============================================
+// The safe default execution path: fake money against REAL Yahoo quotes.
+// These routes deliberately require NO Supabase auth so guests and the
+// self-hosted preview can paper trade. State is keyed by an optional
+// X-Session-Id header (else a single shared default in-memory account) and
+// lives only in this process. The general rate limiter (app.use('/api/', ...))
+// already covers these paths. The paper broker never sees real broker
+// credentials: it is constructed with only the Yahoo quote function.
+//
+// server.js owns the two real-world couplings the pure engine avoids: it
+// injects the live quote function and stamps every order with the real time.
+const paperBroker = createPaperBroker({
+  quoteFn: aiFetchQuote,
+  initialCash: parseFloat(process.env.PAPER_INITIAL_CASH || '100000'),
+  baseCurrency: process.env.PAPER_BASE_CURRENCY || 'CAD',
+  feeBrokerId: process.env.PAPER_FEE_BROKER || 'wealthsimple',
+  // Interim per-order notional cap. The canonical hard risk layer is
+  // services/risk-guardrails.js; a later wave should route paper AND live
+  // orders through it and retire the inline checks in paper-broker.js.
+  maxOrderNotional: parseFloat(process.env.PAPER_MAX_ORDER_NOTIONAL || '500000'),
+});
+
+function paperSessionId(req) {
+  const id = req.headers['x-session-id'];
+  return (id && String(id).trim()) ? String(id).trim() : null;
+}
+
+// POST /api/paper/order
+// body { symbol, side:'buy'|'sell', qty, type:'market'|'limit', limitPrice? }
+// -> { orderId, status:'filled'|'working'|'rejected', fillPrice, cost, message, account }
+app.post('/api/paper/order', async function (req, res) {
+  const body = req.body || {};
+  try {
+    const result = await paperBroker.placeOrder(
+      { symbol: body.symbol, side: body.side, qty: body.qty, type: body.type, limitPrice: body.limitPrice },
+      { sessionId: paperSessionId(req), timestamp: Date.now() }
+    );
+    // Rejections (bad input, unknown symbol, insufficient funds, halt, cap)
+    // come back as a clean 400 carrying the same response shape.
+    if (result.status === 'rejected') return res.status(400).json(result);
+    res.json(result);
+  } catch (err) {
+    console.error('[Paper] order error:', err && err.stack ? err.stack : err);
+    res.status(500).json({ error: 'PAPER_ERROR', message: 'Paper order failed.' });
+  }
+});
+
+// GET /api/paper/account -> { cash, equity, buyingPower, currency, positions:[...] }
+app.get('/api/paper/account', async function (req, res) {
+  try {
+    const account = await paperBroker.getAccount(paperSessionId(req));
+    res.json(account);
+  } catch (err) {
+    console.error('[Paper] account error:', err && err.stack ? err.stack : err);
+    res.status(500).json({ error: 'PAPER_ERROR', message: 'Could not load paper account.' });
+  }
+});
+
+// GET /api/paper/orders -> { orders:[...] }
+app.get('/api/paper/orders', function (req, res) {
+  try {
+    res.json(paperBroker.getOrders(paperSessionId(req)));
+  } catch (err) {
+    console.error('[Paper] orders error:', err && err.stack ? err.stack : err);
+    res.status(500).json({ error: 'PAPER_ERROR', message: 'Could not load paper orders.' });
+  }
+});
+
+// POST /api/paper/reset  body { initialCash? } -> { ok:true, account }
+app.post('/api/paper/reset', async function (req, res) {
+  const body = req.body || {};
+  try {
+    const result = await paperBroker.reset(paperSessionId(req), { initialCash: body.initialCash });
+    res.json(result);
+  } catch (err) {
+    console.error('[Paper] reset error:', err && err.stack ? err.stack : err);
+    res.status(500).json({ error: 'PAPER_ERROR', message: 'Could not reset paper account.' });
+  }
+});
+
+// ============================================
 // STATIC FILES & SERVER START
 // ============================================
 
@@ -2308,6 +2391,12 @@ app.listen(PORT, function () {
   console.log('  Broker Router:');
   console.log('    GET  /api/broker/status');
   console.log('    GET  /api/health');
+  console.log('');
+  console.log('  Paper Trading (simulated, fake money, no auth):');
+  console.log('    POST /api/paper/order');
+  console.log('    GET  /api/paper/account');
+  console.log('    GET  /api/paper/orders');
+  console.log('    POST /api/paper/reset');
   console.log('');
   console.log('  News Feed:');
   console.log('    GET /api/news?symbols=AAPL,NVDA&category=top');

@@ -2,6 +2,11 @@
    MEAN REVERSION STRATEGY
    Z-score + Bollinger Band extremes
    Enters on deviation, exits on normalization
+
+   NOTE: Simulation strategy for research/education only. Not
+   validated for live trading and there is no backtest engine.
+   Z-scores, Bollinger Bands and pair correlations are computed
+   over a simulated random walk, so signals are illustrative.
    ============================================ */
 
 class MeanReversion extends TradingAgent {

@@ -2,6 +2,12 @@
    GAMMA SCALPER STRATEGY
    Delta-neutral strategy that profits from
    gamma by rebalancing when underlying moves
+
+   NOTE: Simulation strategy for research/education only. Not
+   validated for live trading and there is no backtest engine.
+   Greeks use a simplified Black-Scholes approximation over a
+   simulated underlying and simulated IV; gamma P&L and theta
+   decay are illustrative accruals, not a priced options book.
    ============================================ */
 
 class GammaScalper extends TradingAgent {
@@ -121,6 +127,7 @@ class GammaScalper extends TradingAgent {
       entryPrice: price,
       entryIV: iv,
       entryTime: Date.now(),
+      lastThetaTime: Date.now(),
       netDelta: netDelta * contracts * 100,
       gamma: gamma * contracts * 100,
       theta: theta * contracts * 100,
@@ -173,9 +180,16 @@ class GammaScalper extends TradingAgent {
     const gammaProfit = 0.5 * pos.gamma * Math.pow(priceDiff, 2);
     this._gammaProfit += gammaProfit;
 
-    // Track theta decay
-    const thetaDecay = Math.abs(pos.theta) * (priceDiff / currentPrice); // approximate
+    // Track theta decay. Theta is a TIME decay: pos.theta is dollars/day
+    // (see _calcTheta, which divides by 365), so decay accrued since the
+    // last accrual is |theta| * days elapsed. The old term scaled theta by
+    // the price move (priceDiff/currentPrice), which is dimensionally wrong
+    // (a fractional price change is not a passage of time) and made decay
+    // depend on how far price moved rather than on how long we held.
+    const daysSinceAccrual = (Date.now() - pos.lastThetaTime) / (24 * 60 * 60 * 1000);
+    const thetaDecay = Math.abs(pos.theta) * daysSinceAccrual;
     this._thetaDecay += thetaDecay;
+    pos.lastThetaTime = Date.now();
 
     pos.hedgeShares += hedgeAdj;
     pos.netDelta = newNetDelta;

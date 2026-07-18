@@ -2,6 +2,11 @@
    SWING MOMENTUM STRATEGY
    RSI + MACD + Volume for multi-day entries
    Targets 2:1 R:R minimum
+
+   NOTE: Simulation strategy for research/education only. Not
+   validated for live trading and there is no backtest engine.
+   In simulation mode indicators are computed over a random
+   walk, so signals are illustrative, not predictive.
    ============================================ */
 
 class SwingMomentum extends TradingAgent {
@@ -33,6 +38,13 @@ class SwingMomentum extends TradingAgent {
     this._priceHistory = {};
     this._historyLength = 60;
 
+    // Volume history for a genuine relative-volume gate (see
+    // _calcVolumeRatio). Fed from the actual volume field on each tick
+    // (real in live mode, simulated in sim mode) rather than a random number.
+    this._volumeHistory = {};
+    this._volumeHistoryLength = 20;
+    this._minVolumeSamples = 5;
+
     // Position tracking with stops/targets
     this._managedPositions = {};
   }
@@ -48,6 +60,15 @@ class SwingMomentum extends TradingAgent {
     this._priceHistory[symbol].push(price);
     if (this._priceHistory[symbol].length > this._historyLength) {
       this._priceHistory[symbol].shift();
+    }
+  }
+
+  _addVolume(symbol, volume) {
+    if (!(volume > 0)) return;
+    if (!this._volumeHistory[symbol]) this._volumeHistory[symbol] = [];
+    this._volumeHistory[symbol].push(volume);
+    if (this._volumeHistory[symbol].length > this._volumeHistoryLength) {
+      this._volumeHistory[symbol].shift();
     }
   }
 
@@ -108,16 +129,27 @@ class SwingMomentum extends TradingAgent {
     return sum / period;
   }
 
-  _calcVolumeRatio(data) {
-    // Compare recent volume to average - using simulated data
-    return data.volume > 0 ? 1 + Math.random() * 0.5 : 1;
+  _calcVolumeRatio(symbol) {
+    // Genuine relative-volume ratio: latest volume vs the average of the
+    // preceding window from the actual volume series (real in live mode,
+    // simulated in sim mode). Replaces the previous `1 + Math.random()*0.5`,
+    // which was a coin flip presented as volume analysis. Until enough
+    // samples accumulate, return 1 (neutral) so the entry gate does not
+    // fire on fabricated confirmation.
+    const vols = this._volumeHistory[symbol] || [];
+    if (vols.length < this._minVolumeSamples) return 1;
+    const latest = vols[vols.length - 1];
+    const prior = vols.slice(0, -1);
+    const avg = prior.reduce((s, v) => s + v, 0) / prior.length;
+    return avg > 0 ? latest / avg : 1;
   }
 
   async onTick(marketData) {
-    // Update price history
+    // Update price and volume history
     for (const sym of this.symbols) {
       if (marketData[sym]) {
         this._addPrice(sym, marketData[sym].price);
+        this._addVolume(sym, marketData[sym].volume);
       }
     }
 
@@ -186,7 +218,7 @@ class SwingMomentum extends TradingAgent {
       const rsi = this._calcRSI(prices, this.rsiPeriod);
       const macd = this._calcMACD(prices);
       const atr = this._calcATR(sym, 14);
-      const volumeRatio = this._calcVolumeRatio(data);
+      const volumeRatio = this._calcVolumeRatio(sym);
 
       // Previous MACD values for crossover detection
       const prevPrices = prices.slice(0, -1);

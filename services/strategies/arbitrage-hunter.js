@@ -2,6 +2,12 @@
    ARBITRAGE HUNTER STRATEGY
    Monitors price discrepancies between
    correlated pairs (e.g., GOOG/GOOGL, SPY/IVV)
+
+   NOTE: Simulation strategy for research/education only. Not
+   validated for live trading and there is no backtest engine.
+   Each symbol follows an INDEPENDENT simulated random walk, so
+   the pair "spreads" here are not real cointegrated spreads;
+   signals are illustrative of the mechanics only.
    ============================================ */
 
 class ArbitrageHunter extends TradingAgent {

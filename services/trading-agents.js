@@ -1,6 +1,20 @@
 /* ============================================
    TRADING AGENT FRAMEWORK
    Base class + lifecycle + event system
+   ============================================
+
+   HONEST LABELING (read before relying on any output)
+   ----------------------------------------------------
+   These agents are SIMULATION strategies for research and
+   education only. They are NOT validated for live trading.
+   In simulation mode prices are a bounded random walk (see
+   _getSimulatedData), not a market model, and there is NO
+   backtest engine here: reported P&L, Sharpe, win rate and
+   drawdown come from that random walk, not from historical
+   or live data. Do not treat any statistic as evidence of a
+   strategy edge. Paper-trading mode routes real (paper)
+   orders through Alpaca but the signal logic is unchanged and
+   remains unvalidated. Use for learning the mechanics only.
    ============================================ */
 
 // --- Agent States ---
@@ -43,7 +57,10 @@ class TradingAgent {
 
     // State
     this.state = AgentState.STOPPED;
-    this.simulationMode = !AlpacaClient.isConfigured();
+    // Default to simulation whenever Alpaca is not present/configured
+    // (also keeps the class constructable under Node for unit tests,
+    // where the browser-global AlpacaClient does not exist).
+    this.simulationMode = (typeof AlpacaClient === 'undefined') || !AlpacaClient.isConfigured();
 
     // Risk guardrails
     this.maxPositionSize = config.maxPositionSize || 10000;
@@ -61,6 +78,13 @@ class TradingAgent {
     this.unrealizedPnL = 0;
     this.dailyPnL = 0;
     this.dailyPnLHistory = [];
+    // Number of ticks that make up one simulated trading day. When this
+    // many ticks elapse the current dailyPnL is rolled into
+    // dailyPnLHistory and reset, giving getStats() a real (simulated)
+    // return series to compute Sharpe from. Purely a simulation artifact.
+    this.ticksPerSimDay = config.ticksPerSimDay || 60;
+    this.maxDailyHistory = config.maxDailyHistory || 252;
+    this._tickCount = 0;
     this.peakEquity = 0;
     this.maxDrawdown = 0;
     this.wins = 0;
@@ -77,6 +101,12 @@ class TradingAgent {
 
     // Simulated price data for offline mode
     this._simPrices = {};
+
+    // Last-known price per symbol, updated on every market-data fetch in
+    // BOTH modes. Used to cost-check orders in the position-size guardrail
+    // when no explicit order price is supplied (see placeOrder). In live
+    // mode _simPrices is empty, so this is the only real reference price.
+    this._lastPrices = {};
 
     // Event callbacks
     this._listeners = {};
@@ -118,7 +148,7 @@ class TradingAgent {
   async start() {
     if (this.state === AgentState.RUNNING) return;
 
-    this.simulationMode = !AlpacaClient.isConfigured();
+    this.simulationMode = (typeof AlpacaClient === 'undefined') || !AlpacaClient.isConfigured();
     this.state = AgentState.RUNNING;
     this._startTime = Date.now();
 
@@ -183,6 +213,14 @@ class TradingAgent {
         const marketData = await this._getMarketData();
         await this.onTick(marketData);
         this._checkGuardrails();
+        // Advance the simulated clock. Once a full simulated day of ticks
+        // has elapsed, snapshot the day's realized P&L into the return
+        // series and start a fresh day (see rolloverDay / getStats Sharpe).
+        this._tickCount++;
+        if (this._tickCount >= this.ticksPerSimDay) {
+          this.rolloverDay();
+          this._tickCount = 0;
+        }
       } catch (err) {
         this.error(`Tick error: ${err.message}`);
       }
@@ -192,28 +230,39 @@ class TradingAgent {
 
   // --- Market data ---
   async _getMarketData() {
+    let data;
     if (this.simulationMode) {
-      return this._getSimulatedData();
+      data = this._getSimulatedData();
+    } else {
+      data = {};
+      for (const sym of this.symbols) {
+        try {
+          const snapshot = await AlpacaClient.getSnapshot(sym);
+          if (!snapshot.error) {
+            data[sym] = {
+              price: parseFloat(snapshot.latestTrade?.p || 0),
+              bid: parseFloat(snapshot.latestQuote?.bp || 0),
+              ask: parseFloat(snapshot.latestQuote?.ap || 0),
+              volume: snapshot.dailyBar?.v || 0,
+              open: parseFloat(snapshot.dailyBar?.o || 0),
+              high: parseFloat(snapshot.dailyBar?.h || 0),
+              low: parseFloat(snapshot.dailyBar?.l || 0),
+              close: parseFloat(snapshot.dailyBar?.c || 0),
+              prevClose: parseFloat(snapshot.prevDailyBar?.c || 0),
+            };
+          }
+        } catch { /* skip */ }
+      }
     }
 
-    const data = {};
-    for (const sym of this.symbols) {
-      try {
-        const snapshot = await AlpacaClient.getSnapshot(sym);
-        if (!snapshot.error) {
-          data[sym] = {
-            price: parseFloat(snapshot.latestTrade?.p || 0),
-            bid: parseFloat(snapshot.latestQuote?.bp || 0),
-            ask: parseFloat(snapshot.latestQuote?.ap || 0),
-            volume: snapshot.dailyBar?.v || 0,
-            open: parseFloat(snapshot.dailyBar?.o || 0),
-            high: parseFloat(snapshot.dailyBar?.h || 0),
-            low: parseFloat(snapshot.dailyBar?.l || 0),
-            close: parseFloat(snapshot.dailyBar?.c || 0),
-            prevClose: parseFloat(snapshot.prevDailyBar?.c || 0),
-          };
-        }
-      } catch { /* skip */ }
+    // Record last-known prices so the position-size guardrail can cost
+    // market orders off a real reference price (works in live mode where
+    // _simPrices is empty).
+    for (const sym of Object.keys(data)) {
+      const p = data[sym] && data[sym].price;
+      if (typeof p === 'number' && isFinite(p) && p > 0) {
+        this._lastPrices[sym] = p;
+      }
     }
     return data;
   }
@@ -259,8 +308,23 @@ class TradingAgent {
 
   // --- Order execution ---
   async placeOrder(symbol, side, qty, type, limitPrice) {
-    // Guardrail: check position size limit
-    const estimatedCost = (limitPrice || this._simPrices[symbol] || 100) * qty;
+    // Guardrail: check position size limit.
+    // Cost the order off a REAL price: the explicit order price if given,
+    // else the last-known market price, else the simulated price. Never
+    // assume an arbitrary $100/share, which would silently defeat the
+    // guardrail in live mode (where _simPrices is empty). If no price is
+    // known at all, reject rather than trade blind.
+    const refPrice =
+      (limitPrice != null && isFinite(limitPrice)) ? Number(limitPrice)
+      : (this._lastPrices[symbol] != null ? this._lastPrices[symbol]
+      : (this._simPrices[symbol] != null ? this._simPrices[symbol] : null));
+
+    if (refPrice == null || !isFinite(refPrice) || refPrice <= 0) {
+      this.warn(`Order rejected: no known price for ${symbol} to size the position`);
+      return { error: 'GUARDRAIL', message: 'No known price to estimate cost' };
+    }
+
+    const estimatedCost = refPrice * qty;
     if (estimatedCost > this.maxPositionSize) {
       this.warn(`Order rejected: $${estimatedCost.toFixed(0)} exceeds max position size $${this.maxPositionSize}`);
       return { error: 'GUARDRAIL', message: 'Exceeds max position size' };
@@ -319,47 +383,9 @@ class TradingAgent {
       simulated: true,
     };
 
-    // Update positions
-    if (params.side === 'buy') {
-      if (this.positions[params.symbol]) {
-        // Add to position
-        const pos = this.positions[params.symbol];
-        const totalQty = pos.qty + order.qty;
-        pos.avgPrice = (pos.avgPrice * pos.qty + fillPrice * order.qty) / totalQty;
-        pos.qty = totalQty;
-      } else {
-        this.positions[params.symbol] = {
-          symbol: params.symbol,
-          qty: order.qty,
-          avgPrice: fillPrice,
-          side: 'long',
-          entryTime: new Date(),
-        };
-      }
-    } else {
-      // sell
-      if (this.positions[params.symbol]) {
-        const pos = this.positions[params.symbol];
-        const pnl = (fillPrice - pos.avgPrice) * Math.min(order.qty, pos.qty);
-        this.realizedPnL += pnl;
-        this.dailyPnL += pnl;
-        if (pnl > 0) this.wins++; else this.losses++;
-
-        pos.qty -= order.qty;
-        if (pos.qty <= 0) {
-          delete this.positions[params.symbol];
-        }
-      } else {
-        // Short position
-        this.positions[params.symbol] = {
-          symbol: params.symbol,
-          qty: order.qty,
-          avgPrice: fillPrice,
-          side: 'short',
-          entryTime: new Date(),
-        };
-      }
-    }
+    // Update positions with side-aware accounting (handles cover/close and
+    // crossing through zero). See _applyFill.
+    this._applyFill(params.symbol, params.side, order.qty, fillPrice);
 
     this.trades.push(order);
     this.logTrade(
@@ -368,6 +394,91 @@ class TradingAgent {
     );
     this.emit('trade', order);
     return order;
+  }
+
+  // Record a realized close into P&L and win/loss counters.
+  _realizeClose(pnl) {
+    this.realizedPnL += pnl;
+    this.dailyPnL += pnl;
+    if (pnl > 0) this.wins++; else if (pnl < 0) this.losses++;
+  }
+
+  // Side-aware position update for a single fill.
+  //   buy  -> adds to a long, or COVERS a short (realizing P&L on the
+  //           covered portion); if the buy exceeds the short it closes the
+  //           short and flips the remainder to a long.
+  //   sell -> adds to a short, or CLOSES a long (realizing P&L on the closed
+  //           portion); if the sell exceeds the long it closes the long and
+  //           flips the remainder to a short.
+  // Short P&L = (entry - exit) * qty; long P&L = (exit - entry) * qty.
+  _applyFill(symbol, side, qty, fillPrice) {
+    const pos = this.positions[symbol];
+
+    if (side === 'buy') {
+      if (!pos) {
+        this.positions[symbol] = {
+          symbol, qty, avgPrice: fillPrice, side: 'long', entryTime: new Date(),
+        };
+      } else if (pos.side === 'long') {
+        // Average up the long.
+        const totalQty = pos.qty + qty;
+        pos.avgPrice = (pos.avgPrice * pos.qty + fillPrice * qty) / totalQty;
+        pos.qty = totalQty;
+      } else {
+        // Short position: buying covers it.
+        const covered = Math.min(qty, pos.qty);
+        this._realizeClose((pos.avgPrice - fillPrice) * covered);
+        pos.qty -= covered;
+        const remainder = qty - covered;
+        if (pos.qty <= 0) {
+          delete this.positions[symbol];
+          if (remainder > 0) {
+            // Crossed through zero: leftover opens a fresh long.
+            this.positions[symbol] = {
+              symbol, qty: remainder, avgPrice: fillPrice, side: 'long', entryTime: new Date(),
+            };
+          }
+        }
+      }
+    } else {
+      // side === 'sell'
+      if (!pos) {
+        this.positions[symbol] = {
+          symbol, qty, avgPrice: fillPrice, side: 'short', entryTime: new Date(),
+        };
+      } else if (pos.side === 'short') {
+        // Average up the short.
+        const totalQty = pos.qty + qty;
+        pos.avgPrice = (pos.avgPrice * pos.qty + fillPrice * qty) / totalQty;
+        pos.qty = totalQty;
+      } else {
+        // Long position: selling closes it.
+        const closed = Math.min(qty, pos.qty);
+        this._realizeClose((fillPrice - pos.avgPrice) * closed);
+        pos.qty -= closed;
+        const remainder = qty - closed;
+        if (pos.qty <= 0) {
+          delete this.positions[symbol];
+          if (remainder > 0) {
+            // Crossed through zero: leftover opens a fresh short.
+            this.positions[symbol] = {
+              symbol, qty: remainder, avgPrice: fillPrice, side: 'short', entryTime: new Date(),
+            };
+          }
+        }
+      }
+    }
+  }
+
+  // Close out a simulated trading day: push the day's realized P&L into the
+  // return series (used for Sharpe) and reset the daily accumulator. Called
+  // from the tick loop on a simulated-day boundary; also callable directly.
+  rolloverDay() {
+    this.dailyPnLHistory.push(this.dailyPnL);
+    if (this.dailyPnLHistory.length > this.maxDailyHistory) {
+      this.dailyPnLHistory.shift();
+    }
+    this.dailyPnL = 0;
   }
 
   // --- Position management ---
@@ -403,13 +514,18 @@ class TradingAgent {
     const winRate = totalTrades > 0 ? (this.wins / totalTrades * 100) : 0;
     const pnl = this.getPnL();
 
-    // Sharpe calculation from daily P&L history
+    // Sharpe calculation from the simulated daily P&L return series.
+    // Needs at least two samples to have a variance; a zero-variance
+    // (all-equal) or non-finite series yields 0 rather than NaN/Infinity.
     let sharpe = 0;
     if (this.dailyPnLHistory.length > 1) {
-      const mean = this.dailyPnLHistory.reduce((s, v) => s + v, 0) / this.dailyPnLHistory.length;
-      const variance = this.dailyPnLHistory.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / this.dailyPnLHistory.length;
+      const n = this.dailyPnLHistory.length;
+      const mean = this.dailyPnLHistory.reduce((s, v) => s + v, 0) / n;
+      const variance = this.dailyPnLHistory.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / n;
       const stddev = Math.sqrt(variance);
-      sharpe = stddev > 0 ? (mean / stddev) * Math.sqrt(252) : 0;
+      if (stddev > 0 && isFinite(stddev) && isFinite(mean)) {
+        sharpe = (mean / stddev) * Math.sqrt(252);
+      }
     }
 
     // Update max drawdown
@@ -516,3 +632,16 @@ const AgentManager = (function () {
 
   return { register, unregister, get, getAll, getRunning, stopAll, pauseAll, on };
 })();
+
+// Export for both Node.js (unit tests) and the browser. In the browser the
+// top-level class/const bindings above already live in the shared global
+// lexical scope, so the strategy scripts that load after this file continue
+// to see TradingAgent directly; the window assignments below are additive.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { TradingAgent, AgentState, AgentLogEntry, AgentManager };
+} else if (typeof window !== 'undefined') {
+  window.TradingAgent = TradingAgent;
+  window.AgentState = AgentState;
+  window.AgentLogEntry = AgentLogEntry;
+  window.AgentManager = AgentManager;
+}

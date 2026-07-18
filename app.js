@@ -372,6 +372,31 @@ function formatDollar(n) {
 }
 
 /**
+ * Decide whether a rendered options chain is simulated/generated rather than
+ * real market data. The client falls back to a generated chain whenever the
+ * options API is unavailable. Real Yahoo data carries a `raw` summary block;
+ * the generated fallback carries a `stats` block and no `raw`. If a `source`
+ * flag is ever provided we honour it. Default to "simulated" when unsure so we
+ * never present generated data as if it were real.
+ */
+function isChainSimulated(chain) {
+  if (!chain) return true;
+  if (chain.source) {
+    return /sim|mock|sample|fallback|generated/i.test(String(chain.source));
+  }
+  if (chain.raw) return false;
+  if (chain.stats) return true;
+  return true;
+}
+
+/** Show or hide the persistent "Simulated Chain" badge in the options header. */
+function setOptionsDataBadge(simulated) {
+  var badge = document.getElementById('optionsDataBadge');
+  if (!badge) return;
+  badge.style.display = simulated ? 'inline-block' : 'none';
+}
+
+/**
  * Main entry: load options chain for current symbol/expiration
  */
 async function populateOptionsChain() {
@@ -397,6 +422,9 @@ async function populateOptionsChain() {
       optionsState.selectedExpiration
     );
     optionsState.currentChain = chain;
+
+    // Persistent honesty badge: mark generated chains as simulated.
+    setOptionsDataBadge(isChainSimulated(chain));
 
     // Clear old data
     callsBody.innerHTML = '';
@@ -518,7 +546,8 @@ async function populateOptionsChain() {
 
   } catch (err) {
     console.error('Failed to populate options chain:', err);
-    callsBody.innerHTML = '<tr><td colspan="11" style="color: var(--loss); padding: 20px;">Failed to load data. Retrying with simulated data...</td></tr>';
+    setOptionsDataBadge(true);
+    callsBody.innerHTML = '<tr><td colspan="11" style="color: var(--loss); padding: 20px;">Failed to load data. Showing simulated chain.</td></tr>';
   } finally {
     optionsState.isLoading = false;
   }
@@ -2092,6 +2121,10 @@ async function sendGsChat() {
       body.appendChild(aiDiv);
       const contentDiv = aiDiv.querySelector('.gs-chat-content');
       await typewriteHtml(contentDiv, result.html, body);
+      // Mock output must be visibly distinguishable from a real model answer.
+      prependGsDemoBadge(contentDiv);
+      appendGsResponseNote(contentDiv);
+      body.scrollTop = body.scrollHeight;
     } else if (result.type === 'stream') {
       // Streaming AI response
       const aiDiv = document.createElement('div');
@@ -2118,6 +2151,7 @@ async function sendGsChat() {
           if (fullText) {
             contentDiv.innerHTML = formatStreamText(fullText);
           }
+          appendGsResponseNote(contentDiv);
           body.scrollTop = body.scrollHeight;
         }
       );
@@ -2170,6 +2204,26 @@ async function typewriteHtml(container, html, scrollParent) {
     });
     setTimeout(resolve, 500);
   });
+}
+
+// Compact per-response disclaimer appended beneath each AI answer.
+function appendGsResponseNote(contentDiv) {
+  if (!contentDiv) return;
+  var note = document.createElement('div');
+  note.className = 'ai-response-note';
+  note.textContent = 'Educational information, not advice.';
+  contentDiv.appendChild(note);
+}
+
+// "Demo Response" marker for mock answers rendered when no API key is set.
+function prependGsDemoBadge(contentDiv) {
+  if (!contentDiv) return;
+  var wrap = document.createElement('div');
+  var span = document.createElement('span');
+  span.className = 'demo-response-badge';
+  span.textContent = 'Demo Response';
+  wrap.appendChild(span);
+  contentDiv.insertBefore(wrap, contentDiv.firstChild);
 }
 
 // ---- GS QUICK ACTION BUTTONS ----
@@ -6362,6 +6416,14 @@ if (document.readyState === 'loading') {
       inner.innerHTML = html;
     }
     div.appendChild(inner);
+    // Every AI answer carries a compact educational-use disclaimer. It is a
+    // sibling of the content node so streamed updates to inner do not wipe it.
+    if (role !== 'user') {
+      var note = document.createElement('div');
+      note.className = 'ai-response-note';
+      note.textContent = 'Educational information, not advice.';
+      div.appendChild(note);
+    }
     messagesEl.appendChild(div);
     if (!silent) scrollToBottom();
     return inner;
@@ -6391,6 +6453,10 @@ if (document.readyState === 'loading') {
     'Be concise, actionable, and data-driven. Keep responses SHORT (2-4 bullet points max). ' +
     'Format responses with bullet points and bold key figures using HTML tags (<strong>, <ul>, <li>). ' +
     'Do NOT write long paragraphs. This is a quick-access helper, not a deep analysis tool.';
+
+  // Marker prepended to mock answers so demo fiction is not mistaken for a
+  // real model response.
+  var QUICK_DEMO_BADGE = '<span class="demo-response-badge">Demo Response</span>';
 
   // ---- Send message ----
   async function sendMessage(text) {
@@ -6435,10 +6501,10 @@ if (document.readyState === 'loading') {
         try { errData = await response.json(); } catch(e) {}
 
         if (errData.error === 'no_api_key') {
-          // Fall back to mock responses from GreySankore
+          // Fall back to mock responses. Mark them clearly as demo output.
           var mockHtml = getQuickMockResponse(text);
           chatHistory.push({ role: 'assistant', content: mockHtml });
-          appendMessage('assistant', mockHtml);
+          appendMessage('assistant', QUICK_DEMO_BADGE + mockHtml);
           saveHistory();
           isStreaming = false;
           return;
@@ -6499,10 +6565,10 @@ if (document.readyState === 'loading') {
 
     } catch (err) {
       removeTypingIndicator();
-      // Network error - use mock
+      // Network error - use mock, clearly marked as demo output.
       var mockHtml = getQuickMockResponse(text);
       chatHistory.push({ role: 'assistant', content: mockHtml });
-      appendMessage('assistant', mockHtml);
+      appendMessage('assistant', QUICK_DEMO_BADGE + mockHtml);
       saveHistory();
     }
 
@@ -6852,9 +6918,16 @@ if (document.readyState === 'loading') {
     return Math.floor(hrs / 24) + 'd ago';
   }
 
+  function renderNoNewsState() {
+    newsFeed.innerHTML = '<div class="news-empty-state">' +
+      '<div class="news-empty-title">No news provider connected</div>' +
+      '<div class="news-empty-sub">Connect a news API to see live headlines. This preview build does not show sample or placeholder news.</div>' +
+      '</div>';
+  }
+
   function renderNews(items) {
     if (!items || items.length === 0) {
-      newsFeed.innerHTML = '<div class="news-loading">No news available.</div>';
+      renderNoNewsState();
       return;
     }
     var html = '';
@@ -6897,38 +6970,10 @@ if (document.readyState === 'loading') {
         renderNews(data.news || []);
       })
       .catch(function() {
-        // Fallback to inline mock data if server is not running
-        renderMockNews();
+        // No news provider reachable. Show an honest empty state.
+        // We deliberately do NOT fabricate placeholder headlines here.
+        renderNoNewsState();
       });
-  }
-
-  function renderMockNews() {
-    var now = Date.now();
-    var mock = [
-      { headline: 'NVIDIA Surges on Record Data Center Revenue, AI Demand Accelerates', source: 'Reuters', time: now - 120000, sentiment: 'bullish', tickers: ['NVDA'] },
-      { headline: 'Federal Reserve Signals Patience on Rate Cuts Amid Sticky Inflation', source: 'Bloomberg', time: now - 300000, sentiment: 'bearish', tickers: ['SPY'] },
-      { headline: 'Apple Announces New AI Features Coming to iPhone 17 Lineup', source: 'CNBC', time: now - 480000, sentiment: 'bullish', tickers: ['AAPL'] },
-      { headline: 'Tesla Deliveries Miss Estimates for Q1, Shares Under Pressure', source: 'MarketWatch', time: now - 720000, sentiment: 'bearish', tickers: ['TSLA'] },
-      { headline: 'Microsoft Azure Growth Reaccelerates, Cloud Spending Cycle Intact', source: 'The Information', time: now - 900000, sentiment: 'bullish', tickers: ['MSFT'] },
-      { headline: 'Palantir Secures $480M Pentagon Contract for AI Defense Platform', source: 'Defense News', time: now - 1800000, sentiment: 'bullish', tickers: ['PLTR'] },
-      { headline: 'AMD Unveils Next-Gen MI400 AI Chip to Challenge NVIDIA', source: 'Tom\'s Hardware', time: now - 2700000, sentiment: 'bullish', tickers: ['AMD'] },
-      { headline: 'Coinbase Volume Surges as Bitcoin Breaks New All-Time Highs', source: 'CoinDesk', time: now - 2400000, sentiment: 'bullish', tickers: ['COIN'] },
-    ];
-
-    if (currentTab === 'watchlist') {
-      var wlTickers = new Set();
-      document.querySelectorAll('.wl-row[data-ticker]').forEach(function(r) { wlTickers.add(r.dataset.ticker); });
-      mock = mock.filter(function(n) { return n.tickers.some(function(t) { return wlTickers.has(t); }); });
-    }
-    if (currentTab === 'earnings') {
-      mock = [
-        { headline: 'NVIDIA Q4 Earnings Preview: Street Expects Massive Beat on AI Momentum', source: 'Seeking Alpha', time: now - 600000, sentiment: 'bullish', tickers: ['NVDA'] },
-        { headline: 'Apple Earnings This Week: Services Revenue Key to Beating Estimates', source: 'Barron\'s', time: now - 900000, sentiment: 'neutral', tickers: ['AAPL'] },
-        { headline: 'AMD Earnings: Can Data Center Segment Offset PC Weakness?', source: 'Motley Fool', time: now - 1400000, sentiment: 'neutral', tickers: ['AMD'] },
-        { headline: 'Meta Earnings Expected to Show Strong Reels Monetization Progress', source: 'The Verge', time: now - 2000000, sentiment: 'bullish', tickers: ['META'] },
-      ];
-    }
-    renderNews(mock);
   }
 
   // Tab clicks
@@ -9040,7 +9085,7 @@ function openGSAnalysisModal(ticker, signalType, severity, capSize) {
   var sevClass = (severity === 'HIGH') ? 'high' : (severity === 'MED' ? 'medium' : 'low');
   signalEl.innerHTML = '<span class="gs-modal-signal-type">' + (signalType || 'Analysis') + '</span>' +
     '<span class="gs-modal-signal-severity ' + sevClass + '">' + (severity || 'INFO') + '</span>' +
-    '<span class="gs-modal-signal-confidence">Confidence: ' + (70 + Math.floor(Math.random() * 25)) + '%</span>';
+    '<span class="gs-modal-signal-confidence">Sample analysis</span>';
 
   var thesisHtml = '<ul>';
   analysis.bull.forEach(function(b) { thesisHtml += '<li class="bull">' + b + '</li>'; });

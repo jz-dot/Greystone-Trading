@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Greystone Trading Platform</title>
+<title>GSP Trading</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
@@ -31,8 +31,8 @@
         </svg>
       </div>
       <div class="auth-logo-text">
-        <span class="auth-brand">GREYSTONE</span>
-        <span class="auth-brand-sub">TRADING PLATFORM</span>
+        <span class="auth-brand">GSP</span>
+        <span class="auth-brand-sub">TRADING</span>
       </div>
     </div>
 
@@ -139,8 +139,8 @@
         </svg>
       </div>
       <div class="landing-logo-text">
-        <span class="landing-brand">GREYSTONE</span>
-        <span class="landing-brand-sub">TRADING PLATFORM</span>
+        <span class="landing-brand">GSP</span>
+        <span class="landing-brand-sub">TRADING</span>
       </div>
     </div>
     <h1 class="landing-headline">Institutional-Grade<br><span class="landing-accent">Intelligence.</span></h1>
@@ -197,8 +197,8 @@
     <div class="logo">
       <div class="logo-icon">GS</div>
       <div class="logo-text">
-        <span class="logo-name">GREYSTONE</span>
-        <span class="logo-sub">TRADING PLATFORM</span>
+        <span class="logo-name">GSP</span>
+        <span class="logo-sub">TRADING</span>
       </div>
     </div>
   </div>
@@ -233,6 +233,7 @@
         <div class="claude-panel-messages" id="claudePanelMessages">
           <div class="claude-msg claude-msg-ai">
             <div class="claude-msg-content">Hey - I'm your quick trading assistant. Ask me anything about what you're looking at.</div>
+            <div class="ai-response-note">Educational information, not advice.</div>
           </div>
         </div>
         <div class="claude-panel-chips" id="claudePanelChips">
@@ -241,6 +242,7 @@
           <button class="claude-chip" data-prompt="Summarize my portfolio">Summarize portfolio</button>
           <button class="claude-chip" data-prompt="Market news">Market news</button>
         </div>
+        <div class="ai-disclaimer claude-panel-disclaimer">GSP Trading is for research and education, not investment advice. GSP Trading Inc. is not a registered investment dealer or adviser. You are responsible for your own decisions.</div>
         <div class="claude-panel-input-row">
           <input type="text" class="claude-panel-input" id="claudePanelInput" placeholder="Ask something..." autocomplete="off">
           <button class="claude-panel-send" id="claudePanelSend" title="Send">
@@ -917,7 +919,7 @@
         <div class="panel earnings-panel">
           <div class="panel-header">
             <h3 class="panel-title">Upcoming Earnings</h3>
-            <span class="panel-badge">Watchlist</span>
+            <span class="sample-badge" title="Sample dates and estimates for preview">Sample</span>
           </div>
           <div class="earnings-calendar" id="earningsCalendar">
             <!-- Populated by JS -->
@@ -933,6 +935,7 @@
         <div class="view-title">
           <h1>Portfolio</h1>
           <span class="view-subtitle">Track your holdings and performance</span>
+          <span class="sample-badge" title="Seeded demo positions with simulated prices">Sample Portfolio</span>
         </div>
         <div class="view-actions">
           <button class="btn-primary" id="addPositionBtn">
@@ -1081,6 +1084,7 @@
         <div class="view-title">
           <h1>Options Chain</h1>
           <span class="view-subtitle" id="optionsSubtitle">AAPL - Apple Inc.</span>
+          <span class="sample-badge" id="optionsDataBadge" title="Data source indicator" style="display:none;">Simulated Chain</span>
         </div>
         <div class="options-controls">
           <div class="option-ticker-select">
@@ -1318,6 +1322,7 @@
             <div>
               <h1>Grey Sankore</h1>
               <span class="view-subtitle">Head of Investment - AI-Powered Analysis Engine</span>
+              <span class="sample-badge" title="Anomalies, scores, and accuracy shown here are sample data for preview">Sample / Preview Data</span>
             </div>
           </div>
         </div>
@@ -1496,6 +1501,7 @@
           <h3 class="panel-title">Ask Grey Sankore</h3>
           <span class="panel-badge live">AI Active</span>
         </div>
+        <div class="ai-disclaimer">GSP Trading is for research and education, not investment advice. GSP Trading Inc. is not a registered investment dealer or adviser. You are responsible for your own decisions.</div>
         <div class="gs-chat-body" id="gsChatBody">
           <div class="gs-chat-message ai">
             <div class="gs-chat-avatar"><svg width="16" height="16" viewBox="0 0 24 24" fill="#0D0D12"><path d="M12 2C12 2 12.8 5.6 13.6 7.2C14.4 8.8 16 10.4 17.6 11.2C19.2 12 22 12 22 12C22 12 19.2 12 17.6 12.8C16 13.6 14.4 15.2 13.6 16.8C12.8 18.4 12 22 12 22C12 22 11.2 18.4 10.4 16.8C9.6 15.2 8 13.6 6.4 12.8C4.8 12 2 12 2 12C2 12 4.8 12 6.4 11.2C8 10.4 9.6 8.8 10.4 7.2C11.2 5.6 12 2 12 2Z"/></svg></div>
@@ -1507,6 +1513,7 @@
                 <li><strong>5 momentum signals</strong> triggered - PLTR and COIN showing strongest technical setups</li>
               </ul>
               <p>The VIX is elevated at 18.73, suggesting the market is pricing in near-term uncertainty. I'd recommend focusing on high-conviction asymmetric positions rather than broad exposure. Want me to build a specific thesis on any of these?</p>
+              <div class="ai-response-note">Educational information, not advice.</div>
             </div>
           </div>
         </div>
@@ -1715,6 +1722,7 @@
         <div class="view-title">
           <h1>Trading Agents</h1>
           <span class="view-subtitle">Autonomous strategy execution</span>
+          <span class="sample-badge" title="Agent P&amp;L, signals, and execution log are simulated preview data">Simulated / Preview</span>
         </div>
         <button class="btn-primary" id="newAgentBtn">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
@@ -1802,6 +1810,7 @@
         <div class="view-title">
           <h1>Risk Analytics</h1>
           <span class="view-subtitle">Portfolio risk management and scenario analysis</span>
+          <span class="sample-badge" title="Seeded positions, betas, correlations, and equity curve are sample data">Sample Data</span>
         </div>
         <div class="view-actions">
           <button class="btn-primary" id="riskRefreshBtn" style="font-size:12px; padding:6px 14px;">
@@ -2884,7 +2893,7 @@
           </defs>
         </svg>
       </div>
-      <h2 class="ob-title">Welcome to Greystone Trading Platform</h2>
+      <h2 class="ob-title">Welcome to GSP Trading</h2>
       <p class="ob-subtitle">Set up your dashboard in 60 seconds</p>
       <div class="ob-actions">
         <button class="ob-btn-primary" id="obLetsGo">Let's Go</button>

@@ -22,28 +22,8 @@
     }
   }
 
-  // Counter animation for landing stats
-  function animateCounter(id, target, suffix, duration) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    const start = 0;
-    const startTime = performance.now();
-    function step(now) {
-      const elapsed = now - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-      const eased = 1 - Math.pow(1 - progress, 3);
-      const current = Math.floor(start + (target - start) * eased);
-      el.textContent = current.toLocaleString() + (suffix || '');
-      if (progress < 1) requestAnimationFrame(step);
-    }
-    requestAnimationFrame(step);
-  }
-  setTimeout(() => animateCounter('lsMarkets', 142, '', 2000), 300);
-  setTimeout(() => animateCounter('lsAssets', 48200, '+', 2000), 500);
-  setTimeout(() => {
-    const el = document.getElementById('lsLatency');
-    if (el) el.textContent = '<12ms';
-  }, 800);
+  // Landing stat tiles are static, honest capability labels (no fabricated
+  // metrics), so there is no counter to animate here.
 
   enterBtn.addEventListener('click', () => {
     landing.classList.add('hidden');

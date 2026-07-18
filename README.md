@@ -24,9 +24,12 @@ Described honestly, separating what is real today from what is still preview or 
 
 - Live charts and technical indicators. Charts and quotes are served through the data proxy.
 - Options chain and strategy builder with Black-Scholes Greeks. The options math lives in `services/black-scholes.js` and is unit-tested (see Testing below).
-- Portfolio tracking. The portfolio views exist today; multi-currency (CAD and USD) support and adjusted-cost-base accuracy are on the roadmap and are not fully in place yet.
+- Portfolio tracking with live quotes, dual-currency holdings (CAD base, per-transaction FX), a Canadian adjusted-cost-base engine (`services/acb.js`, superficial-loss aware), a sell flow with realized gains, and per-trade cost hints from the fee model.
+- Cloud sync for signed-in users: the portfolio follows your account across devices (Supabase-backed, localStorage-first so guests lose nothing and the app works offline). The local copy is snapshotted before any account copy replaces it.
+- Read-only broker import: preview your Questrade or Interactive Brokers positions and import selected lots into the tracker. Import never places, changes, or cancels anything at your broker; imported lots are flagged because a broker's average cost only approximates CRA ACB.
+- Paper trading with a real order ticket, a fail-closed risk-guardrail engine (position caps, daily loss limit, drawdown circuit breaker, global kill switch), and agents gated behind a passing backtest (`services/backtest.js`, no-lookahead).
 - A Claude-powered research copilot, "Grey Sankore," reached through the AI chat and analyze surfaces. The Anthropic API is proxied server-side so your key is not exposed to the browser.
-- A Canadian broker fee model and an adjusted-cost-base engine. These are new modules being added under `services/`, shipped with unit tests. They are early and under active development.
+- A Canadian broker fee model (`services/fee-model.js`, 10 brokers, Norbert's Gambit and FX-drag analytics), shipped with unit tests.
 
 Which surfaces are simulated: several panels in the current preview render mock, sample, or placeholder data, and each of those is labeled in-app (for example a "Simulated" or "Preview" marker). Do not read simulated panels as your real account state.
 
@@ -90,11 +93,11 @@ GSP Trading is open-source software provided for research and educational purpos
 
 ## Roadmap
 
-- P0: Safety and truth. In progress. Label simulated data honestly, correct the financial math, and harden the basics.
-- P1: Make the portfolio tracker real. Live quotes, CAD and USD handling, adjusted cost base, and broker import.
-- P2: Fee engine, order ticket, charting upgrade, and a proper design system.
-- P3: Open-source launch.
-- P4: The AI copilot rebuilt on current models with tool use.
+- P0: Safety and truth. Done. Simulated data labeled honestly, financial math corrected, endpoints authenticated.
+- P1: Make the portfolio tracker real. Done. Live quotes, CAD and USD handling, adjusted cost base, cloud sync, and read-only broker import.
+- P2: Fee engine and order ticket done; charting upgrade and full design system still open.
+- P3: Open-source launch. Modularization, docs, and packaging.
+- P4: The AI copilot rebuilt on current models with tool use. Server-side agent shipped; the Grey Sankore analysis surfaces are still being rebuilt.
 
 The longer arc: GSP Trading is intended to grow, over years, toward becoming a Canadian financial institution. The near-term work above is the foundation for that.
 

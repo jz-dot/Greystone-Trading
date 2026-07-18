@@ -313,6 +313,7 @@
   <div class="halt-banner-inner">
     <span class="halt-banner-dot"></span>
     <span class="halt-banner-text"><strong>TRADING HALTED.</strong> New orders are blocked and simulated agents are paused.</span>
+    <span class="halt-banner-risk" id="haltRiskReadout" style="display:none;"></span>
     <button class="halt-banner-resume" id="haltBannerResume">Resume trading</button>
   </div>
 </div>
@@ -2878,6 +2879,10 @@
 <script src="services/flow-engine.js"></script>
 <script src="services/flow-analytics.js"></script>
 <script src="services/bigdata-data.js"></script>
+<!-- Safety layer: backtest proving-ground + risk guardrails must exist before app.js
+     so the Agents view can gate Start on a real passing backtest. -->
+<script src="services/risk-guardrails.js"></script>
+<script src="services/backtest.js"></script>
 <script src="app.js"></script>
 <script src="services/auth-ui.js"></script>
 

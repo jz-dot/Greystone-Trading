@@ -1384,6 +1384,86 @@ input, select, button { font-family: inherit; }
 .agent-btn.pause { border-color: var(--gold-a30); color: var(--accent-gold); }
 .agent-btn.start { border-color: rgba(16,185,129,0.3); color: var(--profit); }
 
+/* ---- Agent backtest gate (safety prerequisite for Start) ---- */
+
+/* Gated / disabled Start button: an agent cannot run until it PASSES a backtest. */
+.agent-btn.start.gated,
+.agent-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-color: var(--border);
+  color: var(--text-dim);
+  background: var(--bg-tertiary);
+}
+.agent-btn.start.gated:hover,
+.agent-btn:disabled:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-dim);
+}
+
+/* Backtested / Not backtested indicator (agent header) */
+.bt-valid-pill {
+  font-size: 9px; font-weight: 700; padding: 3px 8px; border-radius: 4px;
+  letter-spacing: 0.4px; text-transform: uppercase; white-space: nowrap;
+}
+.bt-valid-pill.ok { background: var(--profit-bg); color: var(--profit); }
+.bt-valid-pill.none { background: var(--bg-tertiary); color: var(--text-muted); }
+
+/* Backtest panel inside each agent card */
+.agent-backtest {
+  margin: 4px 0 14px;
+  padding: 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.bt-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.bt-title {
+  font-size: 10px; font-weight: 600; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: 0.6px;
+}
+.bt-result { margin-bottom: 10px; }
+.bt-msg { font-size: 11px; line-height: 1.5; color: var(--text-secondary); }
+.bt-msg.bt-idle { color: var(--text-muted); }
+.bt-msg.bt-pending { color: var(--warning); }
+.bt-msg.bt-error { color: var(--loss); }
+
+/* PASS / FAIL badge + tested-instrument meta */
+.bt-result-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.bt-badge {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.6px;
+  padding: 3px 10px; border-radius: 4px; text-transform: uppercase;
+}
+.bt-badge.pass { background: var(--profit-bg); color: var(--profit); border: 1px solid var(--profit); }
+.bt-badge.fail { background: var(--loss-bg); color: var(--loss); border: 1px solid var(--loss); }
+.bt-meta { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); }
+
+/* Metrics grid */
+.bt-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.bt-metric { padding: 6px 8px; background: var(--bg-secondary); border-radius: 4px; }
+.bt-m-label { font-size: 8px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.4px; display: block; }
+.bt-m-value { font-size: 12px; font-weight: 600; font-family: var(--font-mono); display: block; margin-top: 2px; color: var(--text-primary); }
+.bt-m-value.profit { color: var(--profit); }
+.bt-m-value.loss { color: var(--loss); }
+
+/* Gate reasons (why it passed / failed) */
+.bt-reasons { list-style: none; margin: 10px 0 0; padding: 8px 10px; border-radius: 4px; }
+.bt-reasons.fail { background: var(--loss-bg); border-left: 2px solid var(--loss); }
+.bt-reasons.pass { background: var(--profit-bg); border-left: 2px solid var(--profit); }
+.bt-reasons li { font-size: 10.5px; color: var(--text-secondary); line-height: 1.5; }
+.bt-reasons li + li { margin-top: 3px; }
+
+.bt-actions { display: flex; }
+.bt-run-btn { border-color: var(--gold-a30); color: var(--accent-gold); }
+.bt-run-btn:hover:not(:disabled) { background: var(--gold-a10); color: var(--accent-gold); }
+
+/* Server-side risk readout inside the global halt banner */
+.halt-banner-risk {
+  font-size: 11px; color: #fff; font-family: var(--font-mono);
+  opacity: 0.92; letter-spacing: 0.02em; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 46%;
+}
+
 /* New Agent Card */
 .agent-card.new-agent {
   border: 2px dashed var(--border-light);

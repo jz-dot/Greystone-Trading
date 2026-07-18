@@ -4767,12 +4767,197 @@ function createStandaloneAgentCard(agent) {
   return card;
 }
 
+/* ============================================
+   AGENT BACKTEST GATE (safety prerequisite)
+   An agent may not start until it has PASSED a real backtest. The backtest runs
+   the deterministic services/backtest.js engine on real historical bars pulled
+   from /api/chart, then hands the result to agent.setBacktestResult(result),
+   which returns { passed, reasons }. The engine owns the pass/fail decision;
+   this UI never fabricates a passing result. Agents whose tick-based strategy
+   has no faithful bar-based equivalent show "bridge pending" and stay gated.
+   ============================================ */
+
+function btEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+  });
+}
+
+// Map an agent to a backtestable, bar-based strategy ONLY where it is honest to
+// do so. A momentum/swing agent maps to the SMA-crossover proving strategy.
+// Everything else (mean reversion, statistical arbitrage, gamma scalping) has
+// no faithful single-symbol bar backtest yet -> null (bridge pending, gated).
+function backtestPlanForAgent(agent) {
+  var hay = (
+    String((agent && agent.id) || '') + ' ' +
+    String((agent && agent.name) || '') + ' ' +
+    String((agent && agent.strategy) || '')
+  ).toLowerCase();
+  if (/swing|momentum|trend|breakout/.test(hay)) {
+    return { strategyKind: 'smaCrossover', fast: 20, slow: 50, label: 'SMA 20/50 crossover (momentum proxy)' };
+  }
+  return null;
+}
+
+// Resolve the current gate for an agent. Prefers the engine contract
+// (agent.canStart / agent.validation); falls back fail-closed when the engine
+// build is not present in this runtime (Start stays disabled).
+function agentGateState(agent) {
+  var v = (agent && agent.validation) || {};
+  var passedFromUi = !!(agent && agent._btUi && agent._btUi.gate && agent._btUi.gate.passed);
+  var backtested = !!v.backtested || passedFromUi;
+  if (agent && typeof agent.canStart === 'function') {
+    try {
+      var g = agent.canStart() || {};
+      return {
+        ok: !!g.ok,
+        reason: g.reason || (g.ok ? '' : 'Backtest required before running'),
+        backtested: backtested,
+        paperValidated: !!v.paperValidated,
+      };
+    } catch (e) { /* fall through to fail-closed */ }
+  }
+  return {
+    ok: passedFromUi,
+    reason: passedFromUi ? '' : 'Backtest required before running',
+    backtested: backtested,
+    paperValidated: !!v.paperValidated,
+  };
+}
+
+// Build the in-card backtest block from the agent's last run (agent._btUi).
+function renderBacktestBlockHtml(agent) {
+  var ui = agent && agent._btUi;
+  var body;
+
+  if (!ui) {
+    body = '<div class="bt-msg bt-idle">No backtest yet. Run a real backtest to unlock Start.</div>';
+  } else if (ui.running) {
+    body = '<div class="bt-msg">Running backtest on ' + btEsc(ui.symbol) + '...</div>';
+  } else if (ui.bridgePending) {
+    body = '<div class="bt-msg bt-pending">Backtest bridge pending. This tick-based strategy has no faithful bar-based backtest yet, so the agent stays gated (fail-closed).</div>';
+  } else if (ui.error) {
+    body = '<div class="bt-msg bt-error">Backtest could not run: ' + btEsc(ui.error) + '. Agent stays gated.</div>';
+  } else if (ui.result) {
+    var r = ui.result;
+    var g = ui.gate || { passed: false, reasons: [] };
+    var mkMetric = function (label, value, cls) {
+      return '<div class="bt-metric"><span class="bt-m-label">' + label + '</span>' +
+        '<span class="bt-m-value ' + (cls || '') + '">' + value + '</span></div>';
+    };
+    var tr = (typeof r.totalReturn === 'number') ? r.totalReturn * 100 : null;
+    var sh = (typeof r.annualizedSharpe === 'number') ? r.annualizedSharpe : null;
+    var dd = (typeof r.maxDrawdown === 'number') ? r.maxDrawdown * 100 : null;
+    var wr = (typeof r.winRate === 'number') ? r.winRate * 100 : null;
+    var nt = (typeof r.numTrades === 'number') ? r.numTrades : null;
+    var metrics =
+      mkMetric('Total Return', tr == null ? '-' : (tr >= 0 ? '+' : '') + tr.toFixed(2) + '%', tr == null ? '' : (tr >= 0 ? 'profit' : 'loss')) +
+      mkMetric('Ann. Sharpe', sh == null ? '-' : sh.toFixed(2), (sh != null && sh < 0) ? 'loss' : '') +
+      mkMetric('Max Drawdown', dd == null ? '-' : '-' + dd.toFixed(2) + '%', 'loss') +
+      mkMetric('Trades', nt == null ? '-' : String(nt), '') +
+      mkMetric('Win Rate', wr == null ? '-' : wr.toFixed(1) + '%', '');
+    var badge = '<span class="bt-badge ' + (g.passed ? 'pass' : 'fail') + '">' + (g.passed ? 'PASS' : 'FAIL') + '</span>';
+    var reasons = '';
+    if (Array.isArray(g.reasons) && g.reasons.length) {
+      reasons = '<ul class="bt-reasons ' + (g.passed ? 'pass' : 'fail') + '">' + g.reasons.map(function (rz) {
+        return '<li>' + btEsc(rz) + '</li>';
+      }).join('') + '</ul>';
+    }
+    body =
+      '<div class="bt-result-head">' + badge +
+      '<span class="bt-meta">' + btEsc(ui.symbol) + ' &middot; ' + btEsc(ui.label) + '</span></div>' +
+      '<div class="bt-metrics">' + metrics + '</div>' +
+      reasons;
+  } else {
+    body = '<div class="bt-msg bt-idle">No backtest yet.</div>';
+  }
+
+  var running = !!(ui && ui.running);
+  var btnLabel = running ? 'Running...' : ((ui && (ui.result || ui.error || ui.bridgePending)) ? 'Re-run Backtest' : 'Run Backtest');
+  var runBtn = '<button class="agent-btn bt-run-btn" data-action="backtest" data-agent="' + btEsc(agent.id) + '"' +
+    (running ? ' disabled' : '') + '>' + btnLabel + '</button>';
+
+  return '<div class="agent-backtest">' +
+    '<div class="bt-head"><span class="bt-title">Backtest Gate</span></div>' +
+    '<div class="bt-result">' + body + '</div>' +
+    '<div class="bt-actions">' + runBtn + '</div>' +
+    '</div>';
+}
+
+// Run a REAL backtest for an agent, wire the result through the engine gate, and
+// re-render so the Start gate re-evaluates. Never fabricates a passing result.
+async function runAgentBacktest(agent) {
+  if (!agent) return;
+  var plan = backtestPlanForAgent(agent);
+
+  // Fail-closed: no faithful bar-based strategy for this agent. Record the
+  // pending state and keep the agent gated. Do NOT call setBacktestResult.
+  if (!plan) {
+    agent._btUi = { bridgePending: true, ranAt: Date.now() };
+    renderAgentCards();
+    if (typeof showToast === 'function') showToast(agent.name + ': backtest bridge pending. Strategy stays gated.', 'info');
+    return;
+  }
+
+  if (typeof Backtest === 'undefined' || !Backtest || typeof Backtest.runBacktest !== 'function') {
+    agent._btUi = { error: 'Backtest engine not loaded', ranAt: Date.now() };
+    renderAgentCards();
+    if (typeof showToast === 'function') showToast('Backtest engine not loaded. Agent stays gated.', 'error');
+    return;
+  }
+
+  var symbol = (agent.symbols && agent.symbols.length) ? String(agent.symbols[0]).toUpperCase() : 'SPY';
+  agent._btUi = { running: true, symbol: symbol, label: plan.label };
+  renderAgentCards();
+
+  try {
+    var resp = await fetch('/api/chart/' + encodeURIComponent(symbol) + '?interval=1d&range=2y');
+    if (!resp.ok) throw new Error('chart API returned ' + resp.status);
+    var data = await resp.json();
+    var candles = (data && Array.isArray(data.candles)) ? data.candles : [];
+    var minBars = plan.slow + 5;
+    if (candles.length < minBars) throw new Error('insufficient history (' + candles.length + ' bars, need >= ' + minBars + ')');
+
+    var bars = candles.map(function (c) {
+      // /api/chart returns Yahoo epoch SECONDS; the engine treats numbers >= 1e6
+      // as ms, so convert seconds -> ms for a correct time span / annualization.
+      var t = (typeof c.time === 'number' && c.time < 1e12) ? c.time * 1000 : c.time;
+      return { time: t, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume };
+    });
+
+    var strategy = Backtest.strategies.smaCrossover(plan.fast, plan.slow);
+    var result = Backtest.runBacktest({ bars: bars, strategy: strategy, initialCapital: 100000, options: { periodsPerYear: 252 } });
+
+    // The engine owns pass/fail. If the contract is absent in this runtime, stay
+    // fail-closed (never self-declare a pass).
+    var gate = { passed: false, reasons: ['Gate engine (setBacktestResult) unavailable; strategy stays gated.'] };
+    if (typeof agent.setBacktestResult === 'function') {
+      var gr = agent.setBacktestResult(result) || {};
+      gate = { passed: !!gr.passed, reasons: Array.isArray(gr.reasons) ? gr.reasons : [] };
+    }
+
+    agent._btUi = { symbol: symbol, label: plan.label, result: result, gate: gate, ranAt: Date.now() };
+    renderAgentCards();
+
+    if (typeof showToast === 'function') {
+      if (gate.passed) showToast(agent.name + ': backtest PASSED on ' + symbol + '. Start unlocked.', 'success');
+      else showToast(agent.name + ': backtest FAILED on ' + symbol + '. ' + (gate.reasons[0] || 'See card for details.'), 'error');
+    }
+  } catch (e) {
+    agent._btUi = { error: (e && e.message) || 'backtest failed', symbol: symbol, label: plan.label, ranAt: Date.now() };
+    renderAgentCards();
+    if (typeof showToast === 'function') showToast('Backtest could not run for ' + symbol + ': ' + ((e && e.message) || 'error') + '. Agent stays gated.', 'error');
+  }
+}
+
 function createAgentCard(agent) {
   const stats = agent.getStats();
   const pnl = agent.getPnL();
   const isRunning = agent.state === AgentState.RUNNING;
   const isPaused = agent.state === AgentState.PAUSED;
   const isStopped = agent.state === AgentState.STOPPED;
+  const gate = agentGateState(agent);
+  const startGated = isStopped && !gate.ok;
   const stateClass = isRunning ? 'running' : isPaused ? 'paused' : 'stopped';
   const stateLabel = isRunning ? 'RUNNING' : isPaused ? 'PAUSED' : 'STOPPED';
   const simLabel = agent.simulationMode ? ' (SIM)' : '';
@@ -4814,6 +4999,7 @@ function createAgentCard(agent) {
       <h3 class="agent-name">${agent.name}</h3>
       ${agentSignals > 0 ? `<span class="agent-signals-count">${agentSignals} signals</span>` : ''}
       <span class="agent-badge ${stateClass}">${stateLabel}${simLabel}</span>
+      <span class="bt-valid-pill ${gate.backtested ? 'ok' : 'none'}" title="${gate.backtested ? 'A passing backtest is on record' : 'No passing backtest yet'}">${gate.backtested ? 'Backtested' : 'Not backtested'}</span>
     </div>
     <div class="agent-desc">${agent.description}</div>
     <div class="agent-stats">
@@ -4843,10 +5029,11 @@ function createAgentCard(agent) {
       </div>
     </div>
     ${positionsHtml}
+    ${renderBacktestBlockHtml(agent)}
     <div class="agent-controls">
       ${isRunning
         ? `<button class="agent-btn pause" data-action="pause" data-agent="${agent.id}">Pause</button>`
-        : `<button class="agent-btn start" data-action="start" data-agent="${agent.id}">${isPaused ? 'Resume' : 'Start'}</button>`
+        : `<button class="agent-btn start${startGated ? ' gated' : ''}" data-action="start" data-agent="${agent.id}"${startGated ? ` disabled title="${btEsc(gate.reason)}"` : ''}>${isPaused ? 'Resume' : 'Start'}</button>`
       }
       ${agentSignals > 0 ? `<button class="agent-btn agent-view-signals-btn" data-action="viewSignals" data-agent-name="${agent.name}">View Signals</button>` : ''}
       <button class="agent-btn" data-action="configure" data-agent="${agent.id}">Configure</button>
@@ -4878,8 +5065,18 @@ function handleAgentAction(action, agentId) {
 
   switch (action) {
     case 'start':
-      if (agent.state === AgentState.PAUSED) agent.resume();
-      else agent.start();
+      // Defense in depth: the button is disabled when the gate is closed, and
+      // agent.start() also refuses if the agent is not backtested.
+      if (agent.state === AgentState.PAUSED) { agent.resume(); break; }
+      var gate = agentGateState(agent);
+      if (!gate.ok) {
+        showToast(agent.name + ': ' + (gate.reason || 'Backtest required before running') + '.', 'error');
+        break;
+      }
+      agent.start();
+      break;
+    case 'backtest':
+      runAgentBacktest(agent);
       break;
     case 'pause':
       agent.pause();
@@ -9875,12 +10072,61 @@ if (askAIBtn) {
     }
     var banner = document.getElementById('haltBanner');
     if (banner) banner.style.display = halted ? 'block' : 'none';
+    if (halted) { try { refreshRisk(); } catch (e) {} }
     var warn = document.getElementById('otHaltWarn');
     if (warn) warn.style.display = halted ? 'block' : 'none';
     var reviewBtn = document.getElementById('otReviewBtn');
     if (reviewBtn) reviewBtn.disabled = halted;
     var confirmBtn = document.getElementById('otConfirmBtn');
     if (confirmBtn) confirmBtn.disabled = halted;
+  }
+
+  // ---- server-side kill switch (paper broker) ----
+  // The client halt (localStorage flag + agent pause) is authoritative for the
+  // in-page UI. These calls ALSO halt the server-side paper broker so it rejects
+  // orders that do not originate from this tab. Every call fails soft: if the
+  // trading server is unreachable, the client halt still stands.
+  function serverHalt(reason) {
+    return paperFetch('/halt', {
+      method: 'POST',
+      body: JSON.stringify({ reason: reason || 'Manual kill switch engaged from GSP Trading UI' }),
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; })
+      .then(function () { refreshRisk(); });
+  }
+
+  function serverResume() {
+    return paperFetch('/resume', { method: 'POST', body: JSON.stringify({}) })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; })
+      .then(function () { refreshRisk(); });
+  }
+
+  // ---- risk readout (drawdown / halt reason) in the halt banner ----
+  function refreshRisk() {
+    var el = document.getElementById('haltRiskReadout');
+    if (!el) return;
+    // Only meaningful while the banner is visible (i.e. halted).
+    if (!isHalted()) { el.style.display = 'none'; el.textContent = ''; return; }
+    paperFetch('/risk', { method: 'GET' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (risk) {
+        if (!risk) { el.textContent = 'Server risk state unavailable'; el.style.display = ''; return; }
+        var parts = [];
+        if (typeof risk.drawdownPct === 'number') parts.push('DD ' + risk.drawdownPct.toFixed(2) + '%');
+        if (typeof risk.dailyPnl === 'number') {
+          parts.push('Day ' + (risk.dailyPnl >= 0 ? '+' : '-') + '$' + Math.abs(risk.dailyPnl).toLocaleString('en-US', { maximumFractionDigits: 0 }));
+        }
+        if (risk.halted) {
+          parts.push('server halted' + (risk.haltReason ? ': ' + risk.haltReason : ''));
+        } else {
+          parts.push('server not halted');
+        }
+        el.textContent = parts.join('  |  ');
+        el.style.display = '';
+      })
+      .catch(function () { el.textContent = 'Server risk state unavailable'; el.style.display = ''; });
   }
 
   function setHalt(halted) {
@@ -9890,6 +10136,11 @@ if (askAIBtn) {
       if (typeof AgentManager !== 'undefined' && AgentManager && typeof AgentManager.pauseAll === 'function') {
         try { AgentManager.pauseAll(); } catch (e) {}
       }
+      // Halt the server-side paper broker too (fails soft).
+      serverHalt();
+    } else {
+      // Release the server-side halt too (fails soft).
+      serverResume();
     }
     applyHaltState();
   }

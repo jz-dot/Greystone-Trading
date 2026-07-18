@@ -5540,3 +5540,10 @@ kbd {
 }
 .pf-import-table td:nth-child(2) { font-weight: 600; color: var(--text-primary); }
 .pf-import-note { font-size: 10px; color: var(--text-dim); }
+
+/* Account tag on holdings rows (TFSA/RRSP/FHSA/non-registered) */
+.pf-acct-tag {
+  font-size: 8px; font-weight: 600; letter-spacing: 0.06em;
+  color: var(--accent-teal); border: 1px solid var(--border-light);
+  border-radius: 3px; padding: 1px 4px; margin-left: 6px; vertical-align: middle;
+}

@@ -24,6 +24,7 @@ const { createBigDataService } = require('./services/bigdata-client');
 const aiTools = require('./services/ai-tools');
 const { createPaperBroker } = require('./services/paper-broker');
 const brokerImport = require('./services/broker-import');
+const fxHistory = require('./services/fx-history');
 
 // Official Anthropic SDK. Resolve the constructor across CJS export shapes.
 const AnthropicSDK = require('@anthropic-ai/sdk');
@@ -1795,6 +1796,33 @@ app.get('/api/questrade/executions', requireAuth, requireOwner, async (req, res)
 // NOTE: The arbitrary POST /api/questrade/proxy passthrough was removed. It
 // forwarded any method + endpoint + body to Questrade with server credentials,
 // bypassing every guardrail. Use the specific endpoints above instead.
+
+// ============================================
+// HISTORICAL FX (Bank of Canada daily rates)
+// ============================================
+
+// GET /api/fx/usdcad?date=YYYY-MM-DD
+// The USD/CAD rate for a TRANSACTION DATE (ITA s.261: ACB uses the rate in
+// effect on the transaction date, not today's spot). Weekend/holiday dates
+// resolve to the nearest prior business day. Pre-2017 dates return 404 (the
+// BoC FXUSDCAD series starts 2017-01-03); the client falls back to a
+// flagged estimate. Public read-only data; no auth required.
+app.get('/api/fx/usdcad', async (req, res) => {
+  const date = String(req.query.date || '');
+  if (!fxHistory.isValidISODate(date)) {
+    return res.status(400).json({ error: 'INVALID_DATE', message: 'Pass date=YYYY-MM-DD.' });
+  }
+  try {
+    const result = await fxHistory.getRateForDate(date);
+    if (!result) {
+      return res.status(404).json({ error: 'NO_RATE', message: 'No BoC rate available for that date (pre-2017 or outside lookback).' });
+    }
+    res.json({ pair: 'USDCAD', date: date, rate: result.rate, rateDate: result.rateDate, exact: result.exact, source: 'Bank of Canada Valet FXUSDCAD' });
+  } catch (err) {
+    console.error('[FX] BoC lookup failed:', err.message);
+    res.status(502).json({ error: 'FX_LOOKUP_FAILED', message: 'Bank of Canada rate lookup failed.' });
+  }
+});
 
 // ============================================
 // BROKER POSITION IMPORT (read-only preview)

@@ -8056,7 +8056,7 @@ const PortfolioManager = (function() {
     if (quotesInFlight) return quotesInFlight;
     const positions = _load(STORAGE_KEY) || [];
     const syms = [];
-    positions.forEach(p => { if (p.symbol && syms.indexOf(p.symbol) === -1) syms.push(p.symbol); });
+    positions.forEach(p => { if (p.symbol && p.status !== 'closed' && syms.indexOf(p.symbol) === -1) syms.push(p.symbol); });
     syms.push('USDCAD=X');
     const url = '/api/quotes?symbols=' + encodeURIComponent(syms.join(','));
     quotesInFlight = fetch(url)
@@ -8147,6 +8147,7 @@ const PortfolioManager = (function() {
   // the transaction-series model so ACB has something to compute from.
   function normalizePosition(pos) {
     if (!pos.currency) pos.currency = inferCurrency(pos.symbol);
+    if (!pos.account) pos.account = 'non-registered';
     if (!Array.isArray(pos.txns) || pos.txns.length === 0) {
       const dateISO = pos.addedAt ? new Date(pos.addedAt).toISOString().slice(0, 10) : todayISO();
       pos.txns = [{
@@ -8283,6 +8284,42 @@ const PortfolioManager = (function() {
     }
   }
 
+  // Resolve the TRUE transaction-date BoC rate for any USD txn whose stored
+  // rate is missing or flagged estimated, via /api/fx/usdcad. Persists once
+  // and announces via gs:portfolio-synced so open views re-render. Dates the
+  // BoC series cannot cover (pre-2017, network down) freeze at the live rate,
+  // flagged fxEstimated so the approximation stays visible.
+  let fxRepairRun = false;
+  async function repairFxRates() {
+    if (fxRepairRun) return; fxRepairRun = true;
+    const positions = _load(STORAGE_KEY);
+    if (!Array.isArray(positions) || !positions.length) return;
+    const need = [];
+    positions.forEach(p => {
+      if (p.currency !== 'USD') return;
+      (p.txns || []).forEach(t => { if (!(t.fxRate > 0) || t.fxEstimated) need.push(t); });
+    });
+    if (!need.length) return;
+    const dates = Array.from(new Set(need.map(t => t.date).filter(Boolean)));
+    const rates = {};
+    await Promise.all(dates.map(d =>
+      fetch('/api/fx/usdcad?date=' + encodeURIComponent(d))
+        .then(r => r.ok ? r.json() : null)
+        .then(j => { if (j && j.rate > 0) rates[d] = j.rate; })
+        .catch(() => {})
+    ));
+    let changed = 0;
+    need.forEach(t => {
+      const r = rates[t.date];
+      if (r > 0) { t.fxRate = r; delete t.fxEstimated; changed++; }
+      else if (!(t.fxRate > 0)) { t.fxRate = getUsdCadRate(); t.fxEstimated = true; changed++; }
+    });
+    if (changed) {
+      _save(STORAGE_KEY, positions);
+      document.dispatchEvent(new CustomEvent('gs:portfolio-synced'));
+    }
+  }
+
   return {
     getPositions: function() { return _load(STORAGE_KEY) || []; },
     savePositions: function(positions) { _save(STORAGE_KEY, positions); },
@@ -8295,6 +8332,7 @@ const PortfolioManager = (function() {
 
     syncFromCloud: syncFromCloud,
     pushToCloud: pushToCloud,
+    repairFxRates: repairFxRates,
 
     // opts: { currency, fxRate, commission, date, source }
     addPosition: function(sym, shares, avgCost, opts) {
@@ -8302,8 +8340,9 @@ const PortfolioManager = (function() {
       sym = String(sym || '').toUpperCase().trim();
       shares = Number(shares); avgCost = Number(avgCost);
       if (!sym || !(shares > 0) || !(avgCost >= 0)) return false;
+      const acct = opts.account || 'non-registered';
       const positions = (_load(STORAGE_KEY) || []).map(normalizePosition);
-      let pos = positions.find(p => p.symbol === sym);
+      let pos = positions.find(p => p.symbol === sym && (p.account || 'non-registered') === acct);
       const currency = pos ? pos.currency : (opts.currency || inferCurrency(sym));
       const fxRate = (currency === 'USD') ? (Number(opts.fxRate) || getUsdCadRate()) : 1;
       const txn = {
@@ -8314,11 +8353,15 @@ const PortfolioManager = (function() {
       // Flags lots whose cost basis is a broker's average cost (approximate
       // ACB) rather than a user-entered transaction.
       if (opts.source) txn.source = opts.source;
+      if (opts.fxEstimated) txn.fxEstimated = true;
       if (pos) {
         pos.txns.push(txn);
+        // A rebuy reopens a closed ledger; the retained prior sell is what
+        // lets the superficial-loss window recomputation see the pattern.
+        pos.status = 'open';
         recomputeAggregate(pos);
       } else {
-        pos = { symbol: sym, currency: currency, addedAt: Date.now(), txns: [txn] };
+        pos = { symbol: sym, currency: currency, account: acct, addedAt: Date.now(), txns: [txn] };
         recomputeAggregate(pos);
         positions.push(pos);
       }
@@ -8334,35 +8377,42 @@ const PortfolioManager = (function() {
       sym = String(sym || '').toUpperCase().trim();
       shares = Number(shares); price = Number(price);
       const positions = (_load(STORAGE_KEY) || []).map(normalizePosition);
-      const pos = positions.find(p => p.symbol === sym);
+      const pos = opts.account
+        ? positions.find(p => p.symbol === sym && (p.account || 'non-registered') === opts.account)
+        : positions.find(p => p.symbol === sym && (p.shares || 0) > 1e-9);
       if (!pos) return { ok: false, error: 'Position not found' };
       if (!(shares > 0) || !(price >= 0)) return { ok: false, error: 'Invalid sell input' };
       if (shares > pos.shares + 1e-9) shares = pos.shares; // cap at shares held
       const currency = pos.currency;
       const fxRate = (currency === 'USD') ? (Number(opts.fxRate) || getUsdCadRate()) : 1;
-      pos.txns.push({
+      // Realized gain = the DELTA of the full ACB run before vs after this
+      // sell, so a backdated sell that lands mid-ledger attributes its own
+      // gain, not the last row's, and superficial-loss effects are included.
+      const beforeGain = acbBaseSummary(pos).totalRealizedGain;
+      const txn = {
         type: 'sell', shares: shares, price: price,
         commission: Number(opts.commission) || 0,
         date: opts.date || todayISO(), fxRate: fxRate
-      });
-      const base = acbBaseSummary(pos);
-      let realized = 0;
-      if (base.ledger && base.ledger.length) {
-        const last = base.ledger[base.ledger.length - 1];
-        if (last && last.type === 'sell') realized = last.capitalGain;
-      }
+      };
+      if (opts.fxEstimated) txn.fxEstimated = true;
+      pos.txns.push(txn);
+      const realized = acbBaseSummary(pos).totalRealizedGain - beforeGain;
       recomputeAggregate(pos);
-      this.addRealized({ symbol: sym, shares: shares, price: price, currency: currency, realized: realized, date: opts.date || todayISO() });
-      // Drop the position entirely once fully closed.
-      const remaining = positions.filter(p => p.symbol !== sym || (p.shares || 0) > 1e-9);
-      _save(STORAGE_KEY, remaining);
+      const registered = (pos.account || 'non-registered') !== 'non-registered';
+      // Closed positions are RETAINED (status 'closed'), never deleted: the
+      // ledger must survive so a rebuy within the 30-day window denies the
+      // loss on recomputation and realized totals stay auditable.
+      if ((pos.shares || 0) <= 1e-9) pos.status = 'closed';
+      _save(STORAGE_KEY, positions);
+      this.addRealized({ symbol: sym, shares: shares, price: price, currency: currency, realized: realized, account: pos.account, registered: registered, date: txn.date });
       this.addActivity('SELL', sym, shares, price, { currency: currency, realized: realized });
-      return { ok: true, realized: realized, currency: currency, shares: shares };
+      return { ok: true, realized: realized, currency: currency, shares: shares, account: pos.account, registered: registered };
     },
 
     // Forget a position without realizing a gain (for correcting a bad entry).
-    removePosition: function(sym) {
-      const positions = (_load(STORAGE_KEY) || []).filter(p => p.symbol !== sym);
+    removePosition: function(sym, account) {
+      const positions = (_load(STORAGE_KEY) || []).filter(p =>
+        p.symbol !== sym || (account && (p.account || 'non-registered') !== account));
       _save(STORAGE_KEY, positions);
       return true;
     },
@@ -8377,6 +8427,7 @@ const PortfolioManager = (function() {
         const nativePrice = hasQuote ? q.price : pos.avgCost; // cost-basis fallback, never a fake price
         const fx = (pos.currency === 'USD') ? rate : 1;
         const base = acbBaseSummary(pos);
+        const approxBasis = (pos.txns || []).some(t => t.source === 'broker-import' || t.fxEstimated);
         const shares = pos.shares;
         const mvNative = nativePrice * shares;
         const mvBase = mvNative * fx;
@@ -8389,6 +8440,8 @@ const PortfolioManager = (function() {
           name: nameMap[pos.symbol] || pos.symbol,
           sector: sectorMap[pos.symbol] || 'Other',
           currency: pos.currency,
+          account: pos.account || 'non-registered',
+          approxBasis: approxBasis,
           shares: shares,
           avgCost: pos.avgCost,                    // native ACB per share
           acbPerShareBase: base.currentACBPerShare, // CAD ACB per share
@@ -8420,6 +8473,7 @@ const PortfolioManager = (function() {
         totalValue, totalReturn, dayPL, dayPLPct,
         bookCost: totalCost,
         realized: this.getRealizedTotal(),
+        realizedRegistered: this.getRealizedRegisteredTotal(),
         baseCurrency: BASE_CURRENCY,
         positionCount: holdings.length,
         quotesReady: holdings.length > 0 && holdings.every(h => h.hasQuote)
@@ -8440,7 +8494,38 @@ const PortfolioManager = (function() {
       _save(REALIZED_KEY, arr);
     },
     getRealized: function() { return _load(REALIZED_KEY) || []; },
-    getRealizedTotal: function() { return (_load(REALIZED_KEY) || []).reduce((s, e) => s + (Number(e.realized) || 0), 0); },
+
+    // Realized capital gains recomputed from the RETAINED ledgers, never from
+    // frozen sale-time snapshots: a rebuy inside the 30-day window
+    // retroactively denies the loss, and only recomputation shows that.
+    // CRA view: taxable (non-registered) positions only, identical property
+    // POOLED across taxable accounts per symbol.
+    getRealizedTotal: function() {
+      const positions = (_load(STORAGE_KEY) || []).map(normalizePosition);
+      const taxable = positions.filter(p => (p.account || 'non-registered') === 'non-registered');
+      const bySym = {};
+      taxable.forEach(p => { (bySym[p.symbol] = bySym[p.symbol] || []).push(p); });
+      let total = 0;
+      Object.keys(bySym).forEach(sym => {
+        const group = bySym[sym];
+        if (typeof ACB !== 'undefined') {
+          const merged = [];
+          group.forEach(p => { merged.push.apply(merged, baseTxns(p)); });
+          if (merged.length) total += ACB.computeACB(merged).summary.totalRealizedGain;
+        } else {
+          group.forEach(p => { total += acbBaseSummary(p).totalRealizedGain; });
+        }
+      });
+      return total;
+    },
+    // Gains inside registered accounts (TFSA/RRSP/FHSA): shown for interest,
+    // never part of the taxable realized figure.
+    getRealizedRegisteredTotal: function() {
+      const positions = (_load(STORAGE_KEY) || []).map(normalizePosition);
+      return positions
+        .filter(p => (p.account || 'non-registered') !== 'non-registered')
+        .reduce((s, p) => s + acbBaseSummary(p).totalRealizedGain, 0);
+    },
 
     addActivity: function(action, sym, shares, price, meta) {
       meta = meta || {};
@@ -8541,15 +8626,17 @@ const PortfolioManager = (function() {
     });
 
     const ccyTag = (c) => `<span style="font-size:9px;color:var(--text-dim);margin-left:5px;letter-spacing:0.04em;">${c}</span>`;
+    const ACCT_LABELS = { 'non-registered': 'NON-REG', 'TFSA': 'TFSA', 'RRSP': 'RRSP', 'FHSA': 'FHSA', 'other-registered': 'REG' };
+    const acctTag = (a) => `<span class="pf-acct-tag">${ACCT_LABELS[a] || a}</span>`;
     tbody.innerHTML = holdings.map(h => {
       const plCls = h.totalPL >= 0 ? 'pf-profit' : 'pf-loss';
       const dayCls = h.dayChange >= 0 ? 'pf-profit' : 'pf-loss';
       const priceStr = h.hasQuote ? fmt$(h.currentPrice) : fmt$(h.currentPrice) + '<span style="font-size:9px;color:var(--text-dim);margin-left:3px;" title="Live quote unavailable; showing book cost">n/a</span>';
       return `<tr>
-        <td class="pf-sym">${h.symbol}${ccyTag(h.currency)}</td>
+        <td class="pf-sym">${h.symbol}${ccyTag(h.currency)}${acctTag(h.account)}</td>
         <td class="pf-name">${h.name}</td>
         <td class="pf-right">${h.shares.toLocaleString('en-US', {maximumFractionDigits: 2})}</td>
-        <td class="pf-right">${fmt$(h.avgCost)}</td>
+        <td class="pf-right">${fmt$(h.avgCost)}${h.approxBasis ? ' <span title="Approximate cost basis: broker average cost or estimated FX, not exact ACB. Backfill the real transactions for filing-grade numbers." style="color:var(--accent-gold);cursor:help;">&asymp;</span>' : ''}</td>
         <td class="pf-right">${priceStr}</td>
         <td class="pf-right">${fmt$(h.marketValue)}</td>
         <td class="pf-right ${dayCls}">${fmtPct(h.dayChange)}</td>
@@ -8558,8 +8645,8 @@ const PortfolioManager = (function() {
         <td class="pf-right">${h.weight.toFixed(1)}%</td>
         <td class="pf-right"><div class="pf-actions-cell">
           <button class="pf-action-btn trade" data-sym="${h.symbol}" title="Open the order ticket (paper)">Trade</button>
-          <button class="pf-action-btn sell" data-sym="${h.symbol}" title="Sell / record disposition">Sell</button>
-          <button class="pf-action-btn delete" data-sym="${h.symbol}" title="Remove (forget entry, no realized gain)">&#x2715;</button>
+          <button class="pf-action-btn sell" data-sym="${h.symbol}" data-acct="${h.account}" title="Sell / record disposition">Sell</button>
+          <button class="pf-action-btn delete" data-sym="${h.symbol}" data-acct="${h.account}" title="Remove (forget entry, no realized gain)">&#x2715;</button>
         </div></td>
       </tr>`;
     }).join('');
@@ -8576,7 +8663,7 @@ const PortfolioManager = (function() {
     tbody.querySelectorAll('.pf-action-btn.sell').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        openSellModal(btn.dataset.sym);
+        openSellModal(btn.dataset.sym, btn.dataset.acct);
       });
     });
 
@@ -8587,7 +8674,7 @@ const PortfolioManager = (function() {
         const sym = btn.dataset.sym;
         const ok = (typeof confirm === 'function') ? confirm('Remove ' + sym + ' from your portfolio? This forgets the entry without recording a realized gain. Use Sell to record a disposition.') : true;
         if (!ok) return;
-        PortfolioManager.removePosition(sym);
+        PortfolioManager.removePosition(sym, btn.dataset.acct);
         renderPortfolio();
       });
     });
@@ -8950,9 +9037,9 @@ const PortfolioManager = (function() {
   }
 
   // ---- SELL MODAL ----
-  function openSellModal(sym) {
+  function openSellModal(sym, acct) {
     const holdings = PortfolioManager.getHoldings();
-    const h = holdings.find(x => x.symbol === sym);
+    const h = holdings.find(x => x.symbol === sym && (!acct || x.account === acct)) || holdings.find(x => x.symbol === sym);
     if (!h) return;
     const modal = document.getElementById('sellPositionModal');
     const tEl = document.getElementById('sellPosTicker');
@@ -8961,6 +9048,12 @@ const PortfolioManager = (function() {
     const sharesEl = document.getElementById('sellPosShares');
     const priceEl = document.getElementById('sellPosPrice');
     if (tEl) tEl.value = h.symbol;
+    const acctEl = document.getElementById('sellPosAccount');
+    if (acctEl) acctEl.value = h.account || 'non-registered';
+    const acctShowEl = document.getElementById('sellPosAcctShow');
+    if (acctShowEl) acctShowEl.textContent = h.account || 'non-registered';
+    const dEl = document.getElementById('sellPosDate');
+    if (dEl) dEl.value = new Date().toISOString().slice(0, 10);
     if (heldEl) heldEl.textContent = h.shares.toLocaleString('en-US', { maximumFractionDigits: 4 });
     if (ccyEl) ccyEl.textContent = h.currency;
     if (sharesEl) sharesEl.value = h.shares;
@@ -8986,6 +9079,24 @@ const PortfolioManager = (function() {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once: true });
     else fn();
   }
+  // Transaction-date USD/CAD rate (ITA s.261): today's trades use the live
+  // rate; backdated trades fetch the BoC rate for that date. Falls back to
+  // the live rate FLAGGED estimated when history is unavailable (pre-2017,
+  // offline), so the approximation never masquerades as exact.
+  async function resolveTxnFx(currency, dateISO) {
+    if (currency !== 'USD') return { rate: undefined, estimated: false };
+    const today = new Date().toISOString().slice(0, 10);
+    if (!dateISO || dateISO === today) return { rate: undefined, estimated: false };
+    try {
+      const r = await fetch('/api/fx/usdcad?date=' + encodeURIComponent(dateISO));
+      if (r.ok) {
+        const j = await r.json();
+        if (j && j.rate > 0) return { rate: j.rate, estimated: false };
+      }
+    } catch (e) {}
+    return { rate: undefined, estimated: true };
+  }
+
   function wireModals() {
     // Add-position: cost hint inputs
     ['modalPosTicker', 'modalPosShares', 'modalPosCost', 'modalPosCurrency'].forEach(id => {
@@ -8997,13 +9108,17 @@ const PortfolioManager = (function() {
     // Add-position: confirm
     const modalAddBtn = document.getElementById('modalAddPosBtn');
     if (modalAddBtn) {
-      modalAddBtn.addEventListener('click', () => {
+      modalAddBtn.addEventListener('click', async () => {
         const ticker = document.getElementById('modalPosTicker').value.trim().toUpperCase();
         const shares = parseFloat(document.getElementById('modalPosShares').value);
         const cost = parseFloat(document.getElementById('modalPosCost').value);
         if (!ticker || isNaN(shares) || shares <= 0 || isNaN(cost) || cost <= 0) return;
         const currency = currentAddCurrency();
-        PortfolioManager.addPosition(ticker, shares, cost, { currency: currency });
+        const account = (document.getElementById('modalPosAccount') || {}).value || 'non-registered';
+        const date = (document.getElementById('modalPosDate') || {}).value || undefined;
+        const commission = parseFloat((document.getElementById('modalPosCommission') || {}).value) || 0;
+        const fx = await resolveTxnFx(currency, date);
+        PortfolioManager.addPosition(ticker, shares, cost, { currency: currency, account: account, date: date, commission: commission, fxRate: fx.rate, fxEstimated: fx.estimated });
         document.getElementById('modalPosTicker').value = '';
         document.getElementById('modalPosShares').value = '';
         document.getElementById('modalPosCost').value = '';
@@ -9023,17 +9138,25 @@ const PortfolioManager = (function() {
     // Sell: confirm
     const modalSellBtn = document.getElementById('modalSellPosBtn');
     if (modalSellBtn) {
-      modalSellBtn.addEventListener('click', () => {
+      modalSellBtn.addEventListener('click', async () => {
         const ticker = (document.getElementById('sellPosTicker') || {}).value.trim().toUpperCase();
         const shares = parseFloat((document.getElementById('sellPosShares') || {}).value);
         const price = parseFloat((document.getElementById('sellPosPrice') || {}).value);
         if (!ticker || isNaN(shares) || shares <= 0 || isNaN(price) || price < 0) return;
-        const res = PortfolioManager.sellPosition(ticker, shares, price);
+        const account = (document.getElementById('sellPosAccount') || {}).value || undefined;
+        const date = (document.getElementById('sellPosDate') || {}).value || undefined;
+        const commission = parseFloat((document.getElementById('sellPosCommission') || {}).value) || 0;
+        const hRow = PortfolioManager.getHoldings().find(x => x.symbol === ticker && (!account || x.account === account));
+        const fx = await resolveTxnFx(hRow ? hRow.currency : 'CAD', date);
+        const res = PortfolioManager.sellPosition(ticker, shares, price, { account: account, date: date, commission: commission, fxRate: fx.rate, fxEstimated: fx.estimated });
         if (res && res.ok) {
           if (typeof showToast === 'function') {
             const g = res.realized;
             const gStr = (g >= 0 ? '+$' : '-$') + Math.abs(g).toFixed(2) + ' CAD';
-            showToast('Sold ' + res.shares + ' ' + ticker + ' - realized ' + gStr, g >= 0 ? 'success' : 'info');
+            showToast(res.registered
+              ? 'Sold ' + res.shares + ' ' + ticker + ' in ' + res.account + ' - ' + gStr + ' (registered, not taxable)'
+              : 'Sold ' + res.shares + ' ' + ticker + ' - realized ' + gStr,
+              g >= 0 ? 'success' : 'info');
           }
         } else if (typeof showToast === 'function') {
           showToast((res && res.error) || 'Sell failed', 'error');
@@ -9152,10 +9275,12 @@ const PortfolioManager = (function() {
           if (!p) return;
           // Replace semantics for already-held symbols: the broker lot becomes
           // the position (the user opted in via the unticked-by-default row).
+          const acct = (document.getElementById('importBrokerAccount') || {}).value || 'non-registered';
           const exists = PortfolioManager.getPositions().some(x => x.symbol === p.symbol);
           if (exists) PortfolioManager.removePosition(p.symbol);
           const ok = PortfolioManager.addPosition(p.symbol, p.qty, p.avgPrice, {
-            currency: p.currency, source: 'broker-import'
+            currency: p.currency, source: 'broker-import', account: acct,
+            fxEstimated: p.currency === 'USD'
           });
           if (ok) imported++;
         });
@@ -9212,6 +9337,8 @@ const PortfolioManager = (function() {
   const addPosBtn = document.getElementById('addPositionBtn');
   if (addPosBtn) {
     addPosBtn.addEventListener('click', () => {
+      const dEl = document.getElementById('modalPosDate');
+      if (dEl && !dEl.value) dEl.value = new Date().toISOString().slice(0, 10);
       const modal = document.getElementById('addPositionModal');
       if (modal) modal.classList.add('active');
     });
@@ -9244,6 +9371,10 @@ const PortfolioManager = (function() {
       setTimeout(origNavHandler, 50);
     });
   });
+
+  // Resolve true transaction-date BoC rates for any estimated/missing FX
+  // stamps once quotes are up (persists once; re-renders via the sync event).
+  PortfolioManager.refreshQuotes().then(() => PortfolioManager.repairFxRates()).catch(() => {});
 
   // A cloud pull replaced the local copy: re-render if the view is open.
   document.addEventListener('gs:portfolio-synced', () => {

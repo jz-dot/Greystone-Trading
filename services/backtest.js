@@ -44,7 +44,14 @@
 
 'use strict';
 
-const FeeModel = require('./fee-model.js');
+// Resolve fee-model in both Node (require) and the browser (window global set by
+// the services/fee-model.js script tag). A bare require() throws in the browser,
+// and the local name must NOT be `FeeModel`: classic browser scripts share one
+// top-level lexical scope, so a top-level `const FeeModel` here would collide with
+// fee-model.js's own `const FeeModel` and syntax-error the whole file.
+const feeModelLib = (typeof require !== 'undefined')
+  ? require('./fee-model.js')
+  : (typeof window !== 'undefined' ? window.FeeModel : undefined);
 
 const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1000;
 
@@ -385,7 +392,7 @@ function runBacktest(params) {
   function feeFor(quantity, price) {
     if (!(quantity > 0) || !(price >= 0)) return 0;
     if (costCfg.broker == null || costCfg.broker === 'none') return 0;
-    const est = FeeModel.estimateTradeCost({
+    const est = feeModelLib.estimateTradeCost({
       broker: costCfg.broker,
       quantity,
       price,

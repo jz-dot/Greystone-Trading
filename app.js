@@ -6677,9 +6677,14 @@ if (document.readyState === 'loading') {
     });
 
     try {
+      var aiHeaders = { 'Content-Type': 'application/json' };
+      try {
+        var aiTok = (typeof SupabaseClient !== 'undefined' && SupabaseClient.getAccessToken) ? SupabaseClient.getAccessToken() : null;
+        if (aiTok) aiHeaders['Authorization'] = 'Bearer ' + aiTok;
+      } catch (e) {}
       var response = await fetch('/api/ai/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: aiHeaders,
         body: JSON.stringify({
           message: text,
           context: context,

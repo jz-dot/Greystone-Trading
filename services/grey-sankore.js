@@ -4,6 +4,17 @@
    ============================================ */
 
 const GreySankore = (function () {
+  // Attach the signed-in user's token so the server can resolve their BYO
+  // Anthropic key (and so requireAuth admits the request).
+  function aiAuthHeaders() {
+    var h = { 'Content-Type': 'application/json' };
+    try {
+      var t = (typeof SupabaseClient !== 'undefined' && SupabaseClient.getAccessToken) ? SupabaseClient.getAccessToken() : null;
+      if (t) h['Authorization'] = 'Bearer ' + t;
+    } catch (e) {}
+    return h;
+  }
+
 
   // ---- Configuration ----
   const MAX_HISTORY = 20;
@@ -215,7 +226,7 @@ const GreySankore = (function () {
     try {
       const response = await fetch('/api/ai/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: aiAuthHeaders(),
         body: JSON.stringify({
           message,
           context: context || gatherContext(),
@@ -317,7 +328,7 @@ const GreySankore = (function () {
 
       const res = await fetch('/api/ai/analyze', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: aiAuthHeaders(),
         body: JSON.stringify({ prompt, type: 'anomaly' })
       });
 
@@ -342,7 +353,7 @@ const GreySankore = (function () {
 
       const res = await fetch('/api/ai/analyze', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: aiAuthHeaders(),
         body: JSON.stringify({ prompt, type: 'value' })
       });
 
@@ -385,7 +396,7 @@ Respond in valid JSON array format only, no markdown:
 
       const res = await fetch('/api/ai/analyze', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: aiAuthHeaders(),
         body: JSON.stringify({ prompt, type: 'insights' })
       });
 
@@ -445,7 +456,7 @@ Respond in valid JSON array format only, no markdown:
     try {
       const res = await fetch('/api/ai/key', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: aiAuthHeaders(),
         body: JSON.stringify({ apiKey: key })
       });
       const data = await res.json();

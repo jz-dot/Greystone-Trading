@@ -267,6 +267,27 @@ async function requireAuth(req, res, next) {
 }
 
 // ============================================
+// OWNER GATE (server-global credentials)
+// ============================================
+
+// requireAuth proves "a valid account". On an open-signup deployment that is
+// NOT enough to touch endpoints backed by SERVER-GLOBAL credentials (the
+// operator's own Questrade/IBKR/Alpaca connections and server-wide keys).
+// requireOwner restricts those to the Supabase user id configured in
+// OWNER_USER_ID. Fails closed when OWNER_USER_ID is unset.
+const OWNER_USER_ID = process.env.OWNER_USER_ID || '';
+
+function requireOwner(req, res, next) {
+  if (!OWNER_USER_ID || !req.user || req.user.id !== OWNER_USER_ID) {
+    return res.status(403).json({
+      error: 'OWNER_ONLY',
+      message: 'This endpoint uses the server operator\'s credentials and is restricted to the configured OWNER_USER_ID.',
+    });
+  }
+  next();
+}
+
+// ============================================
 // ORDER GUARDRAIL + UPSTREAM ERROR HELPERS
 // ============================================
 
@@ -883,7 +904,11 @@ async function resolveAnthropicKey(req) {
       console.warn('[Grey Sankore] BYO key resolution failed; falling back to server key:', e.message);
     }
   }
-  if (anthropicApiKey) return { key: anthropicApiKey, source: 'server' };
+  // Server-key fallback is OWNER-ONLY: on an open-signup deployment a
+  // stranger must bring their own key, never bill the operator.
+  if (anthropicApiKey && OWNER_USER_ID && req.user && req.user.id === OWNER_USER_ID) {
+    return { key: anthropicApiKey, source: 'server' };
+  }
   return { key: null, source: 'none' };
 }
 
@@ -951,7 +976,7 @@ function sseWriteText(res, text) {
 // The browser contract is unchanged: an SSE stream of { type:'text' } events
 // terminated by a [DONE] sentinel. Tool calls happen entirely server-side;
 // only the final assistant text reaches the client.
-app.post('/api/ai/chat', async (req, res) => {
+app.post('/api/ai/chat', requireAuth, async (req, res) => {
   const { message, context, history, systemPrompt } = req.body || {};
 
   // Resolve the key BEFORE any SSE headers so the no-key path can return a
@@ -1041,7 +1066,7 @@ app.post('/api/ai/chat', async (req, res) => {
 });
 
 // POST /api/ai/analyze - Non-streaming analysis (guest-accessible, rate limited)
-app.post('/api/ai/analyze', async (req, res) => {
+app.post('/api/ai/analyze', requireAuth, async (req, res) => {
   const { prompt, type } = req.body || {};
 
   const resolved = await resolveAnthropicKey(req);
@@ -1075,7 +1100,7 @@ app.post('/api/ai/analyze', async (req, res) => {
 });
 
 // POST /api/ai/key - Set API key (authenticated: writes a server-global key)
-app.post('/api/ai/key', authLimiter, requireAuth, (req, res) => {
+app.post('/api/ai/key', authLimiter, requireAuth, requireOwner, (req, res) => {
   const { apiKey } = req.body;
   if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 10) {
     return res.status(400).json({ error: 'Invalid API key format' });
@@ -1150,7 +1175,6 @@ app.get('/api/health', (req, res) => {
     paperMode: ALPACA_PAPER_MODE,
     alpacaConfigured: ALPACA_API_KEY.length > 0 && ALPACA_API_SECRET.length > 0,
     ibkrConfigured: IBKR_ACCOUNT_ID.length > 0,
-    ibkrGateway: IBKR_GATEWAY_URL,
     questradeConfigured: QUESTRADE_ACCOUNT_ID.length > 0,
     supabaseConfigured: !!SUPABASE_URL && !!SUPABASE_ANON_KEY,
     timestamp: new Date().toISOString(),
@@ -1166,13 +1190,10 @@ app.get('/api/broker/status', (req, res) => {
     },
     questrade: {
       configured: QUESTRADE_ACCOUNT_ID.length > 0,
-      accountId: QUESTRADE_ACCOUNT_ID || null,
       authenticated: !!questradeAccessToken,
     },
     ibkr: {
       configured: IBKR_ACCOUNT_ID.length > 0,
-      accountId: IBKR_ACCOUNT_ID || null,
-      gatewayUrl: IBKR_GATEWAY_URL,
     },
     routing: {
       usEquities: 'alpaca',
@@ -1187,7 +1208,7 @@ app.get('/api/broker/status', (req, res) => {
 });
 
 // --- Alpaca proxy: Account --- (account data requires auth)
-app.get('/api/alpaca/account', requireAuth, async (req, res) => {
+app.get('/api/alpaca/account', requireAuth, requireOwner, async (req, res) => {
   if (!ALPACA_API_KEY) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Alpaca API keys not set on server.' });
   }
@@ -1204,7 +1225,7 @@ app.get('/api/alpaca/account', requireAuth, async (req, res) => {
 });
 
 // --- Alpaca proxy: Positions --- (account data requires auth)
-app.get('/api/alpaca/positions', requireAuth, async (req, res) => {
+app.get('/api/alpaca/positions', requireAuth, requireOwner, async (req, res) => {
   if (!ALPACA_API_KEY) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Alpaca API keys not set on server.' });
   }
@@ -1221,7 +1242,7 @@ app.get('/api/alpaca/positions', requireAuth, async (req, res) => {
 });
 
 // --- Alpaca proxy: Place Order --- (requires auth)
-app.post('/api/alpaca/order', requireAuth, async (req, res) => {
+app.post('/api/alpaca/order', requireAuth, requireOwner, async (req, res) => {
   if (!ALPACA_API_KEY) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Alpaca API keys not set on server.' });
   }
@@ -1260,7 +1281,7 @@ app.post('/api/alpaca/order', requireAuth, async (req, res) => {
 });
 
 // --- Alpaca proxy: Cancel Order --- (requires auth)
-app.delete('/api/alpaca/order/:id', requireAuth, async (req, res) => {
+app.delete('/api/alpaca/order/:id', requireAuth, requireOwner, async (req, res) => {
   if (!ALPACA_API_KEY) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Alpaca API keys not set on server.' });
   }
@@ -1278,7 +1299,7 @@ app.delete('/api/alpaca/order/:id', requireAuth, async (req, res) => {
 });
 
 // --- Alpaca proxy: List Orders --- (account data requires auth)
-app.get('/api/alpaca/orders', requireAuth, async (req, res) => {
+app.get('/api/alpaca/orders', requireAuth, requireOwner, async (req, res) => {
   if (!ALPACA_API_KEY) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Alpaca API keys not set on server.' });
   }
@@ -1344,7 +1365,7 @@ app.get('/api/ibkr/auth/status', async (req, res) => {
 });
 
 // --- IBKR: Keep session alive ---
-app.post('/api/ibkr/tickle', async (req, res) => {
+app.post('/api/ibkr/tickle', requireAuth, async (req, res) => {
   try {
     const data = await ibkrFetch('POST', '/tickle');
     res.json(data);
@@ -1354,7 +1375,7 @@ app.post('/api/ibkr/tickle', async (req, res) => {
 });
 
 // --- IBKR: Accounts --- (account data requires auth)
-app.get('/api/ibkr/accounts', requireAuth, async (req, res) => {
+app.get('/api/ibkr/accounts', requireAuth, requireOwner, async (req, res) => {
   if (!IBKR_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
   }
@@ -1367,7 +1388,7 @@ app.get('/api/ibkr/accounts', requireAuth, async (req, res) => {
 });
 
 // --- IBKR: Account summary --- (account data requires auth)
-app.get('/api/ibkr/account/summary', requireAuth, async (req, res) => {
+app.get('/api/ibkr/account/summary', requireAuth, requireOwner, async (req, res) => {
   if (!IBKR_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
   }
@@ -1380,7 +1401,7 @@ app.get('/api/ibkr/account/summary', requireAuth, async (req, res) => {
 });
 
 // --- IBKR: Positions --- (account data requires auth)
-app.get('/api/ibkr/positions', requireAuth, async (req, res) => {
+app.get('/api/ibkr/positions', requireAuth, requireOwner, async (req, res) => {
   if (!IBKR_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
   }
@@ -1394,7 +1415,7 @@ app.get('/api/ibkr/positions', requireAuth, async (req, res) => {
 });
 
 // --- IBKR: Place Order --- (requires auth)
-app.post('/api/ibkr/order', requireAuth, async (req, res) => {
+app.post('/api/ibkr/order', requireAuth, requireOwner, async (req, res) => {
   if (!IBKR_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
   }
@@ -1435,7 +1456,7 @@ app.post('/api/ibkr/order', requireAuth, async (req, res) => {
 });
 
 // --- IBKR: Confirm order reply --- (requires auth)
-app.post('/api/ibkr/order/reply/:replyId', requireAuth, async (req, res) => {
+app.post('/api/ibkr/order/reply/:replyId', requireAuth, requireOwner, async (req, res) => {
   try {
     const data = await ibkrFetch('POST', '/iserver/reply/' + req.params.replyId, {
       confirmed: req.body.confirmed !== false,
@@ -1447,7 +1468,7 @@ app.post('/api/ibkr/order/reply/:replyId', requireAuth, async (req, res) => {
 });
 
 // --- IBKR: Cancel Order --- (requires auth)
-app.delete('/api/ibkr/order/:id', requireAuth, async (req, res) => {
+app.delete('/api/ibkr/order/:id', requireAuth, requireOwner, async (req, res) => {
   if (!IBKR_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
   }
@@ -1460,7 +1481,7 @@ app.delete('/api/ibkr/order/:id', requireAuth, async (req, res) => {
 });
 
 // --- IBKR: List Orders --- (account data requires auth)
-app.get('/api/ibkr/orders', requireAuth, async (req, res) => {
+app.get('/api/ibkr/orders', requireAuth, requireOwner, async (req, res) => {
   if (!IBKR_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'IBKR account ID not set on server.' });
   }
@@ -1473,7 +1494,7 @@ app.get('/api/ibkr/orders', requireAuth, async (req, res) => {
 });
 
 // --- IBKR: Contract search (for international symbols) ---
-app.get('/api/ibkr/search', async (req, res) => {
+app.get('/api/ibkr/search', requireAuth, async (req, res) => {
   const symbol = req.query.symbol;
   if (!symbol) return res.status(400).json({ error: 'Missing symbol parameter' });
   try {
@@ -1485,7 +1506,7 @@ app.get('/api/ibkr/search', async (req, res) => {
 });
 
 // --- IBKR: Market data snapshot ---
-app.get('/api/ibkr/snapshot', async (req, res) => {
+app.get('/api/ibkr/snapshot', requireAuth, async (req, res) => {
   const conids = req.query.conids;
   if (!conids) return res.status(400).json({ error: 'Missing conids parameter' });
   try {
@@ -1498,7 +1519,7 @@ app.get('/api/ibkr/snapshot', async (req, res) => {
 });
 
 // --- IBKR: Historical data ---
-app.get('/api/ibkr/history', async (req, res) => {
+app.get('/api/ibkr/history', requireAuth, async (req, res) => {
   const { conid, period, bar } = req.query;
   if (!conid) return res.status(400).json({ error: 'Missing conid parameter' });
   try {
@@ -1511,7 +1532,7 @@ app.get('/api/ibkr/history', async (req, res) => {
 });
 
 // --- IBKR: Options chain ---
-app.get('/api/ibkr/options/strikes', async (req, res) => {
+app.get('/api/ibkr/options/strikes', requireAuth, async (req, res) => {
   const { conid, month, exchange } = req.query;
   if (!conid) return res.status(400).json({ error: 'Missing conid parameter' });
   try {
@@ -1526,7 +1547,7 @@ app.get('/api/ibkr/options/strikes', async (req, res) => {
 });
 
 // --- IBKR: FX rates ---
-app.get('/api/ibkr/fx', async (req, res) => {
+app.get('/api/ibkr/fx', requireAuth, async (req, res) => {
   const { from, to } = req.query;
   if (!from || !to) return res.status(400).json({ error: 'Missing from/to parameters' });
   try {
@@ -1618,16 +1639,15 @@ if (questradeRefreshToken) {
 
 // --- Questrade: Auth status ---
 app.get('/api/questrade/auth/status', (req, res) => {
+  // Public shape intentionally omits account id and API server host.
   res.json({
     configured: !!questradeRefreshToken,
     authenticated: !!questradeAccessToken,
-    accountId: QUESTRADE_ACCOUNT_ID || null,
-    apiServer: questradeApiServer || null,
   });
 });
 
 // --- Questrade: Refresh auth ---
-app.post('/api/questrade/auth/refresh', async (req, res) => {
+app.post('/api/questrade/auth/refresh', requireAuth, requireOwner, async (req, res) => {
   if (!questradeRefreshToken) {
     return res.status(400).json({ error: 'No refresh token configured' });
   }
@@ -1640,7 +1660,7 @@ app.post('/api/questrade/auth/refresh', async (req, res) => {
 });
 
 // --- Questrade: Accounts --- (account data requires auth)
-app.get('/api/questrade/accounts', requireAuth, async (req, res) => {
+app.get('/api/questrade/accounts', requireAuth, requireOwner, async (req, res) => {
   if (!QUESTRADE_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
   }
@@ -1653,7 +1673,7 @@ app.get('/api/questrade/accounts', requireAuth, async (req, res) => {
 });
 
 // --- Questrade: Account balances --- (account data requires auth)
-app.get('/api/questrade/account/balances', requireAuth, async (req, res) => {
+app.get('/api/questrade/account/balances', requireAuth, requireOwner, async (req, res) => {
   if (!QUESTRADE_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
   }
@@ -1666,7 +1686,7 @@ app.get('/api/questrade/account/balances', requireAuth, async (req, res) => {
 });
 
 // --- Questrade: Positions --- (account data requires auth)
-app.get('/api/questrade/positions', requireAuth, async (req, res) => {
+app.get('/api/questrade/positions', requireAuth, requireOwner, async (req, res) => {
   if (!QUESTRADE_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
   }
@@ -1679,7 +1699,7 @@ app.get('/api/questrade/positions', requireAuth, async (req, res) => {
 });
 
 // --- Questrade: Place Order --- (requires auth)
-app.post('/api/questrade/order', requireAuth, async (req, res) => {
+app.post('/api/questrade/order', requireAuth, requireOwner, async (req, res) => {
   if (!QUESTRADE_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
   }
@@ -1718,7 +1738,7 @@ app.post('/api/questrade/order', requireAuth, async (req, res) => {
 });
 
 // --- Questrade: Cancel Order --- (requires auth)
-app.delete('/api/questrade/order/:id', requireAuth, async (req, res) => {
+app.delete('/api/questrade/order/:id', requireAuth, requireOwner, async (req, res) => {
   if (!QUESTRADE_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
   }
@@ -1731,7 +1751,7 @@ app.delete('/api/questrade/order/:id', requireAuth, async (req, res) => {
 });
 
 // --- Questrade: List Orders --- (account data requires auth)
-app.get('/api/questrade/orders', requireAuth, async (req, res) => {
+app.get('/api/questrade/orders', requireAuth, requireOwner, async (req, res) => {
   if (!QUESTRADE_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
   }
@@ -1745,7 +1765,7 @@ app.get('/api/questrade/orders', requireAuth, async (req, res) => {
 });
 
 // --- Questrade: Symbol search ---
-app.get('/api/questrade/symbols/search', async (req, res) => {
+app.get('/api/questrade/symbols/search', requireAuth, async (req, res) => {
   var prefix = req.query.prefix;
   if (!prefix) return res.status(400).json({ error: 'Missing prefix parameter' });
   try {
@@ -1757,7 +1777,7 @@ app.get('/api/questrade/symbols/search', async (req, res) => {
 });
 
 // --- Questrade: Executions (trade history) --- (account data requires auth)
-app.get('/api/questrade/executions', requireAuth, async (req, res) => {
+app.get('/api/questrade/executions', requireAuth, requireOwner, async (req, res) => {
   if (!QUESTRADE_ACCOUNT_ID) {
     return res.json({ error: 'NOT_CONFIGURED', message: 'Questrade account ID not set.' });
   }
@@ -1783,7 +1803,7 @@ app.get('/api/questrade/executions', requireAuth, async (req, res) => {
 // GET /api/broker/import/preview?broker=questrade|ibkr
 // Returns the broker's current positions normalized for the portfolio
 // tracker's import flow. Strictly read-only: no order paths are touched.
-app.get('/api/broker/import/preview', requireAuth, async (req, res) => {
+app.get('/api/broker/import/preview', requireAuth, requireOwner, async (req, res) => {
   const broker = String(req.query.broker || '').toLowerCase();
   try {
     if (broker === 'questrade') {
@@ -1837,7 +1857,7 @@ app.get('/api/bigdata/status', async (req, res) => {
 });
 
 // POST /api/bigdata/key - Save BigData API key (authenticated: server-global key)
-app.post('/api/bigdata/key', authLimiter, requireAuth, (req, res) => {
+app.post('/api/bigdata/key', authLimiter, requireAuth, requireOwner, (req, res) => {
   const { apiKey } = req.body;
   if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 10) {
     return res.status(400).json({ error: 'Invalid API key format' });
@@ -2186,6 +2206,12 @@ app.post('/api/user/api-keys', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'credential_type and encrypted_key are required' });
   }
 
+  // Fail CLOSED: never persist a user secret unencrypted. Without a usable
+  // MASTER_KEY, refuse the write instead of storing plaintext.
+  if (!getMasterKeyBuffer()) {
+    return res.status(503).json({ error: 'ENCRYPTION_UNAVAILABLE', message: 'MASTER_KEY is not configured on this server; refusing to store secrets.' });
+  }
+
   try {
     // Encrypt at rest with the server MASTER_KEY (AES-256-GCM). The client
     // sends the raw secret in these fields; the column stores real ciphertext.
@@ -2373,7 +2399,7 @@ app.get('/api/paper/orders', function (req, res) {
 // { maxOrderNotional, maxPositionPct, maxDailyLossPct, ... }); only known,
 // well-typed fields are honored, everything else falls back to the derived
 // defaults (30% notional + DEFAULT_LIMITS percentages).
-app.post('/api/paper/reset', async function (req, res) {
+app.post('/api/paper/reset', requireAuth, async function (req, res) {
   const body = req.body || {};
   try {
     const result = await paperBroker.reset(paperSessionId(req), {
@@ -2391,7 +2417,7 @@ app.post('/api/paper/reset', async function (req, res) {
 // Engages this session's kill switch (services/risk-guardrails). A halted
 // session then rejects ALL orders via checkOrder's kill_switch rule until
 // /resume. No auth (fake money); rate-limited by the general /api/ limiter.
-app.post('/api/paper/halt', function (req, res) {
+app.post('/api/paper/halt', requireAuth, function (req, res) {
   const body = req.body || {};
   try {
     const reason = (body.reason && String(body.reason).trim())
@@ -2407,7 +2433,7 @@ app.post('/api/paper/halt', function (req, res) {
 
 // POST /api/paper/resume  [X-Session-Id] -> { halted:false }
 // Releases this session's kill switch (deliberate human action; never automatic).
-app.post('/api/paper/resume', function (req, res) {
+app.post('/api/paper/resume', requireAuth, function (req, res) {
   try {
     const result = paperBroker.resume(paperSessionId(req));
     res.json(result);

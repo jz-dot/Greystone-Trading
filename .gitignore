@@ -3,3 +3,5 @@ node_modules/
 .mcp.json
 .env
 supabase/.temp/
+.vercel
+.env*

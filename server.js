@@ -2462,7 +2462,11 @@ process.on('uncaughtException', function (err) {
   console.error('[Server] Uncaught exception:', err && err.stack ? err.stack : err);
 });
 
-app.listen(PORT, function () {
+// Export the app for serverless hosts (Vercel wraps it via api/index.js) and
+// for tests; listen only when run directly (npm start / node server.js).
+module.exports = app;
+
+if (require.main === module) app.listen(PORT, function () {
   console.log('');
   console.log('  GREYSTONE TRADING PLATFORM');
   console.log('  Server running at http://localhost:' + PORT);

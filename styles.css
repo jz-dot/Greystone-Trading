@@ -5651,6 +5651,9 @@ kbd {
   /* Settings slide-out spans the phone, exit handle stays on screen */
   .settings-panel-slideout { left: -100vw; width: calc(100vw - 44px); }
   .settings-panel-slideout.open { left: 0; }
+  /* The floating gold expand tab duplicates the Settings tab in the
+     bottom bar and would hover over content on phones - hide it */
+  .sp-expand-tab { display: none; }
 
   /* ---- View headers stack: title above actions ---- */
   .view-header { flex-direction: column; align-items: stretch; gap: 10px; }
@@ -5764,5 +5767,7 @@ kbd {
   .topbar { gap: 8px; }
   .topbar-right { gap: 6px; }
   .market-status { display: none; }
+  /* Too narrow for a readable scrolling ticker - hide it cleanly */
+  .topbar-ticker { display: none; }
   .fundamentals-grid { grid-template-columns: repeat(2, 1fr); }
 }

@@ -87,12 +87,14 @@ test('compareAnnualCosts: ascending order, vsCheapest non-negative and zero at t
 });
 
 test('fxStory: drag math and honest gambit friction', () => {
+  const FM = require('../services/fee-model.js');
   const p = FX.buildProfile(HOLDINGS, { tradesPerYear: 20 }); // 12 USD trades x 2000 = 24000
-  const s = FX.fxStory(p, 'rbc'); // 1.5%
+  const s = FX.fxStory(p, 'rbc');
+  const expectedDrag = Math.round(24000 * FM.BROKERS.rbc.fx.ratePct) / 100;
   assert.strictEqual(s.volumeCad, 24000);
-  assert.strictEqual(s.dragAtBroker, 360);
+  assert.strictEqual(s.dragAtBroker, expectedDrag);
   assert.strictEqual(s.gambitCost, Math.round((2 * 9.99 + 24) * 100) / 100);
-  assert.ok(Math.abs(s.gambitSavings - (360 - s.gambitCost)) < 0.01);
+  assert.ok(Math.abs(s.gambitSavings - (expectedDrag - s.gambitCost)) < 0.01);
   assert.strictEqual(s.gambitWorthIt, true);
 });
 

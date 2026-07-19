@@ -71,17 +71,17 @@ const BROKERS = {
     name: 'National Bank Direct (NBDB)',
     stockCommission: { type: 'flat', amount: 0, note: 'Commission-free stocks, ETFs and options base since 2021.', verify: false },
     optionsFee: { base: 0, perContract: 1.25, minimum: 6.25, currency: 'CAD', note: '$1.25 per contract, minimum $6.25 per trade.', verify: true },
-    fx: { ratePct: 1.5, minCost: 0, type: 'spread', note: 'Bank retail conversion spread, roughly 1.5% or more. Norberts Gambit popular here.', verify: true },
+    fx: { ratePct: 1.70, minCost: 0, type: 'spread', note: 'PUBLISHED tiered: 1.70% under $25k, 1.20% to $250k, down to 0.60% at $1M+ (schedule dated Jun 2025).', verify: false },
     accountFees: 'No commission but standard registered-account admin fees may apply.',
   },
 
   qtrade: {
     id: 'qtrade',
     name: 'Qtrade Direct Investing',
-    stockCommission: { type: 'flat', amount: 8.75, note: '$8.75 per equity trade; 100+ ETFs trade free. Verify tier.', verify: true },
-    optionsFee: { base: 8.75, perContract: 1.25, minimum: 8.75, currency: 'CAD', note: '$8.75 + $1.25 per contract. Verify.', verify: true },
-    fx: { ratePct: 1.5, minCost: 0, type: 'spread', note: 'Roughly 1.5% conversion; USD accounts available.', verify: true },
-    accountFees: 'Quarterly admin fee unless balance or activity minimums met.',
+    stockCommission: { type: 'flat', amount: 0, note: '$0 all markets since Oct 2025 (verified Jul 2026, qtrade.ca).', verify: false },
+    optionsFee: { base: 0, perContract: 0.75, minimum: 0, currency: 'CAD', note: '$0 base + $0.75/contract, no minimum (Oct 2025 schedule).', verify: false },
+    fx: { ratePct: 1.5, minCost: 0, type: 'spread', note: 'Unpublished markup on spot; secondaries suggest ~0.9-1.9% tiered. 1.5% assumed.', verify: true },
+    accountFees: 'Quarterly admin fee abolished Oct 2025; US$15/quarter on USD registered accounts.',
   },
 
   ibkr: {
@@ -99,22 +99,25 @@ const BROKERS = {
   moomoo: {
     id: 'moomoo',
     name: 'Moomoo Canada',
-    stockCommission: { type: 'flat', amount: 0, note: 'Advertised $0 commission stocks/ETFs. Verify.', verify: true },
-    optionsFee: { base: 0, perContract: 0, minimum: 0, currency: 'CAD', note: 'Options availability and per-contract fee in Canada not confirmed. Verify.', verify: true },
-    // CAUTION: moomoo advertises $0 FX, but a $0 conversion fee typically
-    // means the cost is buried in a widened bid/ask spread. The true cost is
-    // unverified. Do NOT present moomoo as free FX without confirming.
-    fx: { ratePct: 0, minCost: 0, type: 'spread', note: 'CAUTION: $0 advertised, real cost likely embedded in the FX spread and is UNVERIFIED. Do not treat as truly free.', verify: true },
-    accountFees: 'None advertised.',
+    // Verified Jul 2026 (moomoo.com/ca pricing + fee topics): the "$0
+    // commission" headline is a 30-day welcome rebate, NOT the schedule.
+    stockCommission: { type: 'perShare', amount: 0.0099, minimum: 1.99, maxPct: 100, currency: 'USD', note: 'US: US$0.0099/share all-in, min US$1.99/order (CAD: $0.0149/share, min $1.49). The advertised $0 is a 30-day welcome rebate.', verify: false },
+    optionsFee: { base: 0, perContract: 0.65, minimum: 1.0, currency: 'USD', note: 'US$0.65/contract, min US$1/order; platform fee "waived until further notice".', verify: false },
+    // Official wording: "0%* currency exchange fee ... *currently waived until
+    // further notice", executed at the "Moomoo Preferred Rate, a live rate
+    // that includes a spread". The waiver is revocable, the spread embedded
+    // and unpublished; 0.40% is our conservative ESTIMATE.
+    fx: { ratePct: 0.40, minCost: 0, type: 'spread', note: 'ESTIMATE: fee "waived until further notice" but conversion runs at a rate that includes an unpublished spread (~0.3-0.5% assumed).', verify: true },
+    accountFees: 'None; welcome promo rebates commissions for the first 30 days only.',
   },
 
   webull: {
     id: 'webull',
     name: 'Webull Canada',
     stockCommission: { type: 'flat', amount: 0, note: 'Advertised $0 commission stocks/ETFs. Verify.', verify: true },
-    optionsFee: { base: 0, perContract: 0, minimum: 0, currency: 'CAD', note: 'Options availability and per-contract fee in Canada not confirmed. Verify.', verify: true },
-    fx: { ratePct: 1.5, minCost: 0, type: 'spread', note: 'Roughly 1.5% conversion on CAD<->USD. Verify.', verify: true },
-    accountFees: 'None advertised.',
+    optionsFee: { base: 0, perContract: 0.99, minimum: 0, currency: 'USD', note: 'US$0.99/contract standard (the $0 was a 3-month activation promo, verified Jul 2026).', verify: false },
+    fx: { ratePct: 1.5, minCost: 0, type: 'spread', note: 'Published: exchange rate + 1.5% markup; free CAD/USD sub-accounts but conversion still costs 1.5%.', verify: false },
+    accountFees: 'None advertised; equity $0 standing since Apr 2026.',
   },
 
   td: {
@@ -122,7 +125,7 @@ const BROKERS = {
     name: 'TD Direct Investing',
     stockCommission: { type: 'flat', amount: 9.99, note: '$9.99 flat per equity trade.', verify: false },
     optionsFee: { base: 9.99, perContract: 1.25, minimum: 9.99, currency: 'CAD', note: '$9.99 + $1.25 per contract.', verify: true },
-    fx: { ratePct: 1.5, minCost: 0, type: 'spread', note: 'Bank retail conversion spread, roughly 1.5% or more. USD accounts available to avoid.', verify: true },
+    fx: { ratePct: 2.50, minCost: 0, type: 'spread', note: 'ESTIMATE: TD publishes no FX rate; measured retail spreads run ~2.5% on small conversions. USD registered accounts available.', verify: true },
     accountFees: 'Quarterly maintenance fee unless balance minimum (about $15k) met.',
   },
 
@@ -131,8 +134,8 @@ const BROKERS = {
     name: 'RBC Direct Investing',
     stockCommission: { type: 'flat', amount: 9.95, note: '$9.95 flat per equity trade.', verify: false },
     optionsFee: { base: 9.95, perContract: 1.25, minimum: 9.95, currency: 'CAD', note: '$9.95 + $1.25 per contract.', verify: true },
-    fx: { ratePct: 1.5, minCost: 0, type: 'spread', note: 'Bank retail conversion spread, roughly 1.5% or more. USD accounts available to avoid.', verify: true },
-    accountFees: 'Quarterly maintenance fee unless balance minimum (about $15k) met.',
+    fx: { ratePct: 2.30, minCost: 0, type: 'spread', note: 'PUBLISHED tiered spread: ~2.30% under US$25k, scaling to ~0.10% at $2M+ (verified Jul 2026).', verify: false },
+    accountFees: 'Quarterly maintenance fee eliminated for all balances (2026); 50+ ETFs commission-free.',
   },
 
   disnat: {
@@ -140,8 +143,8 @@ const BROKERS = {
     name: 'Desjardins Online Brokerage (Disnat)',
     stockCommission: { type: 'flat', amount: 0, note: 'Commission-free stocks and ETFs since 2021. Verify.', verify: true },
     optionsFee: { base: 0, perContract: 1.25, minimum: 8.75, currency: 'CAD', note: '$1.25 per contract, minimum about $8.75 per trade. Verify.', verify: true },
-    fx: { ratePct: 1.5, minCost: 0, type: 'spread', note: 'Bank retail conversion spread, roughly 1.5%. Verify.', verify: true },
-    accountFees: 'Inactivity fee may apply below activity or balance minimums.',
+    fx: { ratePct: 1.90, minCost: 0, type: 'spread', note: 'PUBLISHED tiered margin 0.15%-1.90% by size; retail-size conversions land near the top band (verified Jul 2026).', verify: false },
+    accountFees: '$30/quarter inactivity, waived by 6+ trades/yr, $15k+ assets, any registered account, or age 18-30.',
   },
 };
 

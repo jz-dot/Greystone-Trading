@@ -240,6 +240,30 @@ app.use('/api/ai/', aiLimiter);
 app.use('/api/auth/', authLimiter);
 
 // ============================================
+// DURABLE SERVER STATE (Supabase, service-role only)
+// ============================================
+// Serverless instances recycle without warning; anything that must survive
+// (the rotating Questrade refresh token, paper-trading sessions) lives in the
+// server_state table. No-ops gracefully when Supabase is not configured.
+
+async function loadServerState(key) {
+  if (!supabaseAdmin) return null;
+  try {
+    const { data } = await supabaseAdmin.from('server_state').select('value').eq('key', key).maybeSingle();
+    return data ? data.value : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveServerState(key, value) {
+  if (!supabaseAdmin) return Promise.resolve(false);
+  return supabaseAdmin.from('server_state')
+    .upsert({ key: key, value: value, updated_at: new Date().toISOString() })
+    .then(() => true, (e) => { console.warn('[State] save failed (' + key + '):', e.message); return false; });
+}
+
+// ============================================
 // AUTH MIDDLEWARE
 // ============================================
 
@@ -1589,6 +1613,9 @@ async function questradeRefresh() {
   const data = await resp.json();
   questradeAccessToken = data.access_token;
   questradeRefreshToken = data.refresh_token; // Questrade issues a new refresh token each time
+  // The token is SINGLE-USE: losing the rotation (restart, redeploy, second
+  // instance) permanently bricks auth until a human provisions a new one.
+  saveServerState('questrade_refresh_token', { token: data.refresh_token, rotatedAt: new Date().toISOString() });
   questradeApiServer = data.api_server; // e.g., https://api01.iq.questrade.com/
   console.log('[Questrade] Authenticated. API server: ' + questradeApiServer);
   return data;
@@ -1632,11 +1659,16 @@ async function questradeFetch(method, path, body) {
 }
 
 // Auto-authenticate on startup if refresh token is configured
-if (questradeRefreshToken) {
+(async function initQuestradeAuth() {
+  if (!questradeRefreshToken) return;
+  // Prefer the persisted rotated token: the env value is a first-boot seed
+  // that is consumed on its first use.
+  const stored = await loadServerState('questrade_refresh_token');
+  if (stored && stored.token) questradeRefreshToken = stored.token;
   questradeRefresh().catch(function (err) {
     console.warn('[Questrade] Auto-auth failed:', err.message);
   });
-}
+})();
 
 // --- Questrade: Auth status ---
 app.get('/api/questrade/auth/status', (req, res) => {
@@ -2384,6 +2416,20 @@ function paperSessionId(req) {
 // POST /api/paper/order
 // body { symbol, side:'buy'|'sell', qty, type:'market'|'limit', limitPrice? }
 // -> { orderId, status:'filled'|'working'|'rejected', fillPrice, cost, message, account }
+// Persist paper sessions AWAITED inside mutation routes: a serverless
+// instance can freeze the moment the response is sent, so fire-and-forget
+// timers never run. ~50ms of latency buys sessions that survive recycling.
+async function persistPaperState() {
+  try { await saveServerState('paper_state', paperBroker.snapshot()); } catch (e) {}
+}
+(async function restorePaperState() {
+  const stored = await loadServerState('paper_state');
+  if (stored) {
+    const n = paperBroker.restore(stored);
+    if (n) console.log('[Paper] Restored ' + n + ' paper session(s) from durable state.');
+  }
+})();
+
 app.post('/api/paper/order', async function (req, res) {
   const body = req.body || {};
   try {
@@ -2394,6 +2440,7 @@ app.post('/api/paper/order', async function (req, res) {
     // Rejections (bad input, unknown symbol, insufficient funds, halt, cap)
     // come back as a clean 400 carrying the same response shape.
     if (result.status === 'rejected') return res.status(400).json(result);
+    await persistPaperState();
     res.json(result);
   } catch (err) {
     console.error('[Paper] order error:', err && err.stack ? err.stack : err);
@@ -2434,6 +2481,7 @@ app.post('/api/paper/reset', requireAuth, async function (req, res) {
       initialCash: body.initialCash,
       limits: body.limits,
     });
+    await persistPaperState();
     res.json(result);
   } catch (err) {
     console.error('[Paper] reset error:', err && err.stack ? err.stack : err);
@@ -2452,7 +2500,7 @@ app.post('/api/paper/halt', requireAuth, function (req, res) {
       ? String(body.reason).trim()
       : 'Manually halted by operator.';
     const result = paperBroker.halt(paperSessionId(req), reason);
-    res.json(result);
+    persistPaperState().then(() => res.json(result));
   } catch (err) {
     console.error('[Paper] halt error:', err && err.stack ? err.stack : err);
     res.status(500).json({ error: 'PAPER_ERROR', message: 'Could not halt the paper session.' });
@@ -2464,7 +2512,7 @@ app.post('/api/paper/halt', requireAuth, function (req, res) {
 app.post('/api/paper/resume', requireAuth, function (req, res) {
   try {
     const result = paperBroker.resume(paperSessionId(req));
-    res.json(result);
+    persistPaperState().then(() => res.json(result));
   } catch (err) {
     console.error('[Paper] resume error:', err && err.stack ? err.stack : err);
     res.status(500).json({ error: 'PAPER_ERROR', message: 'Could not resume the paper session.' });

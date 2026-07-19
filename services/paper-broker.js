@@ -242,6 +242,31 @@ class PaperBroker {
     };
   }
 
+  // ---- Durability (serverless hosts recycle processes) ----
+  // Plain-JSON snapshot of every session (positions Map flattened) and its
+  // inverse. Restoring preserves risk state, kill switches, and order history.
+  snapshot() {
+    const sessions = {};
+    this.accounts.forEach((acct, id) => {
+      sessions[id] = Object.assign({}, acct, { positions: Array.from(acct.positions.entries()) });
+    });
+    return { orderSeq: this._orderSeq, sessions: sessions };
+  }
+
+  restore(data) {
+    if (!data || typeof data !== 'object' || !data.sessions) return 0;
+    if (typeof data.orderSeq === 'number' && data.orderSeq > this._orderSeq) this._orderSeq = data.orderSeq;
+    let n = 0;
+    Object.keys(data.sessions).forEach(id => {
+      const s = data.sessions[id];
+      if (!s || typeof s !== 'object') return;
+      const acct = Object.assign({}, s, { positions: new Map(Array.isArray(s.positions) ? s.positions : []) });
+      this.accounts.set(id, acct);
+      n++;
+    });
+    return n;
+  }
+
   // Roll the daily-loss baseline forward when the calendar day advances. Does
   // NOT release a kill switch (a human must do that deliberately).
   _maybeStartNewDay(account, equity, timestamp) {

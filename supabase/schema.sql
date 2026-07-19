@@ -170,3 +170,13 @@ CREATE OR REPLACE TRIGGER on_auth_user_created
 
 CREATE INDEX IF NOT EXISTS idx_watchlists_user_id ON watchlists(user_id);
 CREATE INDEX IF NOT EXISTS idx_api_credentials_user_id ON api_credentials(user_id);
+
+-- Durable server state (service-role only: RLS enabled with NO policies, so
+-- only the server's service-role client can read or write). Holds the
+-- rotating Questrade refresh token and paper-trading session snapshots.
+CREATE TABLE IF NOT EXISTS server_state (
+  key TEXT PRIMARY KEY,
+  value JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+ALTER TABLE server_state ENABLE ROW LEVEL SECURITY;

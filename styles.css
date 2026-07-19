@@ -5574,3 +5574,195 @@ kbd {
   padding: 8px 14px; border-radius: 6px; margin-bottom: 14px;
   display: flex; align-items: center;
 }
+
+
+/* ============================================================
+   MOBILE (max-width: 768px) - appended pass, wave10.
+   Desktop rules above are untouched; everything in this section
+   is scoped to max-width media queries only.
+   ============================================================ */
+@media (max-width: 768px) {
+
+  /* ---- Global guards: the page itself never scrolls sideways ---- */
+  html, body { overflow-x: hidden; }
+
+  /* ---- Topbar: compact logo + clock, ticker shrinks gracefully ---- */
+  .topbar { padding: 0 10px; gap: 10px; }
+  .logo { gap: 0; }
+  .logo-text { display: none; }
+  .topbar-ticker { min-width: 0; }
+  .topbar-right { gap: 8px; }
+  .market-status .status-text { display: none; }
+  .topbar-time { font-size: 11px; }
+  .kill-switch-btn { padding: 5px 9px; font-size: 10px; }
+
+  /* Topbar dropdowns pin to the viewport instead of overhanging it */
+  .claude-chat-panel {
+    position: fixed; top: 56px; left: 12px; right: 12px;
+    width: auto;
+  }
+  .claude-chat-panel.open { max-height: min(500px, 72vh); }
+  .alerts-dropdown {
+    position: fixed; top: 56px; left: 12px; right: 12px;
+    width: auto;
+  }
+
+  /* ---- Sidebar becomes a fixed bottom tab bar ---- */
+  .sidebar {
+    position: fixed;
+    top: auto; left: 0; right: 0; bottom: 0;
+    width: 100%; height: auto;
+    flex-direction: row;
+    align-items: stretch;
+    padding: 4px 4px calc(4px + env(safe-area-inset-bottom, 0px));
+    border-right: none;
+    border-top: 1px solid var(--border);
+    z-index: 480; /* under the settings slide-out (500) and modals */
+  }
+  .sidebar-nav {
+    flex-direction: row;
+    flex: 1;
+    gap: 0;
+    padding: 0;
+    min-width: 0;
+  }
+  .sidebar-bottom { display: flex; padding: 0; }
+  .nav-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 44px;
+    padding: 6px 0;
+    gap: 0;
+    justify-content: center;
+  }
+  .nav-btn span { display: none; } /* icons only on phones */
+  .nav-btn.active::before {
+    left: 50%; top: -4px; transform: translateX(-50%);
+    width: 22px; height: 3px;
+    border-radius: 0 0 2px 2px;
+  }
+  .sidebar-bottom .nav-btn { min-width: 44px; }
+
+  /* Main content clears the bottom tab bar */
+  .main-content {
+    padding: 12px 12px calc(74px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Settings slide-out spans the phone, exit handle stays on screen */
+  .settings-panel-slideout { left: -100vw; width: calc(100vw - 44px); }
+  .settings-panel-slideout.open { left: 0; }
+
+  /* ---- View headers stack: title above actions ---- */
+  .view-header { flex-direction: column; align-items: stretch; gap: 10px; }
+  .view-title h1 { font-size: 18px; }
+  .view-actions { justify-content: flex-start; }
+
+  /* ---- Single-column stacks ---- */
+  .metric-cards { flex-direction: column; overflow-x: visible; }
+  .metric-card { min-width: 0; }
+  .dashboard-grid,
+  .dashboard-bottom-grid,
+  .dashboard-news-grid,
+  .pf-summary-cards,
+  .pf-charts-row,
+  .fxr-cards,
+  .options-bottom-row,
+  .flow-bottom-grid,
+  .risk-grid,
+  .risk-gauges-row,
+  .agents-grid,
+  .settings-grid,
+  .deploy-strategies,
+  .deploy-row-2col,
+  .journal-form-row,
+  .journal-breakdown-row,
+  .journal-detail-grid,
+  .gs-analysis-grid,
+  .gs-modal-grid,
+  .gs-modal-valuation,
+  .gs-modal-technicals,
+  .company-details-row,
+  .ot-account-grid { grid-template-columns: 1fr; }
+  .gs-model-stats { flex-direction: column; }
+
+  /* Small stat tiles read better two-up than one long column */
+  .risk-overview,
+  .greeks-grid,
+  .stress-test-grid,
+  .sizer-inputs,
+  .sizer-results,
+  .journal-stats-row,
+  .ob-profile-cards { grid-template-columns: repeat(2, 1fr); }
+  .fundamentals-grid { grid-template-columns: repeat(3, 1fr); }
+
+  /* ---- Fee X-Ray hero stacks, number scales down ---- */
+  .fxr-hero { flex-direction: column; align-items: stretch; gap: 16px; padding: 18px 16px; }
+  .fxr-hero-number { font-size: 34px; }
+  .fxr-hero-controls { gap: 10px; }
+  .fxr-hero-controls .auth-field { flex: 1 1 140px; min-width: 130px; }
+
+  /* ---- Wide tables scroll inside their own containers ---- */
+  .pf-table-wrap,
+  .journal-entries-list,
+  .pf-activity-list,
+  .scenario-table,
+  .signal-queue-body,
+  .execution-log-body:not(.collapsed),
+  .strategy-legs,
+  .flow-feed,
+  .dark-pool-feed,
+  .hot-contracts,
+  #importBrokerTableWrap,
+  .options-chain-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .pf-table { min-width: 720px; }
+  .pf-import-table { min-width: 560px; }
+  .pf-activity-item { min-width: 460px; }
+  .flow-header-row, .flow-row { min-width: 760px; }
+  .dp-header-row, .dp-row { min-width: 560px; }
+  .hc-row { min-width: 460px; }
+  .scenario-header, .scenario-row { min-width: 520px; }
+  .signal-row { min-width: 700px; }
+  .exec-log-table-header, .exec-log-row { min-width: 620px; }
+  .strategy-legs-header, .strategy-leg-row { min-width: 480px; }
+  .options-chain-container .calls-side,
+  .options-chain-container .puts-side { min-width: 300px; }
+
+  /* ---- Modals: near-full-width with internal scroll ---- */
+  .modal-content,
+  .modal-content.modal-logs,
+  .modal-content.modal-confirm {
+    width: calc(100vw - 24px);
+    max-width: calc(100vw - 24px);
+    max-height: 88vh;
+  }
+
+  /* ---- Landing page ---- */
+  .landing-content { width: 100%; padding: 0 20px; }
+  .landing-logo { margin-bottom: 32px; }
+  .landing-headline { font-size: 34px; letter-spacing: -1px; }
+  .landing-tagline { font-size: 14px; margin-bottom: 36px; }
+  .landing-stats { flex-wrap: wrap; gap: 18px 28px; margin-bottom: 36px; }
+  .landing-stat-divider { display: none; }
+  .ls-value { font-size: 22px; }
+  .landing-footer { flex-wrap: wrap; gap: 8px; margin-top: 32px; padding: 0 12px; text-align: center; }
+
+  /* ---- Auth screen ---- */
+  .auth-container {
+    max-width: calc(100vw - 32px);
+    margin: 16px;
+    padding: 28px 22px;
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+  }
+}
+
+/* Extra-small phones: tighten the topbar further */
+@media (max-width: 480px) {
+  .topbar { gap: 8px; }
+  .topbar-right { gap: 6px; }
+  .market-status { display: none; }
+  .fundamentals-grid { grid-template-columns: repeat(2, 1fr); }
+}

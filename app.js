@@ -6114,14 +6114,25 @@ function setupPositionSizer() {
     var rrBarRisk = document.getElementById('sizerRRBarRisk');
     var rrBarReward = document.getElementById('sizerRRBarReward');
 
+    var hintEl = document.getElementById('sizerHint');
     if (account <= 0 || entry <= 0 || stop <= 0 || riskPct <= 0) {
       if (sharesEl) sharesEl.textContent = '--';
       if (valueEl) valueEl.textContent = '--';
       if (dollarRiskEl) dollarRiskEl.textContent = '--';
       if (pctPortEl) pctPortEl.textContent = '--';
       if (rrCard) rrCard.style.display = 'none';
+      if (hintEl) {
+        var missing = [];
+        if (account <= 0) missing.push('Account Size');
+        if (entry <= 0) missing.push('Entry Price');
+        if (stop <= 0) missing.push('Stop Loss');
+        if (riskPct <= 0) missing.push('Risk Per Trade');
+        hintEl.textContent = 'Enter ' + missing.join(', ') + ' to calculate.';
+        hintEl.style.display = '';
+      }
       return;
     }
+    if (hintEl) hintEl.style.display = 'none';
 
     var dollarRisk = account * (riskPct / 100);
     var riskPerShare = Math.abs(entry - stop);

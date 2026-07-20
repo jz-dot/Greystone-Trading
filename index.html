@@ -1498,7 +1498,7 @@
               <span class="section-dot anomaly"></span>
               Anomaly Detection
             </h3>
-            <span class="panel-badge">Real-time</span>
+            <span class="sample-badge" title="This panel shows sample data, not a live feed">Sample Data</span>
           </div>
           <div class="gs-alert-list" id="gsAlertList">
             <div class="gs-alert anomaly">
@@ -1554,7 +1554,7 @@
               <span class="section-dot value"></span>
               Value Opportunities
             </h3>
-            <span class="panel-badge">Updated 5m ago</span>
+            <span class="sample-badge" title="This panel shows sample data, not a live feed">Sample Data</span>
           </div>
           <div class="gs-value-table" id="gsValueTable">
             <div class="gvt-header">
@@ -1932,32 +1932,32 @@
       <!-- Portfolio Risk Summary Cards -->
       <div class="risk-overview" id="riskSummaryCards">
         <div class="risk-card">
-          <div class="risk-card-header">Total Exposure</div>
+          <div class="risk-card-header" title="Total dollar value of everything you hold, long positions plus short positions.">Total Exposure</div>
           <div class="risk-card-value" id="riskTotalExposure">--</div>
           <div class="risk-card-context">Long + Short notional</div>
         </div>
         <div class="risk-card">
-          <div class="risk-card-header">Net Delta</div>
+          <div class="risk-card-header" title="How much your portfolio's value moves for a $1 move in the underlying stocks; options add or subtract from this.">Net Delta</div>
           <div class="risk-card-value" id="riskNetDelta">--</div>
           <div class="risk-card-context">Dollar delta</div>
         </div>
         <div class="risk-card">
-          <div class="risk-card-header">Portfolio Beta</div>
+          <div class="risk-card-header" title="How volatile your portfolio is versus the overall market. 1.0 = moves with the market; above 1.0 = swings more than the market.">Portfolio Beta</div>
           <div class="risk-card-value" id="riskPortBeta">--</div>
           <div class="risk-card-context">Weighted avg beta</div>
         </div>
         <div class="risk-card">
-          <div class="risk-card-header">Sharpe Ratio</div>
+          <div class="risk-card-header" title="Return earned per unit of risk taken. Higher is better: more return for the same bumpiness, or the same return with less bumpiness.">Sharpe Ratio</div>
           <div class="risk-card-value" id="riskSharpe">--</div>
           <div class="risk-card-context">(Return - Rf) / StdDev</div>
         </div>
         <div class="risk-card">
-          <div class="risk-card-header">Portfolio VaR (95%)</div>
+          <div class="risk-card-header" title="Value at Risk: a rough estimate of the most you could lose in one day, 95% of the time, based on recent volatility.">Portfolio VaR (95%)</div>
           <div class="risk-card-value loss" id="riskVaR">--</div>
           <div class="risk-card-context">1-day parametric</div>
         </div>
         <div class="risk-card">
-          <div class="risk-card-header">Max Drawdown</div>
+          <div class="risk-card-header" title="The largest drop from a peak value to a later low, year to date - a measure of the worst pain you'd have felt holding through it.">Max Drawdown</div>
           <div class="risk-card-value loss" id="riskMaxDD">--</div>
           <div class="risk-card-context">YTD peak-to-trough</div>
         </div>

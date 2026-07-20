@@ -2364,6 +2364,7 @@ function initSettingsApiKey() {
       // Validate the key
       const validation = await GreySankore.validateApiKey();
       updateApiStatus(statusEl, indicatorEl, validation);
+      refreshAiActiveBadge();
 
       // Refresh insights with new key
       refreshInsightCards();
@@ -2385,6 +2386,17 @@ function initSettingsApiKey() {
   checkAndDisplayApiStatus(statusEl, indicatorEl);
 }
 
+// Reflects whether AI calls will actually hit Claude or fall back to sample
+// responses. Runs on load and again after any key save, so the badge never
+// claims "Active" while the chat is really in fallback mode (or vice versa).
+async function refreshAiActiveBadge() {
+  const badge = document.querySelector('.gs-chat-panel .panel-badge');
+  if (!badge || typeof GreySankore === 'undefined') return;
+  const configured = await GreySankore.checkApiStatus().catch(() => false);
+  badge.textContent = configured ? 'AI Active' : 'Sample Mode';
+  badge.classList.toggle('live', configured);
+}
+
 async function checkAndDisplayApiStatus(statusEl, indicatorEl) {
   if (typeof GreySankore === 'undefined') return;
 
@@ -2392,6 +2404,7 @@ async function checkAndDisplayApiStatus(statusEl, indicatorEl) {
   await GreySankore.restoreApiKey();
 
   const configured = await GreySankore.checkApiStatus();
+  refreshAiActiveBadge();
 
   if (configured) {
     const validation = await GreySankore.validateApiKey();
@@ -4222,6 +4235,7 @@ function init() {
   fetchAndDrawChart(currentChartSymbol, currentTimeframe);
   fetchAndDisplayFundamentals(currentChartSymbol);
   drawSparklinesReal();
+  if (typeof refreshAiActiveBadge === 'function') refreshAiActiveBadge();
 
   // Options, flow, agents
   populateOptionsChain();
@@ -10333,7 +10347,7 @@ var GS_CAP_DATA = {
       { ticker: 'INTC', fwdPE: '22.1', vs5y: '-45%', fcfYield: '2.1%', score: 65, conviction: 'Med' },
       { ticker: 'BMY', fwdPE: '7.8', vs5y: '-35%', fcfYield: '9.2%', score: 88, conviction: 'High' }
     ],
-    momentum: 5, accuracy: '94.2%'
+    momentum: 5
   },
   mid: {
     anomalies: [
@@ -10348,7 +10362,7 @@ var GS_CAP_DATA = {
       { ticker: 'DKNG', fwdPE: '32.5', vs5y: '-28%', fcfYield: '1.8%', score: 58, conviction: 'Low' },
       { ticker: 'ABNB', fwdPE: '22.3', vs5y: '-18%', fcfYield: '6.2%', score: 74, conviction: 'Med' }
     ],
-    momentum: 3, accuracy: '91.8%'
+    momentum: 3
   },
   small: {
     anomalies: [
@@ -10363,7 +10377,7 @@ var GS_CAP_DATA = {
       { ticker: 'OPEN', fwdPE: 'N/A', vs5y: 'N/A', fcfYield: '-2.1%', score: 38, conviction: 'Low' },
       { ticker: 'MARA', fwdPE: '8.5', vs5y: 'N/A', fcfYield: '12.1%', score: 72, conviction: 'Med' }
     ],
-    momentum: 4, accuracy: '87.5%'
+    momentum: 4
   },
   micro: {
     anomalies: [
@@ -10378,7 +10392,7 @@ var GS_CAP_DATA = {
       { ticker: 'ASTS', fwdPE: 'N/A', vs5y: 'N/A', fcfYield: '-12%', score: 35, conviction: 'Low' },
       { ticker: 'GSAT', fwdPE: '42.0', vs5y: 'N/A', fcfYield: '0.5%', score: 44, conviction: 'Low' }
     ],
-    momentum: 6, accuracy: '82.1%'
+    momentum: 6
   }
 };
 
@@ -10425,11 +10439,13 @@ function updateGSCapData(capSize) {
   var anomalyStat = document.getElementById('gsStatAnomalies');
   var valueStat = document.getElementById('gsStatValues');
   var momentumStat = document.getElementById('gsStatMomentum');
-  var accuracyStat = document.getElementById('gsStatAccuracy');
   if (anomalyStat) anomalyStat.textContent = data.anomalies.length;
   if (valueStat) valueStat.textContent = data.values.length;
   if (momentumStat) momentumStat.textContent = data.momentum;
-  if (accuracyStat) accuracyStat.textContent = data.accuracy;
+  // gsStatAccuracy is intentionally NOT driven by cap-tier data: it stays
+  // pinned to the honest "BYO key / No performance claims" state set in
+  // index.html and by refreshAiActiveBadge() below. A per-tier "94.2%
+  // accuracy" figure was fabricated and has been removed for good.
 
   var alertList = document.getElementById('gsAlertList');
   if (alertList) {
@@ -10582,6 +10598,17 @@ function drawModalChart(ticker, analysis) {
   canvas.width = w;
   canvas.height = h;
   ctx.clearRect(0, 0, w, h);
+
+  // This 90-day path is a random walk anchored to the real current price, NOT
+  // real price history - it exists to give the sample-mode analysis card a
+  // visual, and must say so on the chart itself, not just in the surrounding
+  // "Sample analysis" copy.
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('Illustrative, not real price history', w - 6, h - 6);
+  ctx.restore();
 
   var basePrice = parseFloat(analysis.price.replace('$', '').replace(',', '')) || 100;
   var points = [];

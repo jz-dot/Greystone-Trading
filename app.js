@@ -2566,7 +2566,7 @@ startFlowIntervals();
 // ---- DASHBOARD STATE ----
 let activeIndicators = {};
 let currentChartSymbol = 'AAPL';
-let currentChartType = 'candlestick'; // 'candlestick' | 'line' | 'area'
+let currentChartType = 'line'; // 'candlestick' | 'line' | 'area' - line is the default, easiest to read at a glance
 let currentTimeframe = '1Y';
 let currentTimeframeRange = '1y';
 let currentChartCandles = null; // cached candle data for redraws
@@ -2679,7 +2679,10 @@ function drawChartWithType(candles, chartType) {
   canvas.style.height = rect.height + 'px';
   ctx.scale(dpr, dpr);
 
-  const padding = { top: 50, right: 60, bottom: 44, left: 10 };
+  // Price axis reads on the LEFT (classic financial-chart convention, and
+  // easier to scan than a right-side axis): most of the padding budget
+  // moves there, the right edge keeps just enough room to breathe.
+  const padding = { top: 50, right: 14, bottom: 44, left: 64 };
   const chartW = rect.width - padding.left - padding.right;
   const chartH = rect.height - padding.top - padding.bottom;
 
@@ -2704,10 +2707,10 @@ function drawChartWithType(candles, chartType) {
     ctx.lineTo(W - padding.right, y);
     ctx.stroke();
     const price = max - ((max - min) / 5) * i;
-    ctx.fillStyle = '#5C5C6E';
-    ctx.font = '10px JetBrains Mono';
-    ctx.textAlign = 'left';
-    ctx.fillText(price.toFixed(2), W - padding.right + 5, y + 3);
+    ctx.fillStyle = '#8A8FA3'; // AA-contrast muted text, not the old sub-3:1 dim gray
+    ctx.font = '11px JetBrains Mono';
+    ctx.textAlign = 'right';
+    ctx.fillText(price.toFixed(2), padding.left - 8, y + 3);
   }
 
   // ---- X-AXIS DATE/YEAR LABELS ----
@@ -2955,7 +2958,9 @@ function onCrosshairMove(e) {
   const mouseX = e.clientX - rect.left;
   const mouseY = e.clientY - rect.top;
 
-  const padding = { top: 50, right: 60, bottom: 44, left: 10 };
+  // Must mirror drawChartWithType's padding exactly (crosshair hit-testing
+  // and the hover price bubble align to the same left-axis chart area).
+  const padding = { top: 50, right: 14, bottom: 44, left: 64 };
   const chartW = rect.width - padding.left - padding.right;
   const chartH = rect.height - padding.top - padding.bottom;
 
@@ -3009,13 +3014,13 @@ function onCrosshairMove(e) {
 
   ctx.setLineDash([]);
 
-  // Price label on Y-axis (right edge)
+  // Price label on Y-axis (left edge, matches the chart's axis)
   ctx.fillStyle = '#2A2A38';
-  ctx.fillRect(rect.width - padding.right, mouseY - 9, 56, 18);
+  ctx.fillRect(padding.left - 60, mouseY - 9, 56, 18);
   ctx.fillStyle = '#A0A0B8';
   ctx.font = '10px JetBrains Mono';
-  ctx.textAlign = 'left';
-  ctx.fillText(priceAtMouse.toFixed(2), rect.width - padding.right + 4, mouseY + 3);
+  ctx.textAlign = 'right';
+  ctx.fillText(priceAtMouse.toFixed(2), padding.left - 8, mouseY + 3);
 
   // Time/index label on X-axis (bottom)
   let timeLabel = '' + (clampedIdx + 1);
@@ -7168,11 +7173,14 @@ if (document.readyState === 'loading') {
 
     var url = '/api/news';
     var params = [];
-    if (currentTab === 'watchlist') {
+    if (currentTab === 'watchlist' && watchlistTickers.length) {
       params.push('symbols=' + watchlistTickers.join(','));
     }
     if (currentTab === 'earnings') {
       params.push('category=earnings');
+      // Scope to the user's own watchlist when they have one; the server
+      // falls back to a market basket if no symbols are sent.
+      if (watchlistTickers.length) params.push('symbols=' + watchlistTickers.join(','));
     }
     if (params.length) url += '?' + params.join('&');
 

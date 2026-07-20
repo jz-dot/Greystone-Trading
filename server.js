@@ -2314,17 +2314,96 @@ app.delete('/api/user/api-keys/:id', requireAuth, async (req, res) => {
 // NEWS FEED ENDPOINT
 // ============================================
 
-// No news provider is configured. This endpoint used to return invented
-// headlines attributed to real outlets (Reuters, Bloomberg, WSJ, CNBC), which
-// is fabricated content. It now returns an empty, clearly-flagged result. To
-// enable real news, wire a licensed provider here and populate `articles`.
-app.get('/api/news', (req, res) => {
-  res.json({
-    news: [],
-    articles: [],
-    source: 'none',
-    note: 'No news provider configured'
-  });
+// Real headlines via Yahoo Finance's search API (the same backend already
+// used by /api/search), which returns genuine articles with real publishers,
+// links, and timestamps for a given query. This replaced an earlier version
+// of this endpoint that invented headlines attributed to real outlets
+// (Reuters, Bloomberg, WSJ, CNBC) - that fabrication is gone for good; every
+// article returned here traces to a real Yahoo Finance search result.
+//
+// Query params:
+//   symbols  - comma-separated tickers to fetch news for (per-symbol page,
+//              or the Watchlist tab)
+//   category - 'top' (default, no symbols): a fixed market-relevant basket.
+//              'earnings': symbols filtered to earnings-related headlines
+//              (falls back to the unfiltered set if the filter empties out).
+//
+// The response shape carries both field-naming conventions the two existing
+// UI consumers expect (title/link/providerPublishTime for the per-symbol
+// news panel; headline/source/time/tickers/sentiment for the dashboard News
+// panel), so no client code has to choose one shape over the other.
+const NEWS_TOP_BASKET = ['SPY', 'QQQ', 'AAPL', 'MSFT', 'NVDA'];
+const NEWS_EARNINGS_KEYWORDS = /earnings|EPS|revenue|guidance|quarter(ly)?|beat|miss|profit|forecast/i;
+
+function normalizeNewsArticle(raw) {
+  const thumb = raw.thumbnail && Array.isArray(raw.thumbnail.resolutions) && raw.thumbnail.resolutions.length
+    ? raw.thumbnail.resolutions[raw.thumbnail.resolutions.length - 1].url
+    : null;
+  return {
+    uuid: raw.uuid,
+    title: raw.title,
+    headline: raw.title,
+    link: raw.link,
+    url: raw.link,
+    publisher: raw.publisher || 'Unknown',
+    source: raw.publisher || 'Unknown',
+    providerPublishTime: raw.providerPublishTime || null,
+    time: raw.providerPublishTime || null,
+    tickers: Array.isArray(raw.relatedTickers) ? raw.relatedTickers : [],
+    // No sentiment analysis is run on these headlines. 'neutral' here means
+    // "no signal computed," never an invented bullish/bearish read - the same
+    // anti-fabrication rule that removed the old placeholder content.
+    sentiment: 'neutral',
+    thumbnail: thumb,
+  };
+}
+
+app.get('/api/news', async (req, res) => {
+  const symbolsParam = String(req.query.symbols || '').trim();
+  const category = String(req.query.category || 'top').trim();
+  let querySymbols = symbolsParam
+    ? symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean).slice(0, 8)
+    : NEWS_TOP_BASKET;
+  if (querySymbols.length === 0) querySymbols = NEWS_TOP_BASKET;
+
+  const cacheKey = 'news:' + category + ':' + querySymbols.join(',');
+  const cached = getCached(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    const results = await Promise.all(querySymbols.map(sym =>
+      yahooFetch('/v1/finance/search?q=' + encodeURIComponent(sym) + '&quotesCount=0&newsCount=8&listsCount=0')
+        .catch(() => ({ news: [] }))
+    ));
+    const seen = new Set();
+    let articles = [];
+    results.forEach(r => {
+      (r.news || []).forEach(item => {
+        if (!item || !item.uuid || seen.has(item.uuid)) return;
+        seen.add(item.uuid);
+        articles.push(item);
+      });
+    });
+    articles.sort((a, b) => (b.providerPublishTime || 0) - (a.providerPublishTime || 0));
+
+    if (category === 'earnings') {
+      const filtered = articles.filter(a => NEWS_EARNINGS_KEYWORDS.test(a.title || ''));
+      if (filtered.length > 0) articles = filtered;
+    }
+
+    const result = {
+      news: articles.slice(0, 30).map(normalizeNewsArticle),
+      source: 'yahoo-finance',
+      symbols: querySymbols,
+      category: category,
+    };
+    setCache(cacheKey, result);
+    res.json(result);
+  } catch (err) {
+    console.error('[News] Fetch failed:', err.message);
+    // Honest empty state on failure - never fall back to invented headlines.
+    res.json({ news: [], source: 'error', note: 'News fetch failed.' });
+  }
 });
 
 // ============================================

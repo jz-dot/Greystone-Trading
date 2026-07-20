@@ -4031,6 +4031,11 @@ kbd {
   background: var(--accent-gold);
   color: var(--text-on-accent);
 }
+.pf-bench-select {
+  background: var(--bg-tertiary); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text-secondary);
+  font-size: 10px; font-weight: 600; padding: 4px 8px; cursor: pointer;
+}
 .pf-tf-btns { display: flex; gap: 2px; }
 .pf-tf-btn {
   padding: 4px 10px;

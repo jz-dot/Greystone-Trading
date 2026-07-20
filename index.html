@@ -1111,13 +1111,18 @@
                 <button class="pf-tf-btn active" data-range="1Y">1Y</button>
                 <button class="pf-tf-btn" data-range="ALL">ALL</button>
               </div>
+              <select class="pf-bench-select" id="pfBenchSelect" title="Compare against">
+                <option value="XEQT.TO">vs XEQT (Canada)</option>
+                <option value="VEQT.TO">vs VEQT (Canada)</option>
+                <option value="SPY">vs S&amp;P 500</option>
+              </select>
             </div>
           </div>
           <div class="pf-chart-container">
             <canvas id="pfPerfChart" width="800" height="300"></canvas>
             <div class="pf-chart-legend">
               <span class="pf-legend-item"><span class="pf-legend-dot" style="background:var(--accent-gold)"></span> Portfolio</span>
-              <span class="pf-legend-item"><span class="pf-legend-dot" style="background:var(--accent-blue)"></span> SPY Benchmark</span>
+              <span class="pf-legend-item"><span class="pf-legend-dot" style="background:var(--accent-blue)"></span> <span id="pfBenchLegendLabel">XEQT (Canada All-Equity)</span></span>
             </div>
           </div>
         </div>

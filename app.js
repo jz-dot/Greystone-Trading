@@ -8833,6 +8833,17 @@ const PortfolioManager = (function() {
   // labeled as such, not a fabricated realized track record.
   const perfCache = {};
 
+  // Selectable benchmarks. XEQT.TO/VEQT.TO are CAD-native (no FX guesswork
+  // at all); SPY is USD and is converted at the REAL historical USDCAD close
+  // for each bar - never a single current-spot rate applied across history,
+  // which would silently erase the entire FX effect from the comparison.
+  const PERF_BENCHMARKS = {
+    'XEQT.TO': { label: 'XEQT (Canada All-Equity)', currency: 'CAD' },
+    'VEQT.TO': { label: 'VEQT (Vanguard All-Equity)', currency: 'CAD' },
+    'SPY':     { label: 'S&P 500 (SPY, CAD-converted)', currency: 'USD' },
+  };
+  let currentBenchmark = 'XEQT.TO';
+
   function perfRangeParams(range) {
     switch (range) {
       case '1D': return { interval: '5m', range: '1d' };
@@ -8865,18 +8876,39 @@ const PortfolioManager = (function() {
     return out;
   }
 
-  async function buildPerfSeries(holdings, range) {
+  async function buildPerfSeries(holdings, range, benchmarkSymbol) {
     const rp = perfRangeParams(range);
-    const rate = PortfolioManager.getUsdCadRate();
+    const benchSym = benchmarkSymbol || currentBenchmark;
+    const benchMeta = PERF_BENCHMARKS[benchSym] || PERF_BENCHMARKS['XEQT.TO'];
+    const needsFx = holdings.some(h => h.currency === 'USD') || benchMeta.currency === 'USD';
     const symbols = holdings.map(h => h.symbol);
-    const results = await Promise.all([fetchChart('SPY', rp)].concat(symbols.map(s => fetchChart(s, rp))));
-    const spyData = results[0];
-    const symData = results.slice(1);
-    if (!spyData || !spyData.candles || !spyData.candles.length) return null;
-    const spyCandles = spyData.candles.filter(c => c.close != null);
-    if (!spyCandles.length) return null;
-    const baseTimes = spyCandles.map(c => c.time);
-    const spyCloses = spyCandles.map(c => c.close);
+
+    const fetches = [fetchChart(benchSym, rp)].concat(symbols.map(s => fetchChart(s, rp)));
+    if (needsFx) fetches.push(fetchChart('USDCAD=X', rp));
+    const results = await Promise.all(fetches);
+    const benchData = results[0];
+    const symData = results.slice(1, 1 + symbols.length);
+    const fxData = needsFx ? results[1 + symbols.length] : null;
+
+    if (!benchData || !benchData.candles || !benchData.candles.length) return null;
+    const benchCandles = benchData.candles.filter(c => c.close != null);
+    if (!benchCandles.length) return null;
+    const baseTimes = benchCandles.map(c => c.time);
+
+    // Real historical USDCAD close for EVERY bar, forward-filled onto the
+    // shared time axis - the actual daily rate, never today's spot applied
+    // retroactively across the whole window.
+    let fxSeries = null;
+    if (needsFx) {
+      const fxCandles = (fxData && fxData.candles || []).filter(c => c.close != null);
+      fxSeries = fxCandles.length ? alignCloses(baseTimes, fxCandles) : null;
+    }
+    const fallbackFx = PortfolioManager.getUsdCadRate();
+    const fxAt = (i) => (fxSeries && fxSeries[i] != null) ? fxSeries[i] : fallbackFx;
+
+    // Benchmark series, converted to CAD bar-by-bar when it's USD-denominated.
+    const benchCloses = benchCandles.map((c, i) =>
+      benchMeta.currency === 'USD' ? c.close * fxAt(i) : c.close);
 
     const portValues = new Array(baseTimes.length).fill(0);
     let anyData = false;
@@ -8886,15 +8918,17 @@ const PortfolioManager = (function() {
       anyData = true;
       const cndl = data.candles.filter(c => c.close != null);
       const aligned = alignCloses(baseTimes, cndl);
-      const fx = (h.currency === 'USD') ? rate : 1;
       for (let i = 0; i < baseTimes.length; i++) {
-        if (aligned[i] != null) portValues[i] += aligned[i] * h.shares * fx;
+        if (aligned[i] == null) continue;
+        const fx = (h.currency === 'USD') ? fxAt(i) : 1;
+        portValues[i] += aligned[i] * h.shares * fx;
       }
     });
     if (!anyData) return null;
     return {
       port: baseTimes.map((t, i) => ({ t: t, v: portValues[i] })),
-      spy: baseTimes.map((t, i) => ({ t: t, v: spyCloses[i] }))
+      spy: baseTimes.map((t, i) => ({ t: t, v: benchCloses[i] })),
+      benchmarkLabel: benchMeta.label,
     };
   }
 
@@ -8974,7 +9008,7 @@ const PortfolioManager = (function() {
     ctx.fillStyle = '#7A818E';
     ctx.font = '9px Inter';
     ctx.textAlign = 'left';
-    ctx.fillText('Current holdings valued over the period at today\'s share counts. Illustrative, not a realized track record.', pad.left, h - 6);
+    ctx.fillText('Current holdings valued over the period at today\'s share counts, converted with the actual historical USD/CAD rate for each day. Illustrative, not a realized track record.', pad.left, h - 6);
   }
 
   async function renderPerfChart() {
@@ -8996,13 +9030,15 @@ const PortfolioManager = (function() {
       return;
     }
 
-    const sig = range + '|' + holdings.map(hh => hh.symbol + ':' + hh.shares + ':' + hh.currency).join(',');
+    const sig = range + '|' + currentBenchmark + '|' + holdings.map(hh => hh.symbol + ':' + hh.shares + ':' + hh.currency).join(',');
     let series = (perfCache[sig] && (Date.now() - perfCache[sig].ts < 120000)) ? perfCache[sig].data : null;
     if (!series) {
       drawPerfMessage(ctx, w, h, 'Loading performance...');
-      try { series = await buildPerfSeries(holdings, range); } catch (e) { series = null; }
+      try { series = await buildPerfSeries(holdings, range, currentBenchmark); } catch (e) { series = null; }
       if (series) perfCache[sig] = { data: series, ts: Date.now() };
     }
+    const legendLabel = document.getElementById('pfBenchLegendLabel');
+    if (legendLabel && series && series.benchmarkLabel) legendLabel.textContent = series.benchmarkLabel;
 
     // Re-measure in case the panel resized during the fetch.
     w = canvas.width = canvas.parentElement.clientWidth;
@@ -9709,6 +9745,17 @@ const PortfolioManager = (function() {
       renderPerfChart();
     });
   });
+
+  // Benchmark selector (XEQT default - CAD-native, no FX guesswork; SPY
+  // converts at the real historical rate for each day, never today's spot).
+  const benchSelect = document.getElementById('pfBenchSelect');
+  if (benchSelect) {
+    benchSelect.value = currentBenchmark;
+    benchSelect.addEventListener('change', () => {
+      currentBenchmark = benchSelect.value;
+      renderPerfChart();
+    });
+  }
 
   // Toggle groups
   document.querySelectorAll('.pf-toggle-group').forEach(group => {

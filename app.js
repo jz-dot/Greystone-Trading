@@ -5675,7 +5675,11 @@ function getRiskPortfolioData() {
   var totalValue = 0;
   var totalCost = 0;
   positions.forEach(function(p) {
-    p.current = watchlistPrices[p.symbol] || p.avgCost * (1 + (Math.random() * 0.08 - 0.02));
+    // Real quote first (PortfolioManager's live cache), then a watchlist DOM
+    // price, then the cost basis as a frozen fallback. Never randomize - the
+    // old fallback made Exposure/P&L/VaR change on every refresh.
+    var q = (typeof PortfolioManager !== 'undefined' && PortfolioManager.getQuote) ? PortfolioManager.getQuote(p.symbol) : null;
+    p.current = (q && q.price > 0) ? q.price : (watchlistPrices[p.symbol] || p.avgCost);
     p.marketValue = p.qty * p.current;
     p.costBasis = p.qty * p.avgCost;
     p.pnl = p.marketValue - p.costBasis;
@@ -6438,16 +6442,26 @@ function updateBigDataStatus(statusEl, indicatorEl, status) {
    ============================================ */
 
 document.getElementById('riskRefreshBtn')?.addEventListener('click', function() {
-  loadRiskView();
+  refreshThenLoadRisk();
   showToast('Risk analytics refreshed', 'success');
 });
+
+// Refresh real quotes (when the user has real positions) before rendering Risk,
+// so market value / P&L / VaR use live prices, not the frozen cost basis.
+function refreshThenLoadRisk() {
+  if (typeof PortfolioManager !== 'undefined' && PortfolioManager.getPositions && PortfolioManager.getPositions().length && PortfolioManager.refreshQuotes) {
+    PortfolioManager.refreshQuotes().then(loadRiskView).catch(loadRiskView);
+  } else {
+    loadRiskView();
+  }
+}
 
 // Hook into nav to load risk view when selected
 (function hookRiskNav() {
   document.querySelectorAll('.nav-btn[data-view]').forEach(function(btn) {
     btn.addEventListener('click', function() {
       if (btn.dataset.view === 'risk') {
-        setTimeout(loadRiskView, 50);
+        setTimeout(refreshThenLoadRisk, 50);
       }
     });
   });
@@ -6475,7 +6489,11 @@ document.addEventListener('click', function(e) {
       }
     }, 100);
   } else if (action === 'alert') {
-    showToast('Alert set for ' + ticker + ' - you will be notified of significant moves', 'success');
+    if (typeof window.gsOpenAlertModal === 'function') {
+      window.gsOpenAlertModal(ticker);
+    } else {
+      showToast('Open the Alerts panel to set a price alert for ' + ticker, 'info');
+    }
   }
 });
 
@@ -7039,6 +7057,10 @@ if (document.readyState === 'loading') {
     dropdown.classList.remove('active');
     openAlertModal('');
   });
+
+  // Exposed so the dashboard AI-insight "Set Alert" button opens the REAL
+  // alert modal instead of a fake success toast.
+  window.gsOpenAlertModal = openAlertModal;
 
   function openAlertModal(ticker) {
     var tickerInput = document.getElementById('alertConfigTicker');

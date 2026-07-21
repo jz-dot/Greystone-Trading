@@ -8699,21 +8699,49 @@ const PortfolioManager = (function() {
         pos.txns.push(txn);
         recomputeAggregate(pos);
         _save(STORAGE_KEY, positions);
+        // A reinvested distribution is taxable income in the year (T3 box 42),
+        // booked alongside the ACB increase so the tax pack's income section
+        // includes it.
+        this.addIncome(CorporateActions.incomeEntry({
+          symbol: sym, account: pos.account, currency: pos.currency, kind: 'reinvested-distribution',
+          date: txn.date, amount: amount, fxRate: fx, fxEstimated: opts.fxEstimated
+        }));
         this.addActivity('REINVEST', sym, 0, amount, { currency: pos.currency });
         return { ok: true };
       } catch (e) { return { ok: false, error: e.message }; }
     },
 
+    // First calendar year in which this position held units (earliest buy).
+    firstHeldYear: function(pos) {
+      let y = null;
+      (pos.txns || []).forEach(t => {
+        if (t.type === 'buy' && t.date) {
+          const yr = parseInt(String(t.date).slice(0, 4), 10);
+          if (yr && (y === null || yr < y)) y = yr;
+        }
+      });
+      return y;
+    },
+
     // CDS distribution auto-import: apply return-of-capital + reinvested
     // adjustments for a covered ETF for a tax year, using CdsRoc factors
-    // (placeholder unless overridden). unitsHeld defaults to current shares.
-    // Both legs carry source:'cds-import' so they are visibly flagged.
+    // (placeholder unless overridden). Both legs carry source:'cds-import'.
+    // unitsHeld MUST be supplied for a historical year (the caller passes the
+    // units held during that year); defaulting to current shares is only sound
+    // when the position was static.
     applyCdsAdjustments: function(sym, account, year, opts) {
       opts = opts || {};
       if (typeof CdsRoc === 'undefined') return { ok: false, error: 'CDS module unavailable' };
       const positions = (_load(STORAGE_KEY) || []).map(normalizePosition);
       const pos = positions.find(p => p.symbol === sym && (p.account || 'non-registered') === (account || 'non-registered'));
       if (!pos) return { ok: false, error: 'Position not found' };
+      // Guard: you cannot receive a distribution for a year you did not hold
+      // the fund. Applying year-Y factors to units acquired after Y produced a
+      // phantom ROC-excess gain and mis-stated ACB.
+      const firstYear = this.firstHeldYear(pos);
+      if (firstYear && Number(year) < firstYear) {
+        return { ok: false, error: 'You did not hold ' + sym + ' in ' + year + ' (first held ' + firstYear + ')' };
+      }
       const unitsHeld = (Number(opts.unitsHeld) > 0) ? Number(opts.unitsHeld) : pos.shares;
       const fx = (pos.currency === 'USD') ? (Number(opts.fxRate) || getUsdCadRate()) : 1;
       const txns = CdsRoc.buildAdjustmentTxns({
@@ -8728,6 +8756,13 @@ const PortfolioManager = (function() {
       _save(STORAGE_KEY, positions);
       const roc = txns.find(t => t.type === 'roc');
       const reinvest = txns.find(t => t.type === 'reinvest');
+      // The reinvested portion is taxable income (T3 box 42) - book it too.
+      if (reinvest && reinvest.amount > 0) {
+        this.addIncome(CorporateActions.incomeEntry({
+          symbol: sym, account: pos.account, currency: pos.currency, kind: 'reinvested-distribution',
+          date: reinvest.date, amount: reinvest.amount, fxRate: fx
+        }));
+      }
       this.addActivity('CDS', sym, 0, 0, { currency: pos.currency });
       return { ok: true, roc: roc ? roc.amount : 0, reinvest: reinvest ? reinvest.amount : 0, excessGain: excessGain, unitsHeld: unitsHeld };
     },
@@ -11654,12 +11689,30 @@ if (askAIBtn) {
         Object.keys(covered).join(', ') + '. (Registered-account holdings are excluded - distributions inside a TFSA/RRSP/FHSA do not affect ACB.)</p>';
       return;
     }
+    // Per-holding: the first year units were held, and whether the position
+    // changed size after any covered year (so current shares may not equal the
+    // units held that year).
+    const posBySym = {};
+    PortfolioManager.getPositions().forEach(p => {
+      if ((p.account || 'non-registered') === 'non-registered') posBySym[(p.symbol || '').toUpperCase()] = p;
+    });
+    function firstHeldYear(p) {
+      let y = null;
+      (p && p.txns || []).forEach(t => { if (t.type === 'buy' && t.date) { const yr = parseInt(String(t.date).slice(0,4),10); if (yr && (y===null||yr<y)) y=yr; } });
+      return y;
+    }
+
     let html = '';
     holdings.forEach(h => {
-      const years = covered[h.symbol.toUpperCase()];
+      const pos = posBySym[h.symbol.toUpperCase()];
+      const firstYr = firstHeldYear(pos);
+      // Only offer years the fund was actually held.
+      const years = covered[h.symbol.toUpperCase()].filter(yr => !firstYr || yr >= firstYr);
+      if (!years.length) return;
       html += '<div class="cds-holding" style="margin-bottom:16px;border:1px solid var(--border);border-radius:8px;padding:12px;">' +
-        '<div style="font-weight:600;color:var(--text-primary);margin-bottom:8px;">' + esc(h.symbol) +
-        ' <span style="font-size:11px;color:var(--text-dim);font-weight:400;">' + h.shares.toLocaleString('en-US', { maximumFractionDigits: 4 }) + ' units held</span></div>';
+        '<div style="font-weight:600;color:var(--text-primary);margin-bottom:6px;">' + esc(h.symbol) +
+        ' <span style="font-size:11px;color:var(--text-dim);font-weight:400;">' + h.shares.toLocaleString('en-US', { maximumFractionDigits: 4 }) + ' units held now</span></div>' +
+        '<div style="font-size:10px;color:var(--text-dim);margin-bottom:8px;line-height:1.4;">Units held = the units you held during that tax year (pre-filled with today\'s count). If your position changed size, enter the correct year-end units.</div>';
       html += '<table class="pf-import-table" style="width:100%;"><thead><tr>' +
         '<th>Year</th><th class="num">ROC / unit</th><th class="num">Reinvested / unit</th><th class="num">Units held</th><th></th></tr></thead><tbody>';
       years.forEach(yr => {
@@ -11675,6 +11728,10 @@ if (askAIBtn) {
       });
       html += '</tbody></table></div>';
     });
+    if (!html) {
+      body.innerHTML = '<p style="color:var(--text-muted);line-height:1.6;">Your covered ETF holdings were only acquired after the years with distribution data, so there is nothing to apply yet.</p>';
+      return;
+    }
     body.innerHTML = html;
 
     body.querySelectorAll('.cds-apply').forEach(applyBtn => {
@@ -11744,7 +11801,7 @@ if (askAIBtn) {
   function overLine(over) {
     if (!(over > 0)) return '';
     const pen = ContributionRoom.overContributionPenalty(over);
-    return ' <span class="room-over">Over by ' + money(over) + ' (~' + money(pen.penaltyPerMonth) + '/mo penalty)</span>';
+    return ' <span class="room-over">Over by ' + money(over) + ' (~' + money(pen.penaltyPerMonth) + '/month for each month the excess remains)</span>';
   }
 
   function render() {

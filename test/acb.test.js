@@ -345,3 +345,27 @@ test('reinvest honours transaction-date FX', () => {
   ]);
   approx(r.summary.currentBookValue, 1440, 1e-6, 'ACB in CAD with dated FX on reinvest');
 });
+
+/* --------------------------------------------------------------------------
+   GUARDS: reinvest/roc need units held and a non-negative amount.
+   -------------------------------------------------------------------------- */
+test('reinvest/roc with zero shares held are skipped, not folded into the next lot', () => {
+  const r = ACB.computeACB([
+    { date: '2026-01-01', type: 'buy', shares: 100, price: 10, commission: 0 },
+    { date: '2026-02-01', type: 'sell', shares: 100, price: 10, commission: 0 }, // ACB 0, 0 shares
+    { date: '2026-03-01', type: 'reinvest', amount: 200 },                        // no units -> skipped
+    { date: '2026-04-01', type: 'buy', shares: 50, price: 10, commission: 0 },
+  ]);
+  approx(r.summary.currentACBPerShare, 10, 1e-9, 'new lot ACB/share unaffected by the stranded reinvest');
+});
+
+test('negative roc/reinvest amount is rejected', () => {
+  assert.throws(() => ACB.computeACB([
+    { date: '2026-01-01', type: 'buy', shares: 10, price: 10 },
+    { date: '2026-02-01', type: 'roc', amount: -5 },
+  ]), /cannot be negative/);
+  assert.throws(() => ACB.computeACB([
+    { date: '2026-01-01', type: 'buy', shares: 10, price: 10 },
+    { date: '2026-02-01', type: 'reinvest', amount: -5 },
+  ]), /cannot be negative/);
+});

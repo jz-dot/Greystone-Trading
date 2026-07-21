@@ -131,6 +131,11 @@ function normalize(transactions) {
     if ((type === 'buy' || type === 'sell') && shares <= 0) {
       throw new Error(type + ' transactions require shares greater than zero');
     }
+    // ROC and reinvested distributions are always positive dollar amounts; a
+    // negative would silently move ACB the wrong way.
+    if ((type === 'roc' || type === 'reinvest') && amount !== null && amount < 0) {
+      throw new Error(type + ' amount cannot be negative');
+    }
     return { type, ts, fxRate, shares, price, commission, amount, originalIndex, raw: tx };
   });
   // Stable sort by timestamp; fall back to original index to keep ties ordered.
@@ -221,6 +226,11 @@ function computeACB(transactions, options) {
     }
 
     if (r.type === 'reinvest') {
+      // A distribution can only accrue to units actually held. With no shares
+      // (e.g. booked between a full sale and a repurchase) the amount would
+      // otherwise strand in the pool and be attributed to the next lot - so
+      // skip it entirely rather than corrupt the next acquisition's ACB.
+      if (shares <= EPS) continue;
       // Reinvested / notional ("phantom") distribution: a fund distributes
       // income that is immediately reinvested WITHOUT issuing new units or
       // paying cash (T3 box 42 reinvested distributions). It is taxed as
@@ -247,6 +257,8 @@ function computeACB(transactions, options) {
     }
 
     if (r.type === 'roc') {
+      // As with reinvest: a return of capital with no units held cannot apply.
+      if (shares <= EPS) continue;
       // Return of capital reduces ACB; excess over ACB is a capital gain.
       const rocCAD = (r.amount !== null ? r.amount : r.shares * r.price) * fx;
       let rocCapitalGain = 0;

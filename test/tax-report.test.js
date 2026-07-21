@@ -108,3 +108,34 @@ test('empty portfolio produces an empty, valid report', () => {
   const csv = TR.dispositionsToCsv([]);
   assert.match(csv, /^Symbol,Type/);
 });
+
+// --- Regression: reinvested distributions must flow into the tax pack ACB ---
+test('reinvest increases ACB in tax-pack dispositions (was silently dropped)', () => {
+  const rows = TR.buildDispositions([pos('RII.TO', 'non-registered', [
+    BUY('2026-01-05', 100, 10), // ACB 1000
+    { type: 'reinvest', date: '2026-06-30', amount: 200, fxRate: 1 }, // ACB 1200
+    SELL('2026-09-01', 100, 10), // proceeds 1000, ACB 1200 -> loss 200
+  ])], { year: '2026' });
+  const sell = rows.find(r => r.type === 'sell');
+  assert.strictEqual(sell.gainCad, -200, 'reinvest must raise ACB so the sale is a $200 loss');
+});
+
+test('roc-excess row carries zero proceeds (does not inflate Schedule 3 proceeds)', () => {
+  const rows = TR.buildDispositions([pos('EXC.TO', 'non-registered', [
+    BUY('2026-01-05', 10, 1),                                   // ACB 10
+    { type: 'roc', date: '2026-05-01', amount: 100, fxRate: 1 }, // excess 90 gain
+  ])], { year: '2026' });
+  const roc = rows.find(r => r.type === 'roc-excess');
+  assert.ok(roc, 'roc-excess row present');
+  assert.strictEqual(roc.proceedsCad, 0, 'no proceeds of disposition');
+  assert.strictEqual(roc.gainCad, 90);
+});
+
+test('cds-import lots flag the disposition approximate', () => {
+  const rows = TR.buildDispositions([pos('CDSF.TO', 'non-registered', [
+    BUY('2024-01-05', 100, 10),
+    { type: 'reinvest', date: '2024-12-31', amount: 30, fxRate: 1, source: 'cds-import' },
+    SELL('2026-03-01', 100, 15),
+  ])], { year: '2026' });
+  assert.strictEqual(rows.find(r => r.type === 'sell').approx, true);
+});

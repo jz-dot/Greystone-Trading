@@ -180,21 +180,25 @@ const CdsRoc = (function () {
 
     const date = year + '-12-31';
     const txns = [];
-    if (adj.rocAmount > 0) {
-      txns.push({
-        type: 'roc',
-        date: date,
-        amount: adj.rocAmount,
-        fxRate: fxRate,
-        currency: currency,
-        source: 'cds-import',
-      });
-    }
+    // Emit REINVEST before ROC. Both land on Dec-31 and the ACB engine keeps
+    // input order on ties; processing the reinvest (which raises ACB) first
+    // means a same-year ROC nets against the higher ACB instead of flooring a
+    // low ACB to zero and booking a spurious excess capital gain.
     if (adj.reinvestedAmount > 0) {
       txns.push({
         type: 'reinvest',
         date: date,
         amount: adj.reinvestedAmount,
+        fxRate: fxRate,
+        currency: currency,
+        source: 'cds-import',
+      });
+    }
+    if (adj.rocAmount > 0) {
+      txns.push({
+        type: 'roc',
+        date: date,
+        amount: adj.rocAmount,
         fxRate: fxRate,
         currency: currency,
         source: 'cds-import',

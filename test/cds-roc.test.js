@@ -219,3 +219,11 @@ test('END-TO-END: buy + generated adjustments move ACB by (reinvested - roc)', (
   // No spurious realized gain (roc well under ACB).
   assert.strictEqual(withAdj.totalRealizedGain, 0);
 });
+
+test('buildAdjustmentTxns emits reinvest before roc (avoids spurious ROC-excess gain)', () => {
+  const txns = CDS.buildAdjustmentTxns({
+    symbol: 'XIC.TO', unitsHeld: 100, year: 2024,
+    factors: { rocPerUnit: 0.40, reinvestedPerUnit: 4.50 }, fxRate: 1, currency: 'CAD'
+  });
+  assert.deepStrictEqual(txns.map(t => t.type), ['reinvest', 'roc']);
+});

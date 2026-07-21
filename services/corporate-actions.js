@@ -96,7 +96,7 @@ const CorporateActions = (function () {
       symbol: String(args.symbol || '').toUpperCase(),
       account: args.account || 'non-registered',
       currency: args.currency === 'USD' ? 'USD' : 'CAD',
-      kind: args.kind === 'drip' ? 'drip' : 'dividend',
+      kind: (args.kind === 'drip' || args.kind === 'reinvested-distribution') ? args.kind : 'dividend',
       date: args.date,
       amount: round6(amount),
       fxRate: fx,

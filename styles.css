@@ -5821,3 +5821,5 @@ kbd {
 .room-result { color: var(--text-secondary); line-height: 1.5; }
 .room-result .room-room { font-weight: 700; color: var(--accent-gold); }
 .room-result .room-over { font-weight: 700; color: var(--loss); }
+
+.pf-activity-action.neutral { color: var(--text-muted); }

@@ -9216,23 +9216,38 @@ const PortfolioManager = (function() {
       list.innerHTML = '<div class="pf-activity-empty">No recent transactions.</div>';
       return;
     }
+    // Amount-based, non-trade actions render a compact description instead of
+    // the shares/price/total trade columns (which are 0 or meaningless here).
+    const DESC = {
+      DIV: a => 'Dividend $' + (Number(a.price) || 0).toFixed(2),
+      DRIP: a => 'DRIP ' + a.shares + ' @ $' + (Number(a.price) || 0).toFixed(2),
+      ROC: a => 'Return of capital $' + (Number(a.price) || 0).toFixed(2),
+      REINVEST: a => 'Reinvested $' + (Number(a.price) || 0).toFixed(2),
+      CDS: () => 'ETF distributions applied',
+      SPLIT: a => 'Split ' + a.shares + ':1'
+    };
     list.innerHTML = activities.slice(0, 15).map(a => {
       const d = new Date(a.time);
       const timeStr = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
       const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      const actionCls = a.action === 'BUY' ? 'buy' : 'sell';
+      const actionCls = a.action === 'BUY' ? 'buy' : (a.action === 'SELL' ? 'sell' : 'neutral');
+      const header = `<span class="pf-activity-time">${dateStr} ${timeStr}</span>
+        <span class="pf-activity-action ${actionCls}">${a.action}</span>
+        <span class="pf-activity-ticker">${a.symbol}</span>`;
+      if (DESC[a.action]) {
+        return `<div class="pf-activity-item">${header}
+          <span style="grid-column: span 3; text-align:right; color:var(--text-muted);">${DESC[a.action](a)}</span>
+        </div>`;
+      }
       let realizedNote = '';
       if (a.action === 'SELL' && typeof a.realized === 'number') {
         const rc = a.realized >= 0 ? 'profit' : 'loss';
         realizedNote = `<span class="${rc}" style="display:block;font-size:9px;">${a.realized >= 0 ? '+' : '-'}$${Math.abs(a.realized).toFixed(2)} CAD gain</span>`;
       }
-      return `<div class="pf-activity-item">
-        <span class="pf-activity-time">${dateStr} ${timeStr}</span>
-        <span class="pf-activity-action ${actionCls}">${a.action}</span>
-        <span class="pf-activity-ticker">${a.symbol}</span>
+      return `<div class="pf-activity-item">${header}
         <span>${a.shares}</span>
-        <span>$${a.price.toFixed(2)}</span>
-        <span style="text-align:right">$${a.total.toFixed(2)}${realizedNote}</span>
+        <span>$${(Number(a.price) || 0).toFixed(2)}</span>
+        <span style="text-align:right">$${(Number(a.total) || 0).toFixed(2)}${realizedNote}</span>
       </div>`;
     }).join('');
   }

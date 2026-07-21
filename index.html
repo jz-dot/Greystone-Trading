@@ -218,28 +218,33 @@
       <span class="status-text">MARKET OPEN</span>
     </div>
 
-    <!-- Claude AI Quick Chat -->
+    <!-- Grey Sankore AI - quick-access chat (topbar) -->
     <div class="claude-chat-wrapper" id="claudeChatWrapper">
-      <button class="claude-chat-toggle" id="claudeChatToggle" title="Ask Claude (Ctrl+J)">
-        <svg class="claude-icon" width="18" height="18" viewBox="0 0 24 24" fill="none">
-          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" fill="none" stroke="currentColor" stroke-width="1.5"/>
-          <text x="12" y="16.5" text-anchor="middle" font-size="12" font-weight="700" fill="currentColor" font-family="Inter, sans-serif">A</text>
+      <button class="claude-chat-toggle" id="claudeChatToggle" title="Ask Grey Sankore (Ctrl+J)">
+        <svg class="claude-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2C12 2 12.8 5.6 13.6 7.2C14.4 8.8 16 10.4 17.6 11.2C19.2 12 22 12 22 12C22 12 19.2 12 17.6 12.8C16 13.6 14.4 15.2 13.6 16.8C12.8 18.4 12 22 12 22C12 22 11.2 18.4 10.4 16.8C9.6 15.2 8 13.6 6.4 12.8C4.8 12 2 12 2 12C2 12 4.8 12 6.4 11.2C8 10.4 9.6 8.8 10.4 7.2C11.2 5.6 12 2 12 2Z"/>
         </svg>
         <span class="claude-toggle-pulse"></span>
       </button>
 
       <div class="claude-chat-panel" id="claudeChatPanel">
         <div class="claude-panel-header">
-          <span class="claude-panel-title">Ask Claude</span>
-          <button class="claude-panel-close" id="claudePanelClose" title="Close (Esc)">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
+          <div class="claude-panel-titlewrap">
+            <span class="claude-panel-title">Grey Sankore</span>
+            <span class="claude-panel-subtitle">Quick access</span>
+          </div>
+          <div class="claude-panel-header-actions">
+            <button class="claude-panel-fullview" id="claudePanelFullView" title="Open the full Grey Sankore analysis view">Full view &rarr;</button>
+            <button class="claude-panel-close" id="claudePanelClose" title="Close (Esc)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </div>
         </div>
         <div class="claude-panel-messages" id="claudePanelMessages">
           <div class="claude-msg claude-msg-ai">
-            <div class="claude-msg-content">Hey - I'm your quick trading assistant. Ask me anything about what you're looking at.</div>
+            <div class="claude-msg-content">I'm <strong>Grey Sankore</strong>, quick-access mode. Ask about any ticker, your portfolio, or what's on screen. For a deeper dive, open the full view.</div>
             <div class="ai-response-note">Educational information, not advice.</div>
           </div>
         </div>
@@ -360,7 +365,7 @@
         </svg>
         <span>Options</span>
       </button>
-      <button class="nav-btn" data-view="greysankore" title="Grey Sankore AI (Claude)">
+      <button class="nav-btn" data-view="greysankore" title="Grey Sankore AI">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none">
           <path d="M12 2C12 2 12.8 5.6 13.6 7.2C14.4 8.8 16 10.4 17.6 11.2C19.2 12 22 12 22 12C22 12 19.2 12 17.6 12.8C16 13.6 14.4 15.2 13.6 16.8C12.8 18.4 12 22 12 22C12 22 11.2 18.4 10.4 16.8C9.6 15.2 8 13.6 6.4 12.8C4.8 12 2 12 2 12C2 12 4.8 12 6.4 11.2C8 10.4 9.6 8.8 10.4 7.2C11.2 5.6 12 2 12 2Z"/>
         </svg>
@@ -2625,8 +2630,8 @@
     <div class="kbd-grid">
       <div class="kbd-item"><kbd>Ctrl</kbd>+<kbd>K</kbd> <span>Search ticker</span></div>
       <div class="kbd-item"><kbd>1</kbd>-<kbd>8</kbd> <span>Switch views</span></div>
-      <div class="kbd-item"><kbd>Ctrl</kbd>+<kbd>G</kbd> <span>Ask Grey Sankore</span></div>
-      <div class="kbd-item"><kbd>Ctrl</kbd>+<kbd>J</kbd> <span>Quick Claude chat</span></div>
+      <div class="kbd-item"><kbd>Ctrl</kbd>+<kbd>G</kbd> <span>Grey Sankore (full view)</span></div>
+      <div class="kbd-item"><kbd>Ctrl</kbd>+<kbd>J</kbd> <span>Grey Sankore (quick chat)</span></div>
       <div class="kbd-item"><kbd>Esc</kbd> <span>Close overlay</span></div>
       <div class="kbd-item"><kbd>?</kbd> <span>Show shortcuts</span></div>
     </div>

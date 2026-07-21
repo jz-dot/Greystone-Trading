@@ -6575,6 +6575,18 @@ if (document.readyState === 'loading') {
     closePanel();
   });
 
+  // "Full view" - same assistant, deep-analysis surface. Closes the quick
+  // panel and navigates to the Grey Sankore view.
+  var fullViewBtn = document.getElementById('claudePanelFullView');
+  if (fullViewBtn) {
+    fullViewBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      closePanel();
+      var navBtn = document.querySelector('.nav-btn[data-view="greysankore"]');
+      if (navBtn) navBtn.click();
+    });
+  }
+
   // Close on click outside
   document.addEventListener('click', function(e) {
     if (isOpen && !wrapper.contains(e.target)) {
@@ -6684,12 +6696,14 @@ if (document.readyState === 'loading') {
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
-  // ---- System prompt (different from Grey Sankore) ----
-  var QUICK_SYSTEM_PROMPT = 'You are a quick trading assistant embedded in the Greystone Trading Platform topbar. ' +
+  // ---- System prompt (Grey Sankore, quick-access mode) ----
+  // Same assistant identity as the full Grey Sankore view; this is its
+  // topbar quick-access mode, tuned for short answers.
+  var QUICK_SYSTEM_PROMPT = 'You are Grey Sankore, this platform\'s research copilot, in quick-access (topbar) mode. ' +
     'You have access to the user\'s current view context. ' +
     'Be concise, actionable, and data-driven. Keep responses SHORT (2-4 bullet points max). ' +
     'Format responses with bullet points and bold key figures using HTML tags (<strong>, <ul>, <li>). ' +
-    'Do NOT write long paragraphs. This is a quick-access helper, not a deep analysis tool.';
+    'Do NOT write long paragraphs. This is quick-access mode; for deep analysis the user can open the full Grey Sankore view.';
 
   // Marker prepended to mock answers so demo fiction is not mistaken for a
   // real model response.

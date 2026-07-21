@@ -5814,3 +5814,10 @@ kbd {
   .topbar-ticker { display: none; }
   .fundamentals-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* Contribution room modal fields */
+.room-field { display: flex; flex-direction: column; gap: 3px; font-size: 10px; color: var(--text-muted); flex: 1; min-width: 120px; }
+.room-field input { background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 4px; color: var(--text-primary); font-size: 12px; padding: 5px 8px; }
+.room-result { color: var(--text-secondary); line-height: 1.5; }
+.room-result .room-room { font-weight: 700; color: var(--accent-gold); }
+.room-result .room-over { font-weight: 700; color: var(--loss); }

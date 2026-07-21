@@ -1056,6 +1056,10 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             Import from Broker
           </button>
+          <button class="agent-btn" id="pfRoomBtn" title="TFSA / RRSP / FHSA contribution room">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><path d="M9 22V12h6v10"/></svg>
+            Room
+          </button>
           <button class="agent-btn" id="importAlpacaBtn" style="display:none;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             Import from Alpaca
@@ -1151,9 +1155,11 @@
         <div class="panel-header">
           <h3 class="panel-title">Holdings</h3>
           <div style="display:flex;align-items:center;gap:8px;">
+            <button class="agent-btn" id="pfCdsBtn" style="font-size:10px;padding:3px 8px;" title="Auto-apply ETF return-of-capital and reinvested distributions to your adjusted cost base (CDS factors)">Distributions</button>
             <button class="agent-btn" id="pfExportHoldingsBtn" style="font-size:10px;padding:3px 8px;" title="Download current holdings as CSV">Export Holdings</button>
             <button class="agent-btn" id="pfExportTxnsBtn" style="font-size:10px;padding:3px 8px;" title="Download the full transaction ledger as CSV (re-importable)">Export Transactions</button>
             <button class="agent-btn" id="pfExportTaxBtn" style="font-size:10px;padding:3px 8px;" title="Schedule 3-style dispositions + income summary for this calendar year (CAD, transaction-date FX). Estimates, not tax advice.">Tax CSV</button>
+            <button class="btn-primary" id="pfTaxPackBtn" style="font-size:10px;padding:3px 8px;" title="Printable year-end tax pack: Schedule 3 dispositions, income, T5008 reconciliation, and your True Cost statement. Estimates, not tax advice.">Tax Pack</button>
             <span class="panel-subtitle" id="pfHoldingsCount">0 positions</span>
           </div>
         </div>
@@ -2966,6 +2972,9 @@
 <script src="services/fee-xray.js"></script>
 <script src="services/corporate-actions.js"></script>
 <script src="services/tax-report.js"></script>
+<script src="services/cds-roc.js"></script>
+<script src="services/tax-pack.js"></script>
+<script src="services/contribution-room.js"></script>
 <script src="app.js"></script>
 <script src="services/auth-ui.js"></script>
 
@@ -3322,6 +3331,7 @@
           <option value="dividend">Cash dividend / distribution</option>
           <option value="drip">DRIP reinvestment</option>
           <option value="roc">Return of capital (T3 box 42)</option>
+          <option value="reinvest">Reinvested distribution (T3 box 42)</option>
           <option value="split">Stock split</option>
         </select>
       </div>
@@ -3346,6 +3356,79 @@
     <div class="modal-footer">
       <button class="agent-btn" onclick="closeModal('eventModal')">Cancel</button>
       <button class="btn-primary" id="evtConfirmBtn">Record</button>
+    </div>
+  </div>
+</div>
+
+<!-- CDS DISTRIBUTIONS: auto-apply ETF ROC + reinvested distributions to ACB -->
+<div class="modal-overlay" id="cdsModal">
+  <div class="modal-content" style="max-width: 720px;">
+    <div class="modal-header">
+      <h2>ETF Distributions &rarr; ACB</h2>
+      <button class="modal-close" onclick="closeModal('cdsModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="gs-sample-banner" style="margin-bottom:12px;">
+        Placeholder factors - verify each against the fund's own CDS Innovations tax breakdown before you rely on these for filing.
+      </div>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;line-height:1.5;">
+        Return of capital lowers your adjusted cost base; reinvested (notional) distributions raise it. Both are easy to miss and
+        wrong on most brokers' books. Review the per-unit factors below, adjust to the fund's published figures, and apply.
+        Taxable (non-registered) ETF holdings only.
+      </p>
+      <div id="cdsBody" style="max-height:340px;overflow-y:auto;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="agent-btn" onclick="closeModal('cdsModal')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONTRIBUTION ROOM: TFSA / RRSP / FHSA -->
+<div class="modal-overlay" id="roomModal">
+  <div class="modal-content" style="max-width: 560px;">
+    <div class="modal-header">
+      <h2>Contribution Room</h2>
+      <button class="modal-close" onclick="closeModal('roomModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;line-height:1.5;">
+        Enter your figures below. Room updates as you type. RRSP room must come from your CRA
+        Notice of Assessment (it depends on your income and pension adjustments, which this app cannot see).
+        Saved to this browser only.
+      </p>
+
+      <div class="room-block" style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px;">
+        <div style="font-weight:600;color:var(--text-primary);margin-bottom:8px;">TFSA</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <label class="room-field">Birth year<input type="number" id="roomTfsaBirth" placeholder="1985"></label>
+          <label class="room-field">Total contributed to date<input type="number" id="roomTfsaContrib" placeholder="0"></label>
+          <label class="room-field">Withdrawals in prior years<input type="number" id="roomTfsaWdPrior" placeholder="0"></label>
+          <label class="room-field">Withdrawals this year<input type="number" id="roomTfsaWdNow" placeholder="0"></label>
+        </div>
+        <div class="room-result" id="roomTfsaResult" style="margin-top:8px;font-size:12px;"></div>
+      </div>
+
+      <div class="room-block" style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px;">
+        <div style="font-weight:600;color:var(--text-primary);margin-bottom:8px;">RRSP</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <label class="room-field">CRA deduction limit (from NOA)<input type="number" id="roomRrspLimit" placeholder="0"></label>
+          <label class="room-field">Contributed this year<input type="number" id="roomRrspContrib" placeholder="0"></label>
+        </div>
+        <div class="room-result" id="roomRrspResult" style="margin-top:8px;font-size:12px;"></div>
+      </div>
+
+      <div class="room-block" style="border:1px solid var(--border);border-radius:8px;padding:12px;">
+        <div style="font-weight:600;color:var(--text-primary);margin-bottom:8px;">FHSA</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <label class="room-field">Year account opened<input type="number" id="roomFhsaOpen" placeholder="2024"></label>
+          <label class="room-field">Total contributed to date<input type="number" id="roomFhsaContrib" placeholder="0"></label>
+        </div>
+        <div class="room-result" id="roomFhsaResult" style="margin-top:8px;font-size:12px;"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="agent-btn" onclick="closeModal('roomModal')">Close</button>
     </div>
   </div>
 </div>

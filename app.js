@@ -8147,16 +8147,19 @@ const PortfolioManager = (function() {
 
   // Map a position's transactions to ACB-engine input. Native = same-currency
   // (fxRate 1). Base = converted to CAD using each transaction's own fxRate.
+  // 'roc' and 'reinvest' are amount-based (no shares/price); everything else
+  // is share-based. Both must carry `amount` through to the ACB engine.
+  const AMOUNT_TYPES = { roc: true, reinvest: true };
   function nativeTxns(pos) {
-    return (pos.txns || []).map(t => t.type === 'roc'
-      ? { type: 'roc', date: t.date || todayISO(), amount: t.amount, fxRate: 1 }
+    return (pos.txns || []).map(t => AMOUNT_TYPES[t.type]
+      ? { type: t.type, date: t.date || todayISO(), amount: t.amount, fxRate: 1 }
       : { type: t.type, date: t.date || todayISO(), shares: t.shares,
           price: t.price, commission: t.commission || 0, fxRate: 1 });
   }
   function baseTxns(pos) {
     const fxOf = t => (pos.currency === 'USD') ? (t.fxRate || getUsdCadRate()) : 1;
-    return (pos.txns || []).map(t => t.type === 'roc'
-      ? { type: 'roc', date: t.date || todayISO(), amount: t.amount, fxRate: fxOf(t) }
+    return (pos.txns || []).map(t => AMOUNT_TYPES[t.type]
+      ? { type: t.type, date: t.date || todayISO(), amount: t.amount, fxRate: fxOf(t) }
       : { type: t.type, date: t.date || todayISO(), shares: t.shares,
           price: t.price, commission: t.commission || 0, fxRate: fxOf(t) });
   }
@@ -8677,6 +8680,56 @@ const PortfolioManager = (function() {
         this.addActivity('ROC', sym, 0, Number(opts.amount) || 0, { currency: pos.currency, realized: excessGain > 0.005 ? excessGain : null });
         return { ok: true, excessGain: excessGain };
       } catch (e) { return { ok: false, error: e.message }; }
+    },
+
+    // Reinvested / notional distribution (T3 box 42 reinvested): increases
+    // ACB, no shares/cash, no gain. Mirror of recordRoc.
+    recordReinvest: function(sym, account, opts) {
+      opts = opts || {};
+      const positions = (_load(STORAGE_KEY) || []).map(normalizePosition);
+      const pos = positions.find(p => p.symbol === sym && (p.account || 'non-registered') === (account || 'non-registered'));
+      if (!pos) return { ok: false, error: 'Position not found' };
+      try {
+        const fx = (pos.currency === 'USD') ? (Number(opts.fxRate) || getUsdCadRate()) : 1;
+        const amount = Number(opts.amount);
+        if (!(amount > 0)) return { ok: false, error: 'Reinvested amount must be positive' };
+        const txn = { type: 'reinvest', date: opts.date || todayISO(), amount: amount, fxRate: fx };
+        if (opts.source) txn.source = opts.source;
+        if (opts.fxEstimated) txn.fxEstimated = true;
+        pos.txns.push(txn);
+        recomputeAggregate(pos);
+        _save(STORAGE_KEY, positions);
+        this.addActivity('REINVEST', sym, 0, amount, { currency: pos.currency });
+        return { ok: true };
+      } catch (e) { return { ok: false, error: e.message }; }
+    },
+
+    // CDS distribution auto-import: apply return-of-capital + reinvested
+    // adjustments for a covered ETF for a tax year, using CdsRoc factors
+    // (placeholder unless overridden). unitsHeld defaults to current shares.
+    // Both legs carry source:'cds-import' so they are visibly flagged.
+    applyCdsAdjustments: function(sym, account, year, opts) {
+      opts = opts || {};
+      if (typeof CdsRoc === 'undefined') return { ok: false, error: 'CDS module unavailable' };
+      const positions = (_load(STORAGE_KEY) || []).map(normalizePosition);
+      const pos = positions.find(p => p.symbol === sym && (p.account || 'non-registered') === (account || 'non-registered'));
+      if (!pos) return { ok: false, error: 'Position not found' };
+      const unitsHeld = (Number(opts.unitsHeld) > 0) ? Number(opts.unitsHeld) : pos.shares;
+      const fx = (pos.currency === 'USD') ? (Number(opts.fxRate) || getUsdCadRate()) : 1;
+      const txns = CdsRoc.buildAdjustmentTxns({
+        symbol: sym, unitsHeld: unitsHeld, year: year,
+        factors: opts.factors, fxRate: fx, currency: pos.currency
+      });
+      if (!txns.length) return { ok: false, error: 'No distribution factors for ' + sym + ' ' + year };
+      const beforeGain = acbBaseSummary(pos).totalRealizedGain;
+      txns.forEach(t => pos.txns.push(t));
+      const excessGain = acbBaseSummary(pos).totalRealizedGain - beforeGain;
+      recomputeAggregate(pos);
+      _save(STORAGE_KEY, positions);
+      const roc = txns.find(t => t.type === 'roc');
+      const reinvest = txns.find(t => t.type === 'reinvest');
+      this.addActivity('CDS', sym, 0, 0, { currency: pos.currency });
+      return { ok: true, roc: roc ? roc.amount : 0, reinvest: reinvest ? reinvest.amount : 0, excessGain: excessGain, unitsHeld: unitsHeld };
     },
 
     // Stock split: adjusts pre-split lots; total ACB invariant.
@@ -9502,6 +9555,7 @@ const PortfolioManager = (function() {
       dividend: 'Cash income. Recorded to the income ledger; ACB is untouched.',
       drip: 'Reinvested distribution: adds a zero-commission buy at amount divided by shares, and records the income.',
       roc: 'Return of capital (T3 box 42): reduces ACB dollar for dollar; anything above remaining ACB realizes a capital gain.',
+      reinvest: 'Reinvested / notional distribution (T3 box 42): increases ACB by the amount, no new units or cash. Taxed as income in the year.',
       split: 'Adjusts every pre-split lot (shares multiplied, price divided). Total ACB does not change.'
     };
 
@@ -9558,6 +9612,9 @@ const PortfolioManager = (function() {
         } else if (type === 'roc') {
           res = PortfolioManager.recordRoc(sym, acct, { amount: amount, date: date, fxRate: fx.rate, fxEstimated: fx.estimated });
           if (res && res.ok && typeof showToast === 'function') showToast('Return of capital recorded' + (res.excessGain > 0.005 ? ' - excess over ACB realized $' + res.excessGain.toFixed(2) + ' CAD gain' : ' - ACB reduced'), 'success');
+        } else if (type === 'reinvest') {
+          res = PortfolioManager.recordReinvest(sym, acct, { amount: amount, date: date, fxRate: fx.rate, fxEstimated: fx.estimated });
+          if (res && res.ok && typeof showToast === 'function') showToast('Reinvested distribution recorded - ACB increased by $' + (Number(amount) || 0).toFixed(2) + ' ' + (h ? h.currency : ''), 'success');
         } else if (type === 'split') {
           res = PortfolioManager.recordSplit(sym, acct, { ratio: ratio, date: date });
           if (res && res.ok && typeof showToast === 'function') showToast('Split applied: ' + res.affected + ' lot' + (res.affected === 1 ? '' : 's') + ' adjusted, now ' + res.shares.toLocaleString('en-US', { maximumFractionDigits: 4 }) + ' shares', 'success');
@@ -9722,6 +9779,33 @@ const PortfolioManager = (function() {
           const s = TaxReport.summarize(rows);
           showToast(year + ' tax CSVs: ' + s.rowCount + ' disposition' + (s.rowCount === 1 ? '' : 's') + ', net ' + (s.totalGainCad >= 0 ? '+$' : '-$') + Math.abs(s.totalGainCad).toFixed(2) + ' CAD' + (s.approxCount ? ' (' + s.approxCount + ' approximate)' : ''), 'success');
         }
+      });
+    }
+    const taxPackBtn = document.getElementById('pfTaxPackBtn');
+    if (taxPackBtn) {
+      taxPackBtn.addEventListener('click', () => {
+        if (typeof TaxPack === 'undefined') { if (typeof showToast === 'function') showToast('Tax Pack module unavailable', 'error'); return; }
+        const year = new Date().getFullYear();
+        // Fee X-Ray inputs power the optional True Cost section; reuse saved prefs.
+        let feeInputs = null, currentBrokerId = null;
+        try {
+          const p = JSON.parse(localStorage.getItem('gs_feexray_prefs')) || {};
+          currentBrokerId = p.broker || 'td';
+          feeInputs = { tradesPerYear: p.tradesPerYear, optionContractsPerYear: p.contracts, usdCadRate: PortfolioManager.getUsdCadRate() };
+        } catch (e) {}
+        const pack = TaxPack.buildTaxPack({
+          positions: PortfolioManager.getPositions(),
+          income: PortfolioManager.getIncome(),
+          holdings: PortfolioManager.getHoldings(),
+          year: year, feeInputs: feeInputs, currentBrokerId: currentBrokerId
+        });
+        pack.meta.generatedAt = new Date().toISOString();
+        const frag = TaxPack.renderTaxPackHtml(pack);
+        const win = window.open('', '_blank');
+        if (!win) { if (typeof showToast === 'function') showToast('Allow pop-ups to open the Tax Pack', 'error'); return; }
+        win.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' + year + ' Tax Summary - GSP Trading</title></head><body>' + frag + '</body></html>');
+        win.document.close();
+        if (typeof showToast === 'function') showToast(year + ' Tax Pack opened in a new tab - print or save as PDF', 'success');
       });
     }
     const expTxnBtn = document.getElementById('pfExportTxnsBtn');
@@ -11511,5 +11595,183 @@ if (askAIBtn) {
   document.addEventListener('gs:portfolio-synced', () => {
     const active = document.querySelector('.view.active');
     if (active && active.id === 'view-feexray') render();
+  });
+})();
+
+
+// ============================================
+// CDS DISTRIBUTIONS -> ACB (return of capital + reinvested distributions)
+// The "moat" feature: auto-apply the ETF distribution ACB adjustments that
+// nobody else computes. Placeholder factors are editable and flagged
+// unverified. Taxable (non-registered) ETF holdings only.
+// ============================================
+(function initCdsModal() {
+  // The cdsModal markup lives after this script in the document, so defer
+  // element lookup until the DOM has finished parsing.
+  function ready(fn){ if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once: true }); else fn(); }
+  ready(function () {
+  const btn = document.getElementById('pfCdsBtn');
+  const modal = document.getElementById('cdsModal');
+  const body = document.getElementById('cdsBody');
+  if (!btn || !modal || !body) return;
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+  }
+
+  function coveredSet() {
+    if (typeof CdsRoc === 'undefined') return {};
+    const map = {};
+    CdsRoc.listCoverage().forEach(c => { map[c.symbol.toUpperCase()] = c.years; });
+    return map;
+  }
+
+  function render() {
+    if (typeof CdsRoc === 'undefined') { body.innerHTML = '<p style="color:var(--text-muted);">CDS module unavailable.</p>'; return; }
+    const covered = coveredSet();
+    // Taxable ETF holdings with coverage.
+    const holdings = PortfolioManager.getHoldings().filter(h =>
+      (h.account || 'non-registered') === 'non-registered' && covered[h.symbol.toUpperCase()]);
+    if (!holdings.length) {
+      body.innerHTML = '<p style="color:var(--text-muted);line-height:1.6;">No taxable ETF holdings with distribution coverage. Covered funds: ' +
+        Object.keys(covered).join(', ') + '. (Registered-account holdings are excluded - distributions inside a TFSA/RRSP/FHSA do not affect ACB.)</p>';
+      return;
+    }
+    let html = '';
+    holdings.forEach(h => {
+      const years = covered[h.symbol.toUpperCase()];
+      html += '<div class="cds-holding" style="margin-bottom:16px;border:1px solid var(--border);border-radius:8px;padding:12px;">' +
+        '<div style="font-weight:600;color:var(--text-primary);margin-bottom:8px;">' + esc(h.symbol) +
+        ' <span style="font-size:11px;color:var(--text-dim);font-weight:400;">' + h.shares.toLocaleString('en-US', { maximumFractionDigits: 4 }) + ' units held</span></div>';
+      html += '<table class="pf-import-table" style="width:100%;"><thead><tr>' +
+        '<th>Year</th><th class="num">ROC / unit</th><th class="num">Reinvested / unit</th><th class="num">Units held</th><th></th></tr></thead><tbody>';
+      years.forEach(yr => {
+        const f = CdsRoc.getFactors(h.symbol, yr) || { rocPerUnit: 0, reinvestedPerUnit: 0 };
+        const id = (h.symbol + '_' + yr).replace(/[^A-Za-z0-9]/g, '_');
+        html += '<tr>' +
+          '<td>' + yr + '</td>' +
+          '<td class="num"><input type="number" step="0.0001" id="cdsRoc_' + id + '" value="' + f.rocPerUnit + '" style="width:80px;"></td>' +
+          '<td class="num"><input type="number" step="0.0001" id="cdsRei_' + id + '" value="' + f.reinvestedPerUnit + '" style="width:80px;"></td>' +
+          '<td class="num"><input type="number" step="0.0001" id="cdsUnits_' + id + '" value="' + h.shares + '" style="width:90px;"></td>' +
+          '<td><button class="btn-primary cds-apply" data-sym="' + esc(h.symbol) + '" data-year="' + yr + '" data-id="' + id + '" style="font-size:10px;padding:3px 10px;">Apply</button></td>' +
+          '</tr>';
+      });
+      html += '</tbody></table></div>';
+    });
+    body.innerHTML = html;
+
+    body.querySelectorAll('.cds-apply').forEach(applyBtn => {
+      applyBtn.addEventListener('click', () => {
+        const sym = applyBtn.dataset.sym;
+        const year = parseInt(applyBtn.dataset.year, 10);
+        const id = applyBtn.dataset.id;
+        const rocPerUnit = parseFloat((document.getElementById('cdsRoc_' + id) || {}).value) || 0;
+        const reinvestedPerUnit = parseFloat((document.getElementById('cdsRei_' + id) || {}).value) || 0;
+        const unitsHeld = parseFloat((document.getElementById('cdsUnits_' + id) || {}).value) || 0;
+        if (rocPerUnit <= 0 && reinvestedPerUnit <= 0) {
+          if (typeof showToast === 'function') showToast('Both factors are zero for ' + sym + ' ' + year + ' - nothing to apply', 'info');
+          return;
+        }
+        const res = PortfolioManager.applyCdsAdjustments(sym, 'non-registered', year, {
+          unitsHeld: unitsHeld,
+          factors: { rocPerUnit: rocPerUnit, reinvestedPerUnit: reinvestedPerUnit }
+        });
+        if (res && res.ok) {
+          if (typeof showToast === 'function') {
+            showToast(sym + ' ' + year + ': ROC $' + res.roc.toFixed(2) + ', reinvested $' + res.reinvest.toFixed(2) +
+              (res.excessGain > 0.005 ? ' (ROC excess gain $' + res.excessGain.toFixed(2) + ')' : ''), 'success');
+          }
+          document.dispatchEvent(new CustomEvent('gs:portfolio-synced'));
+          render();
+        } else if (typeof showToast === 'function') {
+          showToast((res && res.error) || 'Could not apply', 'error');
+        }
+      });
+    });
+  }
+
+  btn.addEventListener('click', () => { render(); modal.classList.add('active'); });
+  });
+})();
+
+
+// ============================================
+// CONTRIBUTION ROOM (TFSA / RRSP / FHSA)
+// Pure engine in services/contribution-room.js. Inputs persist to this
+// browser only (not synced). RRSP is user-seeded from the CRA figure.
+// ============================================
+(function initContributionRoom() {
+  function ready(fn){ if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once: true }); else fn(); }
+  ready(function () {
+  const btn = document.getElementById('pfRoomBtn');
+  const modal = document.getElementById('roomModal');
+  if (!btn || !modal || typeof ContributionRoom === 'undefined') return;
+  const PREFS = 'gs_contrib_room';
+  const currentYear = new Date().getFullYear();
+
+  const ids = ['roomTfsaBirth','roomTfsaContrib','roomTfsaWdPrior','roomTfsaWdNow',
+    'roomRrspLimit','roomRrspContrib','roomFhsaOpen','roomFhsaContrib'];
+
+  function load() {
+    let p = {};
+    try { p = JSON.parse(localStorage.getItem(PREFS)) || {}; } catch (e) {}
+    ids.forEach(id => { const el = document.getElementById(id); if (el && p[id] != null) el.value = p[id]; });
+  }
+  function save() {
+    const p = {};
+    ids.forEach(id => { const el = document.getElementById(id); if (el && el.value !== '') p[id] = el.value; });
+    try { localStorage.setItem(PREFS, JSON.stringify(p)); } catch (e) {}
+  }
+  const money = v => '$' + Math.round(v).toLocaleString('en-CA');
+
+  function overLine(over) {
+    if (!(over > 0)) return '';
+    const pen = ContributionRoom.overContributionPenalty(over);
+    return ' <span class="room-over">Over by ' + money(over) + ' (~' + money(pen.penaltyPerMonth) + '/mo penalty)</span>';
+  }
+
+  function render() {
+    // TFSA
+    const birth = parseInt(document.getElementById('roomTfsaBirth').value, 10);
+    const tfsaEl = document.getElementById('roomTfsaResult');
+    if (birth > 1900) {
+      const contributed = parseFloat(document.getElementById('roomTfsaContrib').value) || 0;
+      const wdPrior = parseFloat(document.getElementById('roomTfsaWdPrior').value) || 0;
+      const wdNow = parseFloat(document.getElementById('roomTfsaWdNow').value) || 0;
+      const r = ContributionRoom.computeTfsaRoom({
+        birthYear: birth, currentYear: currentYear,
+        contributions: [{ year: currentYear, amount: contributed }],
+        withdrawals: [{ year: currentYear - 1, amount: wdPrior }, { year: currentYear, amount: wdNow }]
+      });
+      tfsaEl.innerHTML = 'Accumulated limit ' + money(r.accumulatedLimit) + ' &middot; contributed ' + money(r.totalContributed) +
+        ' &middot; room <span class="room-room">' + money(r.room) + '</span>' + overLine(r.overContributed) +
+        (wdNow > 0 ? '<br><span style="color:var(--text-dim);">This year\'s ' + money(wdNow) + ' withdrawal restores room on Jan 1, ' + (currentYear + 1) + '.</span>' : '');
+    } else { tfsaEl.innerHTML = '<span style="color:var(--text-dim);">Enter your birth year to compute TFSA room.</span>'; }
+
+    // RRSP
+    const rrspEl = document.getElementById('roomRrspResult');
+    const limit = parseFloat(document.getElementById('roomRrspLimit').value) || 0;
+    if (limit > 0) {
+      const contributed = parseFloat(document.getElementById('roomRrspContrib').value) || 0;
+      const r = ContributionRoom.computeRrspRoom({ craDeductionLimit: limit, contributions: [{ year: currentYear, amount: contributed }] });
+      rrspEl.innerHTML = 'Deduction limit ' + money(r.craDeductionLimit) + ' &middot; contributed ' + money(r.totalContributed) +
+        ' &middot; room <span class="room-room">' + money(r.room) + '</span>' + overLine(r.overContributed);
+    } else { rrspEl.innerHTML = '<span style="color:var(--text-dim);">Enter your CRA deduction limit (Notice of Assessment) to compute RRSP room.</span>'; }
+
+    // FHSA
+    const fhsaEl = document.getElementById('roomFhsaResult');
+    const openYear = parseInt(document.getElementById('roomFhsaOpen').value, 10);
+    if (openYear >= 2023) {
+      const contributed = parseFloat(document.getElementById('roomFhsaContrib').value) || 0;
+      const r = ContributionRoom.computeFhsaRoom({ openYear: openYear, currentYear: currentYear, contributions: [{ year: currentYear, amount: contributed }] });
+      fhsaEl.innerHTML = 'Participation room ' + money(r.participationRoom) + ' &middot; contributed ' + money(r.totalContributed) +
+        ' &middot; room <span class="room-room">' + money(r.room) + '</span> &middot; lifetime left ' + money(r.lifetimeRemaining) + overLine(r.overContributed);
+    } else { fhsaEl.innerHTML = '<span style="color:var(--text-dim);">Enter the year you opened your FHSA (2023 or later).</span>'; }
+  }
+
+  ids.forEach(id => { const el = document.getElementById(id); if (el) el.addEventListener('input', () => { save(); render(); }); });
+  btn.addEventListener('click', () => { load(); render(); modal.classList.add('active'); });
   });
 })();

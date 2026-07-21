@@ -116,8 +116,8 @@ function normalize(transactions) {
       throw new Error('Each transaction must be an object');
     }
     const type = String(tx.type || '').toLowerCase();
-    if (type !== 'buy' && type !== 'sell' && type !== 'roc') {
-      throw new Error("Unknown transaction type '" + tx.type + "'. Expected 'buy', 'sell', or 'roc'.");
+    if (type !== 'buy' && type !== 'sell' && type !== 'roc' && type !== 'reinvest') {
+      throw new Error("Unknown transaction type '" + tx.type + "'. Expected 'buy', 'sell', 'roc', or 'reinvest'.");
     }
     const ts = parseDate(tx.date);
     const fxRate = num(tx.fxRate, 1);
@@ -216,6 +216,32 @@ function computeACB(transactions, options) {
         sharesHeld: snapZero(shares),
         totalACB: snapZero(totalACB),
         acbPerShare: acbPerShare,
+      });
+      continue;
+    }
+
+    if (r.type === 'reinvest') {
+      // Reinvested / notional ("phantom") distribution: a fund distributes
+      // income that is immediately reinvested WITHOUT issuing new units or
+      // paying cash (T3 box 42 reinvested distributions). It is taxed as
+      // income in the year received (handled elsewhere) and INCREASES ACB by
+      // the reinvested amount - the mirror of return of capital. Shares and
+      // cash are unchanged; no capital gain arises here.
+      const reinvestCAD = (r.amount !== null ? r.amount : r.shares * r.price) * fx;
+      totalACB = snapZero(totalACB + reinvestCAD);
+      const acbPerShareRi = shares > 0 ? totalACB / shares : 0;
+      ledger.push({
+        index: i,
+        date: formatDate(r.ts),
+        type: 'reinvest',
+        shares: 0,
+        fxRate: fx,
+        reinvestAmount: reinvestCAD,
+        cashFlowCAD: 0,
+        capitalGain: 0,
+        sharesHeld: snapZero(shares),
+        totalACB: snapZero(totalACB),
+        acbPerShare: acbPerShareRi,
       });
       continue;
     }

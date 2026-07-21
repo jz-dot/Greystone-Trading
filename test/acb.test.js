@@ -309,3 +309,39 @@ test('empty transaction list yields zero position', () => {
   const cur = ACB.currentACB([]);
   assert.deepStrictEqual(cur, { shares: 0, totalACB: 0, acbPerShare: 0 });
 });
+
+/* --------------------------------------------------------------------------
+   REINVESTED / NOTIONAL DISTRIBUTIONS increase ACB with no share or cash
+   change (the mirror of return of capital). Taxed as income elsewhere.
+   -------------------------------------------------------------------------- */
+test('reinvested distribution increases ACB, leaves shares unchanged', () => {
+  const r = ACB.computeACB([
+    { date: '2026-01-05', type: 'buy', shares: 100, price: 20, commission: 0 },  // ACB 2000
+    { date: '2026-12-20', type: 'reinvest', amount: 150 },                        // +150 -> 2150
+  ]);
+  approx(r.summary.currentBookValue, 2150, 1e-6, 'ACB after reinvest');
+  assert.strictEqual(r.summary.currentShares, 100, 'shares unchanged by reinvest');
+  approx(r.summary.currentACBPerShare, 21.5, 1e-9, 'ACB/share after reinvest');
+  assert.strictEqual(r.summary.totalRealizedGain, 0, 'reinvest realizes no gain');
+  const row = r.ledger[r.ledger.length - 1];
+  assert.strictEqual(row.type, 'reinvest');
+  assert.strictEqual(row.cashFlowCAD, 0, 'reinvest is non-cash');
+});
+
+test('reinvest then ROC net correctly against ACB', () => {
+  const r = ACB.computeACB([
+    { date: '2026-01-05', type: 'buy', shares: 100, price: 10, commission: 0 }, // 1000
+    { date: '2026-06-30', type: 'reinvest', amount: 200 },                       // 1200
+    { date: '2026-12-31', type: 'roc', amount: 300 },                            // 900
+  ]);
+  approx(r.summary.currentBookValue, 900, 1e-6, 'ACB after reinvest + ROC');
+  assert.strictEqual(r.summary.totalRealizedGain, 0, 'no gain: ROC within ACB');
+});
+
+test('reinvest honours transaction-date FX', () => {
+  const r = ACB.computeACB([
+    { date: '2026-01-05', type: 'buy', shares: 10, price: 100, commission: 0, fxRate: 1.30 }, // 1300 CAD
+    { date: '2026-12-20', type: 'reinvest', amount: 100, fxRate: 1.40 },                        // +140 CAD
+  ]);
+  approx(r.summary.currentBookValue, 1440, 1e-6, 'ACB in CAD with dated FX on reinvest');
+});

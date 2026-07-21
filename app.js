@@ -5610,38 +5610,49 @@ var DEFAULT_PORTFOLIO = [
    Portfolio and Risk views no longer collide on the same storage key. */
 
 /* Generate or retrieve equity curve for drawdown chart */
-function getEquityCurve() {
-  var key = 'gs_equity_curve';
-  var existing = null;
-  try { existing = JSON.parse(localStorage.getItem(key)); } catch(e) {}
-  if (existing && Array.isArray(existing) && existing.length > 0) return existing;
+// Real risk price history, populated by fetchRiskSeries() before rendering.
+// riskCloses = { SYM: closes[] } for the correlation matrix; riskEquityCurve =
+// the current-holdings-valued-back equity series (illustrative) for the
+// drawdown chart + Max Drawdown stat. Both are real market data, not random.
+var riskCloses = {};
+var riskEquityCurve = null;
 
-  // Generate 90-day simulated equity curve
-  var curve = [];
-  var startVal = 100000;
-  var val = startVal;
-  var now = Date.now();
-  var dayMs = 86400000;
-  for (var i = 89; i >= 0; i--) {
-    var date = new Date(now - i * dayMs);
-    // Create realistic drawdown periods
-    var dayNum = 90 - i;
-    var dailyReturn;
-    if (dayNum > 15 && dayNum < 30) {
-      dailyReturn = -0.005 + Math.random() * 0.003; // drawdown period 1
-    } else if (dayNum > 55 && dayNum < 68) {
-      dailyReturn = -0.008 + Math.random() * 0.005; // drawdown period 2 (deeper)
-    } else {
-      dailyReturn = 0.001 + (Math.random() - 0.4) * 0.012; // slight upward bias
+async function fetchRiskSeries() {
+  var data = getRiskPortfolioData();
+  var positions = (data.positions || []).filter(function (p) { return p.qty > 0; });
+  var symbols = positions.map(function (p) { return p.symbol; }).filter(Boolean);
+  if (!symbols.length) { riskCloses = {}; riskEquityCurve = { points: [], note: '' }; return; }
+  var series = await Promise.all(symbols.map(function (sym) {
+    return fetch('/api/chart/' + encodeURIComponent(sym) + '?interval=1d&range=1y')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { return { sym: sym, candles: (d && d.candles || []).filter(function (c) { return c.close != null; }) }; })
+      .catch(function () { return { sym: sym, candles: [] }; });
+  }));
+  var closes = {}, priceSeries = {};
+  series.forEach(function (s) {
+    if (s.candles.length) {
+      closes[s.sym] = s.candles.map(function (c) { return c.close; });
+      priceSeries[s.sym] = s.candles.map(function (c) { return { time: c.time, close: c.close }; });
     }
-    val = val * (1 + dailyReturn);
-    curve.push({
-      date: date.toISOString().split('T')[0],
-      value: Math.round(val * 100) / 100
+  });
+  riskCloses = closes;
+  if (typeof RiskAnalytics !== 'undefined') {
+    riskEquityCurve = RiskAnalytics.buildEquityCurve(
+      positions.map(function (p) { return { symbol: p.symbol, shares: p.qty }; }), priceSeries);
+  }
+}
+
+// Returns the real illustrative equity curve as [{date, value}] for the chart
+// and drawdown math. Empty until fetchRiskSeries() runs (first sync pass).
+function getEquityCurve() {
+  if (riskEquityCurve && riskEquityCurve.points && riskEquityCurve.points.length) {
+    return riskEquityCurve.points.map(function (pt) {
+      var d;
+      try { d = new Date(pt.time * 1000).toISOString().slice(0, 10); } catch (e) { d = ''; }
+      return { date: d, value: Math.round(pt.value * 100) / 100 };
     });
   }
-  localStorage.setItem(key, JSON.stringify(curve));
-  return curve;
+  return [];
 }
 
 function getRiskPortfolioData() {
@@ -5858,32 +5869,34 @@ function populateConcentrationChart(data) {
   }
 }
 
+// Real pairwise correlations over the top holdings, computed from 1y daily
+// returns (riskCloses, populated by fetchRiskSeries). Cells with insufficient
+// overlapping history render greyed out rather than a fabricated number.
 function populateCorrelationHeatmap(data) {
   var table = document.getElementById('corrHeatmap');
   if (!table) return;
 
-  var top5 = data.positions.slice().sort(function(a, b) { return b.weight - a.weight; }).slice(0, 5).map(function(p) { return p.symbol; });
+  var top = data.positions.slice()
+    .sort(function(a, b) { return b.weight - a.weight; })
+    .slice(0, 5)
+    .map(function(p) { return p.symbol; });
 
-  var corrData = {
-    'NVDA-AAPL': 0.62, 'NVDA-MSFT': 0.71, 'NVDA-AMZN': 0.58, 'NVDA-META': 0.65,
-    'AAPL-MSFT': 0.78, 'AAPL-AMZN': 0.65, 'AAPL-META': 0.60,
-    'MSFT-AMZN': 0.72, 'MSFT-META': 0.68, 'AMZN-META': 0.55,
-    'NVDA-TSLA': 0.48, 'NVDA-GOOGL': 0.67, 'NVDA-JPM': 0.22, 'NVDA-AMD': 0.82, 'NVDA-COIN': 0.35, 'NVDA-DIS': 0.31, 'NVDA-PLTR': 0.52,
-    'AAPL-TSLA': 0.41, 'AAPL-GOOGL': 0.75, 'AAPL-JPM': 0.35, 'AAPL-AMD': 0.58, 'AAPL-COIN': 0.25, 'AAPL-DIS': 0.42, 'AAPL-PLTR': 0.38,
-    'MSFT-TSLA': 0.38, 'MSFT-GOOGL': 0.80, 'MSFT-JPM': 0.40, 'MSFT-AMD': 0.65, 'MSFT-COIN': 0.20, 'MSFT-DIS': 0.45, 'MSFT-PLTR': 0.42,
-    'AMZN-TSLA': 0.45, 'AMZN-GOOGL': 0.70, 'AMZN-JPM': 0.30, 'AMZN-AMD': 0.50, 'AMZN-COIN': 0.28, 'AMZN-DIS': 0.48, 'AMZN-PLTR': 0.35,
-    'META-TSLA': 0.36, 'META-GOOGL': 0.72, 'META-JPM': 0.28, 'META-AMD': 0.55, 'META-COIN': 0.22, 'META-DIS': 0.40, 'META-PLTR': 0.33,
-    'TSLA-GOOGL': 0.32, 'TSLA-JPM': 0.15, 'TSLA-AMD': 0.45, 'TSLA-COIN': 0.50, 'TSLA-DIS': 0.20, 'TSLA-PLTR': 0.40,
-    'GOOGL-JPM': 0.38, 'GOOGL-AMD': 0.60, 'GOOGL-COIN': 0.18, 'GOOGL-DIS': 0.50, 'GOOGL-PLTR': 0.42,
-    'JPM-AMD': 0.25, 'JPM-COIN': 0.12, 'JPM-DIS': 0.55, 'JPM-PLTR': 0.18,
-    'AMD-COIN': 0.38, 'AMD-DIS': 0.28, 'AMD-PLTR': 0.55, 'COIN-DIS': 0.10, 'COIN-PLTR': 0.42, 'DIS-PLTR': 0.22
-  };
+  // Restrict to holdings we actually have price history for.
+  var withData = top.filter(function(s) { return riskCloses[s] && riskCloses[s].length > 30; });
 
-  function getCorr(a, b) {
-    if (a === b) return 1.00;
-    return corrData[a + '-' + b] || corrData[b + '-' + a] || 0.40;
+  if (!withData.length || typeof RiskAnalytics === 'undefined') {
+    table.innerHTML = '<thead><tr><th></th></tr></thead><tbody><tr>' +
+      '<td class="corr-loading" style="padding:14px;color:var(--text-muted);font-size:12px;">Loading price history…</td></tr></tbody>';
+    return;
   }
+
+  var seriesBySymbol = {};
+  withData.forEach(function(s) { seriesBySymbol[s] = riskCloses[s]; });
+  var cm = RiskAnalytics.correlationMatrix(seriesBySymbol);
+  var symbols = cm.symbols, matrix = cm.matrix;
+
   function corrClass(val) {
+    if (val == null) return 'corr-na';
     if (val >= 0.99) return 'corr-self';
     if (val >= 0.7) return 'corr-high';
     if (val >= 0.5) return 'corr-med-high';
@@ -5892,13 +5905,14 @@ function populateCorrelationHeatmap(data) {
   }
 
   var html = '<thead><tr><th></th>';
-  top5.forEach(function(s) { html += '<th>' + s + '</th>'; });
+  symbols.forEach(function(s) { html += '<th>' + s + '</th>'; });
   html += '</tr></thead><tbody>';
-  top5.forEach(function(row) {
+  symbols.forEach(function(row, i) {
     html += '<tr><th>' + row + '</th>';
-    top5.forEach(function(col) {
-      var val = getCorr(row, col);
-      html += '<td class="' + corrClass(val) + '">' + val.toFixed(2) + '</td>';
+    symbols.forEach(function(col, j) {
+      var val = matrix[i][j];
+      var text = (val == null) ? '–' : val.toFixed(2);
+      html += '<td class="' + corrClass(val) + '">' + text + '</td>';
     });
     html += '</tr>';
   });
@@ -5972,7 +5986,16 @@ function renderDrawdownChart() {
   ctx.scale(dpr, dpr);
 
   var curve = getEquityCurve();
-  if (curve.length < 2) return;
+  ctx.clearRect(0, 0, w, h);
+  if (curve.length < 2) {
+    ctx.fillStyle = '#6B7280';
+    ctx.font = '12px JetBrains Mono, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Loading price history…', w / 2, h / 2);
+    var lbl0 = document.getElementById('drawdownCurrentLabel');
+    if (lbl0) { lbl0.textContent = 'Illustrative'; lbl0.style.color = '#6B7280'; }
+    return;
+  }
 
   // Compute drawdown series
   var peak = 0;
@@ -6447,12 +6470,18 @@ document.getElementById('riskRefreshBtn')?.addEventListener('click', function() 
 });
 
 // Refresh real quotes (when the user has real positions) before rendering Risk,
-// so market value / P&L / VaR use live prices, not the frozen cost basis.
+// so market value / P&L / VaR use live prices, not the frozen cost basis. Then
+// pull 1y price history for each holding so the correlation matrix and equity /
+// drawdown chart are computed from real returns rather than placeholders.
 function refreshThenLoadRisk() {
+  var withSeries = function () {
+    loadRiskView(); // immediate render (correlation/equity show a loading state)
+    fetchRiskSeries().then(loadRiskView).catch(function () { loadRiskView(); });
+  };
   if (typeof PortfolioManager !== 'undefined' && PortfolioManager.getPositions && PortfolioManager.getPositions().length && PortfolioManager.refreshQuotes) {
-    PortfolioManager.refreshQuotes().then(loadRiskView).catch(loadRiskView);
+    PortfolioManager.refreshQuotes().then(withSeries).catch(withSeries);
   } else {
-    loadRiskView();
+    withSeries();
   }
 }
 
@@ -10605,68 +10634,6 @@ const PortfolioManager = (function() {
    ============================================ */
 (function greySankoreCapAndModal() {
 
-var GS_CAP_DATA = {
-  large: {
-    anomalies: [
-      { ticker: 'NVDA', type: 'Volume Anomaly', severity: 'HIGH', desc: 'Options volume 340% above 20-day average. Concentrated in weekly $950 calls with 2 DTE. Possible institutional positioning ahead of earnings.' },
-      { ticker: 'AAPL', type: 'Dark Pool Alert', severity: 'MED', desc: 'Significant dark pool prints detected at $228 level. Block trades totaling $180M in last hour suggest institutional accumulation.' },
-      { ticker: 'JPM', type: 'Insider Activity', severity: 'LOW', desc: 'CFO filed Form 4 for 25,000 share purchase at $198.50. First insider buy in 8 months.' }
-    ],
-    values: [
-      { ticker: 'DIS', fwdPE: '17.8', vs5y: '-22%', fcfYield: '5.1%', score: 82, conviction: 'High' },
-      { ticker: 'PYPL', fwdPE: '14.2', vs5y: '-38%', fcfYield: '6.8%', score: 79, conviction: 'High' },
-      { ticker: 'JNJ', fwdPE: '14.5', vs5y: '-12%', fcfYield: '4.2%', score: 71, conviction: 'Med' },
-      { ticker: 'INTC', fwdPE: '22.1', vs5y: '-45%', fcfYield: '2.1%', score: 65, conviction: 'Med' },
-      { ticker: 'BMY', fwdPE: '7.8', vs5y: '-35%', fcfYield: '9.2%', score: 88, conviction: 'High' }
-    ],
-    momentum: 5
-  },
-  mid: {
-    anomalies: [
-      { ticker: 'PLTR', type: 'Momentum Breakout', severity: 'HIGH', desc: 'Broke out of 3-month consolidation on 4x average volume. RSI divergence confirmed. Government contract pipeline expanding.' },
-      { ticker: 'COIN', type: 'Options Sweep', severity: 'MED', desc: 'Aggressive call sweeps at ask in April $280 strikes. Premium spent: $12M in 30 minutes. Crypto correlation trade.' },
-      { ticker: 'NET', type: 'Earnings Anomaly', severity: 'LOW', desc: 'Implied volatility 85th percentile ahead of earnings. Historical post-earnings move averages 12%. Current straddle pricing 15% move.' }
-    ],
-    values: [
-      { ticker: 'SNAP', fwdPE: '28.4', vs5y: '-52%', fcfYield: '3.2%', score: 68, conviction: 'Med' },
-      { ticker: 'PINS', fwdPE: '19.1', vs5y: '-30%', fcfYield: '5.5%', score: 76, conviction: 'High' },
-      { ticker: 'HOOD', fwdPE: '16.8', vs5y: 'N/A', fcfYield: '4.1%', score: 62, conviction: 'Low' },
-      { ticker: 'DKNG', fwdPE: '32.5', vs5y: '-28%', fcfYield: '1.8%', score: 58, conviction: 'Low' },
-      { ticker: 'ABNB', fwdPE: '22.3', vs5y: '-18%', fcfYield: '6.2%', score: 74, conviction: 'Med' }
-    ],
-    momentum: 3
-  },
-  small: {
-    anomalies: [
-      { ticker: 'IONQ', type: 'Short Squeeze Setup', severity: 'HIGH', desc: 'Short interest at 28% of float. Cost to borrow spiked 400%. Days to cover: 5.2. Quantum computing catalyst approaching.' },
-      { ticker: 'SOFI', type: 'Institutional Accumulation', severity: 'MED', desc: 'Three major funds added positions in last 13F filing. Combined new ownership: 8.2M shares. Bank charter monetization thesis.' },
-      { ticker: 'PATH', type: 'Technical Reversal', severity: 'LOW', desc: 'Weekly RSI divergence at 52-week low. Inside week candle forming. AI automation spending cycle approaching.' }
-    ],
-    values: [
-      { ticker: 'SOFI', fwdPE: '24.5', vs5y: 'N/A', fcfYield: '2.8%', score: 64, conviction: 'Med' },
-      { ticker: 'AI', fwdPE: '35.2', vs5y: 'N/A', fcfYield: '1.2%', score: 55, conviction: 'Low' },
-      { ticker: 'RIVN', fwdPE: 'N/A', vs5y: 'N/A', fcfYield: '-8.5%', score: 42, conviction: 'Low' },
-      { ticker: 'OPEN', fwdPE: 'N/A', vs5y: 'N/A', fcfYield: '-2.1%', score: 38, conviction: 'Low' },
-      { ticker: 'MARA', fwdPE: '8.5', vs5y: 'N/A', fcfYield: '12.1%', score: 72, conviction: 'Med' }
-    ],
-    momentum: 4
-  },
-  micro: {
-    anomalies: [
-      { ticker: 'SOUN', type: 'Volume Spike', severity: 'HIGH', desc: 'Volume 800% above average with no news catalyst. Float rotation detected. Voice AI sector momentum building.' },
-      { ticker: 'RKLB', type: 'Contract Award', severity: 'MED', desc: 'New NASA contract rumored per industry sources. Prior contract wins led to 20-40% moves. Low float amplifies moves.' },
-      { ticker: 'LUNR', type: 'Catalyst Approaching', severity: 'LOW', desc: 'Next lunar mission window in 6 weeks. Historical pattern shows 30-60 day pre-mission accumulation phase.' }
-    ],
-    values: [
-      { ticker: 'BBAI', fwdPE: '15.2', vs5y: 'N/A', fcfYield: '3.5%', score: 61, conviction: 'Med' },
-      { ticker: 'SOUN', fwdPE: '45.0', vs5y: 'N/A', fcfYield: '-5.2%', score: 48, conviction: 'Low' },
-      { ticker: 'RKLB', fwdPE: '85.0', vs5y: 'N/A', fcfYield: '-3.8%', score: 52, conviction: 'Low' },
-      { ticker: 'ASTS', fwdPE: 'N/A', vs5y: 'N/A', fcfYield: '-12%', score: 35, conviction: 'Low' },
-      { ticker: 'GSAT', fwdPE: '42.0', vs5y: 'N/A', fcfYield: '0.5%', score: 44, conviction: 'Low' }
-    ],
-    momentum: 6
-  }
-};
 
 var GS_TICKER_ANALYSIS = {
   NVDA: { name: 'NVIDIA Corporation', price: '$924.80', change: '+3.14%', changeClass: 'profit', bull: ['Data center revenue accelerating with H100/H200 cycle, $26B+ quarterly run rate', 'Sovereign AI spending creating new demand vertical, 15+ countries building GPU clusters', 'Software/CUDA moat deepening with enterprise AI adoption curve still early innings'], bear: ['Valuation at 35x forward earnings assumes perfect execution for 3+ years', 'China export restrictions limit addressable market by ~$8B annually', 'AMD MI300X gaining traction with hyperscalers on price-performance ratio'], risks: [{ level: 'high', text: 'Concentration risk: Top 4 customers are 40%+ of data center revenue' }, { level: 'med', text: 'Supply chain: TSMC dependency for CoWoS packaging' }, { level: 'low', text: 'Regulatory: Potential antitrust scrutiny on CUDA lock-in' }], technicals: { support: '$880', resistance: '$960', rsi: '62.4', macd: 'Bullish', ma50: '$892', ma200: '$745' }, catalysts: [{ date: 'Mar 18', desc: 'GTC Keynote - New Blackwell architecture details' }, { date: 'May 22', desc: 'Q1 FY2026 Earnings Release' }, { date: 'Jun 10', desc: 'Computex 2026 - Next-gen roadmap' }], valuation: { fwdPE: '34.8x', evEbitda: '42.1x', peg: '1.2x', fcfYield: '2.8%', revGrowth: '+94%', margin: '72.5%' } },
@@ -10703,64 +10670,175 @@ var GS_TICKER_ANALYSIS = {
 var capLabels = { large: 'Large Cap', mid: 'Mid Cap', small: 'Small Cap', micro: 'Micro Cap' };
 var currentGSCap = 'large';
 
+// Real per-symbol market data, keyed by ticker, populated by fetchGSUniverse.
+// Feeds both the cap-tier screens and the deep-dive modal.
+var gsDataCache = {};
+var gsCapInFlight = {};
+
+function gsConviction(score) {
+  return score >= 75 ? 'High' : (score >= 60 ? 'Med' : 'Low');
+}
+function gsFmtVol(n) {
+  if (!isFinite(n) || n == null) return 'n/a';
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(0) + 'K';
+  return String(Math.round(n));
+}
+
+// Fetch fundamentals + 6-month daily closes for one symbol. Never throws;
+// missing pieces stay null so the screens can skip rather than fabricate.
+async function fetchGSTicker(sym) {
+  var out = { symbol: sym, fundamentals: null, price: null, prevClose: null,
+    changePct: null, closes: [], high52: null, low52: null, volume: null, avgVolume: null };
+  var jobs = [
+    fetch('/api/fundamentals/' + encodeURIComponent(sym)).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
+    fetch('/api/chart/' + encodeURIComponent(sym) + '?interval=1d&range=6mo').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
+  ];
+  var res = await Promise.all(jobs);
+  var f = res[0], cd = res[1];
+  if (f) {
+    out.fundamentals = f;
+    out.high52 = (typeof f.fiftyTwoWeekHigh === 'number') ? f.fiftyTwoWeekHigh : null;
+    out.low52 = (typeof f.fiftyTwoWeekLow === 'number') ? f.fiftyTwoWeekLow : null;
+    out.volume = (typeof f.volume === 'number') ? f.volume : null;
+    out.avgVolume = (typeof f.averageVolume === 'number') ? f.averageVolume : null;
+    out.prevClose = (typeof f.previousClose === 'number') ? f.previousClose : null;
+  }
+  var candles = (cd && Array.isArray(cd.candles)) ? cd.candles.filter(function (c) { return c && c.close != null; }) : [];
+  out.closes = candles.map(function (c) { return c.close; });
+  if (out.closes.length) {
+    out.price = out.closes[out.closes.length - 1];
+    if (out.prevClose == null && out.closes.length >= 2) out.prevClose = out.closes[out.closes.length - 2];
+    // Volume fallbacks from the chart when fundamentals lack them.
+    var vols = candles.map(function (c) { return c.volume; }).filter(function (v) { return typeof v === 'number'; });
+    if (out.volume == null && vols.length) out.volume = vols[vols.length - 1];
+    if (out.avgVolume == null && vols.length) {
+      var last10 = vols.slice(Math.max(0, vols.length - 11), vols.length - 1); // prior 10 sessions
+      if (last10.length) out.avgVolume = last10.reduce(function (a, b) { return a + b; }, 0) / last10.length;
+    }
+  }
+  if (out.price != null && out.prevClose) out.changePct = (out.price / out.prevClose - 1) * 100;
+  return out;
+}
+
+async function fetchGSUniverse(capSize) {
+  var tickers = (typeof CAP_SIZE_TICKERS !== 'undefined' && CAP_SIZE_TICKERS[capSize]) || [];
+  var rows = await Promise.all(tickers.map(fetchGSTicker));
+  rows.forEach(function (r) { gsDataCache[r.symbol] = r; });
+  return rows;
+}
+
+// Real relative-volume anomalies. This is what we can measure honestly from
+// Yahoo data: today's volume vs its trailing average, with RSI and 52w-high
+// distance for context. No dark-pool / options-flow / insider claims (those
+// need a paid feed we do not have).
+function buildGSAnomalies(rows) {
+  var out = [];
+  rows.forEach(function (r) {
+    if (r.volume == null || !r.avgVolume) return;
+    var relVol = r.volume / r.avgVolume;
+    if (!isFinite(relVol) || relVol < 1.3) return;
+    var rsiV = (typeof Screener !== 'undefined' && r.closes.length >= 15) ? Screener.rsi(r.closes, 14) : null;
+    var pctHigh = (typeof Screener !== 'undefined' && r.price != null && r.high52) ? Screener.pctFrom52wHigh(r.price, r.high52) : null;
+    var severity = relVol >= 2.5 ? 'HIGH' : (relVol >= 1.7 ? 'MED' : 'LOW');
+    var bits = ['Volume ' + relVol.toFixed(1) + 'x its 10-day average (' + gsFmtVol(r.volume) + ' vs ' + gsFmtVol(r.avgVolume) + ' avg).'];
+    if (rsiV != null) bits.push('RSI ' + Math.round(rsiV) + (rsiV >= 70 ? ' (overbought)' : rsiV <= 30 ? ' (oversold)' : '') + '.');
+    if (pctHigh != null) bits.push(Math.abs(Math.round(pctHigh)) + '% ' + (pctHigh >= 0 ? 'above' : 'below') + ' the 52-week high.');
+    if (r.changePct != null) bits.push('Session ' + (r.changePct >= 0 ? '+' : '') + r.changePct.toFixed(1) + '%.');
+    out.push({ ticker: r.symbol, type: 'Relative Volume', severity: severity, relVol: relVol, desc: bits.join(' ') });
+  });
+  out.sort(function (a, b) { return b.relVol - a.relVol; });
+  return out.slice(0, 6);
+}
+
+// Async: rebuild the Grey Sankore panels for a cap tier from real market data.
 function updateGSCapData(capSize) {
   currentGSCap = capSize;
-  var data = GS_CAP_DATA[capSize];
-  if (!data) return;
-
-  var anomalyStat = document.getElementById('gsStatAnomalies');
-  var valueStat = document.getElementById('gsStatValues');
-  var momentumStat = document.getElementById('gsStatMomentum');
-  if (anomalyStat) anomalyStat.textContent = data.anomalies.length;
-  if (valueStat) valueStat.textContent = data.values.length;
-  if (momentumStat) momentumStat.textContent = data.momentum;
-  // gsStatAccuracy is intentionally NOT driven by cap-tier data: it stays
-  // pinned to the honest "BYO key / No performance claims" state set in
-  // index.html and by refreshAiActiveBadge() below. A per-tier "94.2%
-  // accuracy" figure was fabricated and has been removed for good.
+  if (typeof Screener === 'undefined') return Promise.resolve();
 
   var alertList = document.getElementById('gsAlertList');
-  if (alertList) {
-    alertList.innerHTML = data.anomalies.map(function(a) {
-      var sevClass = a.severity === 'HIGH' ? 'high' : (a.severity === 'MED' ? 'medium' : 'low');
-      return '<div class="gs-alert anomaly" data-ticker="' + a.ticker + '" data-type="' + a.type + '" data-severity="' + a.severity + '">' +
-        '<div class="alert-header">' +
-          '<span class="alert-ticker">' + a.ticker + '</span>' +
-          '<span class="alert-type">' + a.type + '</span>' +
-          '<span class="alert-severity ' + sevClass + '">' + a.severity + '</span>' +
-        '</div>' +
-        '<div class="alert-body">' + a.desc + '</div>' +
-        '<div class="alert-actions">' +
-          '<button class="alert-action-btn primary">Analyze Position</button>' +
-          '<button class="alert-action-btn">Set Alert</button>' +
-        '</div>' +
-      '</div>';
-    }).join('');
-    bindAlertClicks();
-  }
-
   var valueTable = document.getElementById('gsValueTable');
-  if (valueTable) {
-    var html = '<div class="gvt-header"><span>Ticker</span><span>Fwd P/E</span><span>vs 5Y Avg</span><span>FCF Yield</span><span>Score</span><span>Conviction</span></div>';
-    html += data.values.map(function(v) {
-      var convClass = v.conviction === 'High' ? 'high' : (v.conviction === 'Med' ? 'medium' : 'low');
-      var vs5yClass = v.vs5y.indexOf('-') === 0 ? 'loss' : '';
-      var fcfClass = v.fcfYield.indexOf('-') === 0 ? 'loss' : 'profit';
-      return '<div class="gvt-row" data-ticker="' + v.ticker + '">' +
-        '<span class="gvt-ticker">' + v.ticker + '</span>' +
-        '<span>' + v.fwdPE + (v.fwdPE !== 'N/A' ? 'x' : '') + '</span>' +
-        '<span class="' + vs5yClass + '">' + v.vs5y + '</span>' +
-        '<span class="' + fcfClass + '">' + v.fcfYield + '</span>' +
-        '<span class="gvt-score">' + v.score + '</span>' +
-        '<span class="conviction ' + convClass + '">' + v.conviction + '</span>' +
-      '</div>';
-    }).join('');
-    valueTable.innerHTML = html;
-    bindValueRowClicks();
-  }
+  if (alertList) alertList.innerHTML = '<div class="gs-loading-note">Screening ' + (capLabels[capSize] || capSize) + ' universe on live Yahoo data…</div>';
+  if (valueTable) valueTable.innerHTML = '<div class="gs-loading-note">Loading fundamentals…</div>';
+
+  gsCapInFlight[capSize] = true;
+  return fetchGSUniverse(capSize).then(function (rows) {
+    // Guard against a stale response after the user switched tiers.
+    if (currentGSCap !== capSize) return;
+
+    var valueItems = rows.filter(function (r) { return r.fundamentals; })
+      .map(function (r) { return { symbol: r.symbol, fundamentals: r.fundamentals, price: r.price }; });
+    var valueRows = Screener.screen(valueItems, 'value');
+
+    var momItems = rows.filter(function (r) { return r.closes.length >= 50; })
+      .map(function (r) { return { symbol: r.symbol, closes: r.closes, price: r.price, high52: r.high52, low52: r.low52 }; });
+    var momRows = Screener.screen(momItems, 'momentum');
+    var momSignals = momRows.filter(function (m) { return m.trend === 'bullish' || m.score >= 60; });
+
+    var anomalies = buildGSAnomalies(rows);
+    var valueOpps = valueRows.filter(function (v) { return v.score >= 60; });
+
+    var anomalyStat = document.getElementById('gsStatAnomalies');
+    var valueStat = document.getElementById('gsStatValues');
+    var momentumStat = document.getElementById('gsStatMomentum');
+    if (anomalyStat) anomalyStat.textContent = anomalies.length;
+    if (valueStat) valueStat.textContent = valueOpps.length;
+    if (momentumStat) momentumStat.textContent = momSignals.length;
+
+    if (alertList) {
+      if (!anomalies.length) {
+        alertList.innerHTML = '<div class="gs-loading-note">No unusual-volume signals in this tier right now. This screen flags names trading above 1.3x their 10-day average volume.</div>';
+      } else {
+        alertList.innerHTML = anomalies.map(function (a) {
+          var sevClass = a.severity === 'HIGH' ? 'high' : (a.severity === 'MED' ? 'medium' : 'low');
+          return '<div class="gs-alert anomaly" data-ticker="' + a.ticker + '" data-type="' + a.type + '" data-severity="' + a.severity + '">' +
+            '<div class="alert-header">' +
+              '<span class="alert-ticker">' + a.ticker + '</span>' +
+              '<span class="alert-type">' + a.type + '</span>' +
+              '<span class="alert-severity ' + sevClass + '">' + a.severity + '</span>' +
+            '</div>' +
+            '<div class="alert-body">' + a.desc + '</div>' +
+            '<div class="alert-actions">' +
+              '<button class="alert-action-btn primary" data-act="analyze">Analyze Position</button>' +
+              '<button class="alert-action-btn" data-act="alert">Set Alert</button>' +
+            '</div>' +
+          '</div>';
+        }).join('');
+      }
+      bindAlertClicks();
+    }
+
+    if (valueTable) {
+      var top = valueRows.slice(0, 8);
+      if (!top.length) {
+        valueTable.innerHTML = '<div class="gs-loading-note">No value data available for this tier.</div>';
+      } else {
+        var html = '<div class="gvt-header"><span>Ticker</span><span>Fwd P/E</span><span>Trail P/E</span><span>Div Yield</span><span>Score</span><span>Conviction</span></div>';
+        html += top.map(function (v) {
+          var conv = gsConviction(v.score);
+          var convClass = conv === 'High' ? 'high' : (conv === 'Med' ? 'medium' : 'low');
+          return '<div class="gvt-row" data-ticker="' + v.symbol + '">' +
+            '<span class="gvt-ticker">' + v.symbol + '</span>' +
+            '<span>' + (v.fwdPE != null ? v.fwdPE + 'x' : '–') + '</span>' +
+            '<span>' + (v.trailingPE != null ? v.trailingPE + 'x' : '–') + '</span>' +
+            '<span class="' + (v.divYield ? 'profit' : '') + '">' + (v.divYield != null ? v.divYield + '%' : '–') + '</span>' +
+            '<span class="gvt-score">' + v.score + '</span>' +
+            '<span class="conviction ' + convClass + '">' + conv + '</span>' +
+          '</div>';
+        }).join('');
+        valueTable.innerHTML = html;
+      }
+      bindValueRowClicks();
+    }
+  }).catch(function () {
+    if (alertList) alertList.innerHTML = '<div class="gs-loading-note">Could not reach the market-data service. Try refreshing.</div>';
+    if (valueTable) valueTable.innerHTML = '';
+  });
 }
 
 var gsView = document.getElementById('view-greysankore');
+var gsInitialLoadDone = false;
 if (gsView) {
   var gsCapToggle = gsView.querySelector('.cap-toggle');
   if (gsCapToggle) {
@@ -10770,89 +10848,160 @@ if (gsView) {
         if (!cap) return;
         gsCapToggle.querySelectorAll('.cap-btn').forEach(function(b) { b.classList.remove('active'); });
         btn.classList.add('active');
+        gsInitialLoadDone = true;
         updateGSCapData(cap);
       });
     });
   }
 }
 
+// Load real screens the first time the Grey Sankore view is opened (the panels
+// otherwise sit on the static HTML placeholders until a cap button is clicked).
+(function hookGSNav() {
+  document.querySelectorAll('.nav-btn[data-view="greysankore"]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      if (gsInitialLoadDone) return;
+      gsInitialLoadDone = true;
+      setTimeout(function() { updateGSCapData(currentGSCap); }, 60);
+    });
+  });
+})();
+
 var overlay = document.getElementById('gsAnalysisOverlay');
+
+function gsModalPriceStr(n) { return (n == null || !isFinite(n)) ? '–' : '$' + Number(n).toFixed(2); }
+
+// Fill the price + valuation blocks from real cached fundamentals (gsDataCache).
+function applyGSModalQuant(ticker) {
+  var d = gsDataCache[ticker] || null;
+  var f = (d && d.fundamentals) ? d.fundamentals : {};
+
+  var priceEl = document.getElementById('gsModalPrice');
+  var changeEl = document.getElementById('gsModalChange');
+  if (priceEl) priceEl.textContent = (d && d.price != null) ? gsModalPriceStr(d.price) : '–';
+  if (changeEl) {
+    var ch = d ? d.changePct : null;
+    changeEl.textContent = (ch == null) ? '' : ((ch >= 0 ? '+' : '') + ch.toFixed(2) + '%');
+    changeEl.className = 'gs-modal-change ' + (ch != null && ch < 0 ? 'loss' : 'profit');
+  }
+  var nameEl = document.getElementById('gsModalName');
+  if (nameEl && f && (f.longName || f.shortName)) nameEl.textContent = f.longName || f.shortName;
+
+  var divPct = null;
+  if (typeof f.dividendYield === 'number' && f.dividendYield > 0) {
+    divPct = f.dividendYield <= 1 ? f.dividendYield * 100 : f.dividendYield;
+  }
+  var valMetrics = [
+    { label: 'Fwd P/E', value: (typeof f.forwardPE === 'number') ? f.forwardPE.toFixed(1) + 'x' : '–' },
+    { label: 'Trail P/E', value: (typeof f.trailingPE === 'number') ? f.trailingPE.toFixed(1) + 'x' : '–' },
+    { label: 'Div Yield', value: (divPct != null) ? divPct.toFixed(2) + '%' : '–' },
+    { label: '52w High', value: (typeof f.fiftyTwoWeekHigh === 'number') ? gsModalPriceStr(f.fiftyTwoWeekHigh) : '–' },
+    { label: '52w Low', value: (typeof f.fiftyTwoWeekLow === 'number') ? gsModalPriceStr(f.fiftyTwoWeekLow) : '–' },
+    { label: 'Beta', value: (typeof f.beta === 'number') ? f.beta.toFixed(2) : '–' }
+  ];
+  var valEl = document.getElementById('gsModalValuation');
+  if (valEl) {
+    valEl.innerHTML = valMetrics.map(function (m) {
+      return '<div class="gs-val-metric"><span class="gs-val-metric-label">' + m.label + '</span><span class="gs-val-metric-value">' + m.value + '</span></div>';
+    }).join('');
+  }
+}
+
+// Technicals computed from real closes (RSI, SMAs, recent support/resistance).
+function renderGSModalTechnicals(closes) {
+  var el = document.getElementById('gsModalTechnicals');
+  if (!el) return;
+  var hasS = typeof Screener !== 'undefined';
+  var rsi = (hasS && closes.length >= 15) ? Screener.rsi(closes, 14) : null;
+  var sma20 = (hasS && closes.length >= 20) ? Screener.sma(closes, 20) : null;
+  var ma50 = (hasS && closes.length >= 50) ? Screener.sma(closes, 50) : null;
+  var ma200 = (hasS && closes.length >= 200) ? Screener.sma(closes, 200) : null;
+  var recent = closes.slice(Math.max(0, closes.length - 63)); // ~3 months
+  var support = recent.length ? Math.min.apply(null, recent) : null;
+  var resistance = recent.length ? Math.max.apply(null, recent) : null;
+  var trend = (sma20 != null && ma50 != null) ? (sma20 >= ma50 ? 'Up (20>50)' : 'Down (20<50)') : '–';
+  var items = [
+    { label: 'Support (3m)', value: support != null ? gsModalPriceStr(support) : '–' },
+    { label: 'Resistance (3m)', value: resistance != null ? gsModalPriceStr(resistance) : '–' },
+    { label: 'RSI (14)', value: rsi != null ? rsi.toFixed(1) : '–' },
+    { label: 'Trend', value: trend },
+    { label: '50-Day MA', value: ma50 != null ? gsModalPriceStr(ma50) : '–' },
+    { label: '200-Day MA', value: ma200 != null ? gsModalPriceStr(ma200) : 'n/a (1y)' }
+  ];
+  el.innerHTML = items.map(function (t) {
+    return '<div class="gs-tech-item"><span class="gs-tech-label">' + t.label + '</span><span class="gs-tech-value">' + t.value + '</span></div>';
+  }).join('');
+}
 
 function openGSAnalysisModal(ticker, signalType, severity, capSize) {
   if (!overlay) return;
-  var analysis = GS_TICKER_ANALYSIS[ticker];
-  if (!analysis) {
-    analysis = {
-      name: ticker, price: 'N/A', change: 'N/A', changeClass: 'profit',
-      bull: ['Detailed analysis not yet available for this ticker.', 'Check back after the next model scan cycle.'],
-      bear: ['No specific bearish thesis generated yet.'],
-      risks: [{ level: 'med', text: 'Limited data available for comprehensive risk assessment' }],
-      technicals: { support: 'N/A', resistance: 'N/A', rsi: 'N/A', macd: 'N/A', ma50: 'N/A', ma200: 'N/A' },
-      catalysts: [{ date: 'TBD', desc: 'Awaiting catalyst identification' }],
-      valuation: { fwdPE: 'N/A', evEbitda: 'N/A', peg: 'N/A', fcfYield: 'N/A', revGrowth: 'N/A', margin: 'N/A' }
-    };
-  }
-
+  var curated = (typeof GS_TICKER_ANALYSIS !== 'undefined') ? GS_TICKER_ANALYSIS[ticker] : null;
+  var d = gsDataCache[ticker] || null;
   var cap = capSize || currentGSCap;
+
   document.getElementById('gsModalTicker').textContent = ticker;
-  document.getElementById('gsModalName').textContent = analysis.name;
+  document.getElementById('gsModalName').textContent =
+    (d && d.fundamentals && (d.fundamentals.longName || d.fundamentals.shortName)) || (curated && curated.name) || ticker;
   document.getElementById('gsModalCapBadge').textContent = capLabels[cap] || 'Large Cap';
-  document.getElementById('gsModalPrice').textContent = analysis.price;
-  var changeEl = document.getElementById('gsModalChange');
-  changeEl.textContent = analysis.change;
-  changeEl.className = 'gs-modal-change ' + analysis.changeClass;
 
   var signalEl = document.getElementById('gsModalSignal');
   var sevClass = (severity === 'HIGH') ? 'high' : (severity === 'MED' ? 'medium' : 'low');
   signalEl.innerHTML = '<span class="gs-modal-signal-type">' + (signalType || 'Analysis') + '</span>' +
     '<span class="gs-modal-signal-severity ' + sevClass + '">' + (severity || 'INFO') + '</span>' +
-    '<span class="gs-modal-signal-confidence">Sample analysis</span>';
+    '<span class="gs-modal-signal-confidence">Live quote + fundamentals</span>';
 
-  var thesisHtml = '<ul>';
-  analysis.bull.forEach(function(b) { thesisHtml += '<li class="bull">' + b + '</li>'; });
-  analysis.bear.forEach(function(b) { thesisHtml += '<li class="bear">' + b + '</li>'; });
-  thesisHtml += '</ul>';
-  document.getElementById('gsModalThesis').innerHTML = thesisHtml;
+  // Thesis: curated (human-written) when present; honest note otherwise.
+  var thesisEl = document.getElementById('gsModalThesis');
+  if (curated && curated.bull) {
+    var thesisHtml = '<p class="gs-thesis-note">Analyst thesis (editorial, not model-generated):</p><ul>';
+    curated.bull.forEach(function (b) { thesisHtml += '<li class="bull">' + b + '</li>'; });
+    (curated.bear || []).forEach(function (b) { thesisHtml += '<li class="bear">' + b + '</li>'; });
+    thesisHtml += '</ul>';
+    thesisEl.innerHTML = thesisHtml;
+  } else {
+    thesisEl.innerHTML = '<p class="gs-thesis-note">No editorial thesis is written for ' + ticker +
+      '. The quantitative read below - price, valuation, and technicals - is live market data.</p>';
+  }
 
-  var val = analysis.valuation;
-  var valMetrics = [
-    { label: 'Fwd P/E', value: val.fwdPE }, { label: 'EV/EBITDA', value: val.evEbitda },
-    { label: 'PEG Ratio', value: val.peg }, { label: 'FCF Yield', value: val.fcfYield },
-    { label: 'Rev Growth', value: val.revGrowth }, { label: 'Net Margin', value: val.margin }
-  ];
-  var valHtml = '';
-  valMetrics.forEach(function(m) {
-    valHtml += '<div class="gs-val-metric"><span class="gs-val-metric-label">' + m.label + '</span><span class="gs-val-metric-value">' + m.value + '</span></div>';
-  });
-  document.getElementById('gsModalValuation').innerHTML = valHtml;
+  // Risks: curated when present.
+  var risksEl = document.getElementById('gsModalRisks');
+  if (curated && curated.risks) {
+    risksEl.innerHTML = curated.risks.map(function (r) {
+      return '<div class="gs-risk-item"><span class="gs-risk-level ' + r.level + '">' + r.level.toUpperCase() + '</span><span>' + r.text + '</span></div>';
+    }).join('');
+  } else {
+    risksEl.innerHTML = '<div class="gs-risk-item"><span class="gs-risk-level low">INFO</span><span>No editorial risk notes for this name. Start from the valuation and technicals.</span></div>';
+  }
 
-  var risksHtml = '';
-  analysis.risks.forEach(function(r) {
-    risksHtml += '<div class="gs-risk-item"><span class="gs-risk-level ' + r.level + '">' + r.level.toUpperCase() + '</span><span>' + r.text + '</span></div>';
-  });
-  document.getElementById('gsModalRisks').innerHTML = risksHtml;
+  // Catalysts: curated when present.
+  var catEl = document.getElementById('gsModalCatalysts');
+  if (curated && curated.catalysts) {
+    catEl.innerHTML = curated.catalysts.map(function (c) {
+      return '<div class="gs-catalyst-item"><span class="gs-catalyst-date">' + c.date + '</span><span class="gs-catalyst-desc">' + c.desc + '</span></div>';
+    }).join('');
+  } else {
+    catEl.innerHTML = '<div class="gs-catalyst-item"><span class="gs-catalyst-desc">No scheduled catalysts loaded for this name.</span></div>';
+  }
 
-  var tech = analysis.technicals;
-  var techItems = [
-    { label: 'Support', value: tech.support }, { label: 'Resistance', value: tech.resistance },
-    { label: 'RSI (14)', value: tech.rsi }, { label: 'MACD', value: tech.macd },
-    { label: '50-Day MA', value: tech.ma50 }, { label: '200-Day MA', value: tech.ma200 }
-  ];
-  var techHtml = '';
-  techItems.forEach(function(t) {
-    techHtml += '<div class="gs-tech-item"><span class="gs-tech-label">' + t.label + '</span><span class="gs-tech-value">' + t.value + '</span></div>';
-  });
-  document.getElementById('gsModalTechnicals').innerHTML = techHtml;
-
-  var catHtml = '';
-  analysis.catalysts.forEach(function(c) {
-    catHtml += '<div class="gs-catalyst-item"><span class="gs-catalyst-date">' + c.date + '</span><span class="gs-catalyst-desc">' + c.desc + '</span></div>';
-  });
-  document.getElementById('gsModalCatalysts').innerHTML = catHtml;
-
-  drawModalChart(ticker, analysis);
+  applyGSModalQuant(ticker);
+  var seedCloses = (d && d.closes && d.closes.length) ? d.closes : [];
+  renderGSModalTechnicals(seedCloses);
+  drawModalChart(ticker, seedCloses);
   overlay.classList.add('active');
   document.body.style.overflow = 'hidden';
+
+  // Upgrade with a full year of closes: real chart + MA200. Also backfill
+  // fundamentals if this ticker was opened without a cached universe entry.
+  var needFund = !d || !d.fundamentals;
+  var upgrade = needFund
+    ? fetchGSTicker(ticker).then(function (row) { gsDataCache[ticker] = row; applyGSModalQuant(ticker); return { candles: (row.closes || []).map(function (c) { return { close: c }; }) }; })
+    : fetch('/api/chart/' + encodeURIComponent(ticker) + '?interval=1d&range=1y').then(function (r) { return r.ok ? r.json() : null; });
+  upgrade.then(function (cd) {
+    if (!overlay.classList.contains('active')) return;
+    if (document.getElementById('gsModalTicker').textContent !== ticker) return;
+    var closes = (cd && cd.candles || []).filter(function (c) { return c.close != null; }).map(function (c) { return c.close; });
+    if (closes.length) { renderGSModalTechnicals(closes); drawModalChart(ticker, closes); }
+  }).catch(function () {});
 }
 
 function closeGSAnalysisModal() {
@@ -10861,7 +11010,8 @@ function closeGSAnalysisModal() {
   document.body.style.overflow = '';
 }
 
-function drawModalChart(ticker, analysis) {
+// Real price chart from actual daily closes (no random walk).
+function drawModalChart(ticker, closes) {
   var canvas = document.getElementById('gsModalChart');
   if (!canvas) return;
   var ctx = canvas.getContext('2d');
@@ -10871,27 +11021,14 @@ function drawModalChart(ticker, analysis) {
   canvas.height = h;
   ctx.clearRect(0, 0, w, h);
 
-  // This 90-day path is a random walk anchored to the real current price, NOT
-  // real price history - it exists to give the sample-mode analysis card a
-  // visual, and must say so on the chart itself, not just in the surrounding
-  // "Sample analysis" copy.
-  ctx.save();
-  ctx.fillStyle = 'rgba(255,255,255,0.3)';
-  ctx.font = '9px monospace';
-  ctx.textAlign = 'right';
-  ctx.fillText('Illustrative, not real price history', w - 6, h - 6);
-  ctx.restore();
-
-  var basePrice = parseFloat(analysis.price.replace('$', '').replace(',', '')) || 100;
-  var points = [];
-  var price = basePrice * 0.88;
-  for (var i = 0; i < 90; i++) {
-    price += (Math.random() - 0.47) * basePrice * 0.02;
-    if (price < basePrice * 0.7) price = basePrice * 0.72;
-    if (price > basePrice * 1.2) price = basePrice * 1.18;
-    points.push(price);
+  var points = Array.isArray(closes) ? closes.slice() : [];
+  if (points.length < 2) {
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Loading price history…', w / 2, h / 2);
+    return;
   }
-  points[89] = basePrice;
 
   var min = Math.min.apply(null, points);
   var max = Math.max.apply(null, points);
@@ -10909,42 +11046,62 @@ function drawModalChart(ticker, analysis) {
     ctx.fillText('$' + (max - (range / 4) * g).toFixed(1), pad.left - 5, gy + 3);
   }
 
+  function px(i) { return pad.left + (i / (points.length - 1)) * cw; }
+  function py(v) { return pad.top + ch - ((v - min) / range) * ch; }
+
   ctx.beginPath();
-  ctx.moveTo(pad.left, pad.top + ch - ((points[0] - min) / range) * ch);
-  for (var j = 1; j < points.length; j++) {
-    ctx.lineTo(pad.left + (j / (points.length - 1)) * cw, pad.top + ch - ((points[j] - min) / range) * ch);
-  }
-  ctx.lineTo(pad.left + cw, pad.top + ch); ctx.lineTo(pad.left, pad.top + ch); ctx.closePath();
-  var isProfit = points[89] >= points[0];
+  ctx.moveTo(px(0), py(points[0]));
+  for (var j = 1; j < points.length; j++) ctx.lineTo(px(j), py(points[j]));
+  ctx.lineTo(px(points.length - 1), pad.top + ch); ctx.lineTo(px(0), pad.top + ch); ctx.closePath();
+  var isProfit = points[points.length - 1] >= points[0];
   var grad = ctx.createLinearGradient(0, pad.top, 0, h);
   grad.addColorStop(0, isProfit ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)');
   grad.addColorStop(1, isProfit ? 'rgba(16,185,129,0.02)' : 'rgba(239,68,68,0.02)');
   ctx.fillStyle = grad; ctx.fill();
 
   ctx.beginPath();
-  ctx.moveTo(pad.left, pad.top + ch - ((points[0] - min) / range) * ch);
-  for (var k = 1; k < points.length; k++) {
-    ctx.lineTo(pad.left + (k / (points.length - 1)) * cw, pad.top + ch - ((points[k] - min) / range) * ch);
-  }
+  ctx.moveTo(px(0), py(points[0]));
+  for (var k = 1; k < points.length; k++) ctx.lineTo(px(k), py(points[k]));
   ctx.strokeStyle = isProfit ? '#10B981' : '#EF4444'; ctx.lineWidth = 1.5; ctx.stroke();
 
-  var lastX = pad.left + cw;
-  var lastY = pad.top + ch - ((points[89] - min) / range) * ch;
+  var lastX = px(points.length - 1);
+  var lastY = py(points[points.length - 1]);
   ctx.beginPath(); ctx.arc(lastX, lastY, 4, 0, Math.PI * 2);
   ctx.fillStyle = isProfit ? '#10B981' : '#EF4444'; ctx.fill();
   ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = 1; ctx.stroke();
+
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText(points.length + ' daily closes', w - 6, h - 6);
 }
 
 function bindAlertClicks() {
   var alertList = document.getElementById('gsAlertList');
   if (!alertList) return;
   alertList.querySelectorAll('.gs-alert').forEach(function(card) {
+    var ticker = card.dataset.ticker || (card.querySelector('.alert-ticker') ? card.querySelector('.alert-ticker').textContent : null);
+    var type = card.dataset.type || (card.querySelector('.alert-type') ? card.querySelector('.alert-type').textContent : null);
+    var severity = card.dataset.severity || (card.querySelector('.alert-severity') ? card.querySelector('.alert-severity').textContent : null);
+
     card.addEventListener('click', function(e) {
       if (e.target.closest('.alert-action-btn')) return;
-      var ticker = card.dataset.ticker || (card.querySelector('.alert-ticker') ? card.querySelector('.alert-ticker').textContent : null);
-      var type = card.dataset.type || (card.querySelector('.alert-type') ? card.querySelector('.alert-type').textContent : null);
-      var severity = card.dataset.severity || (card.querySelector('.alert-severity') ? card.querySelector('.alert-severity').textContent : null);
       if (ticker) openGSAnalysisModal(ticker, type, severity, currentGSCap);
+    });
+
+    // Wire the action buttons (dynamically rendered, so bound here not globally).
+    card.querySelectorAll('.alert-action-btn').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var act = btn.dataset.act;
+        if (!ticker) return;
+        if (act === 'alert') {
+          if (typeof window.gsOpenAlertModal === 'function') window.gsOpenAlertModal(ticker);
+          else showToast('Open the Alerts panel to set an alert for ' + ticker, 'info');
+        } else {
+          openGSAnalysisModal(ticker, type, severity, currentGSCap);
+        }
+      });
     });
   });
 }
@@ -10985,13 +11142,20 @@ if (addWatchBtn) {
   });
 }
 
+// "Create Signal" now opens the real price-alert modal for the ticker (a
+// "signal" here is a price alert) instead of a fake success toast.
 var createSignalBtn = document.getElementById('gsModalCreateSignal');
 if (createSignalBtn) {
   createSignalBtn.addEventListener('click', function() {
-    showToast('Signal created for ' + document.getElementById('gsModalTicker').textContent, 'success');
+    var ticker = document.getElementById('gsModalTicker').textContent;
+    closeGSAnalysisModal();
+    if (typeof window.gsOpenAlertModal === 'function') window.gsOpenAlertModal(ticker);
+    else showToast('Open the Alerts panel to set a signal for ' + ticker, 'info');
   });
 }
 
+// "Journal Note" now actually opens a NEW journal entry pre-filled with the
+// ticker (it previously navigated to the Journal but created nothing).
 var journalNoteBtn = document.getElementById('gsModalJournalNote');
 if (journalNoteBtn) {
   journalNoteBtn.addEventListener('click', function() {
@@ -10999,7 +11163,14 @@ if (journalNoteBtn) {
     closeGSAnalysisModal();
     var journalBtn = document.querySelector('[data-view="journal"]');
     if (journalBtn) journalBtn.click();
-    showToast('Journal note started for ' + ticker, 'info');
+    setTimeout(function() {
+      var newBtn = document.getElementById('newJournalEntryBtn');
+      if (newBtn) newBtn.click();
+      setTimeout(function() {
+        var t = document.getElementById('journalEntryTicker');
+        if (t) { t.value = ticker; t.dispatchEvent(new Event('input', { bubbles: true })); }
+      }, 120);
+    }, 120);
   });
 }
 

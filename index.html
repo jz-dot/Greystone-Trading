@@ -1439,15 +1439,14 @@
 
     <!-- ===================== GREY SANKORE AI VIEW ===================== -->
     <div class="view" id="view-greysankore">
-      <div class="wip-watermark"><span class="wip-watermark-text">Work in Progress</span></div>
       <div class="view-header">
         <div class="view-title">
           <div class="gs-header-brand">
             <div class="gs-avatar-large">GS</div>
             <div>
               <h1>Grey Sankore</h1>
-              <span class="view-subtitle">Head of Investment - AI-Powered Analysis Engine</span>
-              <span class="sample-badge" title="Anomalies, scores, and accuracy shown here are sample data for preview">Sample / Preview Data</span>
+              <span class="view-subtitle">Head of Investment - Quantitative Screening Engine</span>
+              <span class="sample-badge" title="Value, momentum, and relative-volume screens are computed live from Yahoo Finance data. Not investment advice.">Live screens - not investment advice</span>
             </div>
           </div>
         </div>
@@ -1502,59 +1501,17 @@
       <!-- Analysis Grid -->
       <div class="gs-analysis-grid">
 
-        <!-- Anomaly Detection -->
+        <!-- Relative-Volume Screen -->
         <div class="panel gs-section-panel">
           <div class="panel-header">
             <h3 class="panel-title">
               <span class="section-dot anomaly"></span>
-              Anomaly Detection
+              Unusual Volume
             </h3>
-            <span class="sample-badge" title="This panel shows sample data, not a live feed">Sample Data</span>
+            <span class="sample-badge" title="Names trading above 1.3x their 10-day average volume, computed live from Yahoo Finance. No options-flow or dark-pool claims.">Live volume screen</span>
           </div>
           <div class="gs-alert-list" id="gsAlertList">
-            <div class="gs-alert anomaly">
-              <div class="alert-header">
-                <span class="alert-ticker">NVDA</span>
-                <span class="alert-type">Options Flow Anomaly</span>
-                <span class="alert-severity high">HIGH</span>
-              </div>
-              <div class="alert-body">
-                Call volume at $950 strike is 3.2x the 20-day average. $12.4M in premium swept at the ask in the last 30 minutes. Dark pool prints detected at $928.50 (2 blocks, 180K shares). Pattern historically precedes 5-8% moves within 5 sessions. GTC keynote catalyst in 3 days.
-              </div>
-              <div class="alert-actions">
-                <button class="alert-action-btn primary">Analyze Position</button>
-                <button class="alert-action-btn">Set Alert</button>
-                <button class="alert-action-btn">View Flow</button>
-              </div>
-            </div>
-            <div class="gs-alert anomaly">
-              <div class="alert-header">
-                <span class="alert-ticker">TSLA</span>
-                <span class="alert-type">Volatility Skew Anomaly</span>
-                <span class="alert-severity medium">MED</span>
-              </div>
-              <div class="alert-body">
-                Put skew steepening to 2-sigma level. 25-delta put IV exceeds 25-delta call IV by 14.2 points (vs 8.1 avg). Suggests institutional hedging activity. Last occurrence preceded a -12% drawdown within 2 weeks.
-              </div>
-              <div class="alert-actions">
-                <button class="alert-action-btn primary">View Skew Chart</button>
-                <button class="alert-action-btn">Set Alert</button>
-              </div>
-            </div>
-            <div class="gs-alert anomaly">
-              <div class="alert-header">
-                <span class="alert-ticker">AMD</span>
-                <span class="alert-type">Volume Divergence</span>
-                <span class="alert-severity low">LOW</span>
-              </div>
-              <div class="alert-body">
-                Price up +4.21% on 2.1x average volume, but options put/call ratio inverted to 1.3 (bearish). Divergence between equity momentum and options positioning often signals reversal within 3-5 sessions.
-              </div>
-              <div class="alert-actions">
-                <button class="alert-action-btn primary">Deep Dive</button>
-                <button class="alert-action-btn">Dismiss</button>
-              </div>
-            </div>
+            <div class="gs-loading-note">Open this view to run the live relative-volume screen.</div>
           </div>
         </div>
 
@@ -1565,57 +1522,18 @@
               <span class="section-dot value"></span>
               Value Opportunities
             </h3>
-            <span class="sample-badge" title="This panel shows sample data, not a live feed">Sample Data</span>
+            <span class="sample-badge" title="Value scores computed live from Yahoo fundamentals (forward P/E, trailing P/E, dividend yield, distance from 52w high).">Live value screen</span>
           </div>
           <div class="gs-value-table" id="gsValueTable">
             <div class="gvt-header">
               <span>Ticker</span>
               <span>Fwd P/E</span>
-              <span>vs 5Y Avg</span>
-              <span>FCF Yield</span>
+              <span>Trail P/E</span>
+              <span>Div Yield</span>
               <span>Score</span>
               <span>Conviction</span>
             </div>
-            <div class="gvt-row">
-              <span class="gvt-ticker">DIS</span>
-              <span>14.2x</span>
-              <span class="loss">-35.7%</span>
-              <span class="profit">6.8%</span>
-              <span class="gvt-score">92</span>
-              <span class="conviction high">High</span>
-            </div>
-            <div class="gvt-row">
-              <span class="gvt-ticker">PYPL</span>
-              <span>15.8x</span>
-              <span class="loss">-41.2%</span>
-              <span class="profit">5.2%</span>
-              <span class="gvt-score">88</span>
-              <span class="conviction high">High</span>
-            </div>
-            <div class="gvt-row">
-              <span class="gvt-ticker">BABA</span>
-              <span>9.4x</span>
-              <span class="loss">-52.1%</span>
-              <span class="profit">8.1%</span>
-              <span class="gvt-score">85</span>
-              <span class="conviction medium">Med</span>
-            </div>
-            <div class="gvt-row">
-              <span class="gvt-ticker">WBD</span>
-              <span>8.7x</span>
-              <span class="loss">-61.3%</span>
-              <span class="profit">9.4%</span>
-              <span class="gvt-score">81</span>
-              <span class="conviction medium">Med</span>
-            </div>
-            <div class="gvt-row">
-              <span class="gvt-ticker">INTC</span>
-              <span>22.1x</span>
-              <span class="loss">-28.4%</span>
-              <span class="profit">3.2%</span>
-              <span class="gvt-score">74</span>
-              <span class="conviction low">Low</span>
-            </div>
+            <div class="gs-loading-note">Open this view to run the live value screen.</div>
           </div>
         </div>
       </div>
@@ -1660,7 +1578,7 @@
       <div class="view-header">
         <div class="view-title">
           <h1>Order Flow</h1>
-          <span class="view-subtitle">Real-time institutional activity</span>
+          <span class="view-subtitle">Institutional flow - simulated demo. Live options flow and dark-pool prints require a market-data provider.</span>
           <span class="flow-data-badge" id="flowDataBadge" title="Data source indicator">SIMULATED</span>
         </div>
         <div class="flow-sentiment-widget" id="flowSentimentWidget" style="display:none;">
@@ -1698,6 +1616,10 @@
             </label>
           </div>
         </div>
+      </div>
+
+      <div class="gs-sample-banner" style="margin:0 0 14px;">
+        Demo data. This view simulates institutional options flow and dark-pool prints to show the interface. Live flow needs a real-time market-data provider (options sweeps and dark-pool prints are not available from free data); add a BigData.com key in Settings to source it.
       </div>
 
       <!-- Flow Summary -->
@@ -2046,6 +1968,7 @@
         <div class="drawdown-chart-wrap">
           <canvas id="drawdownCanvas"></canvas>
         </div>
+        <p class="panel-footnote">Illustrative: current holdings valued back over 12 months of real daily closes (constant share counts, no trade history). Shows how today's book would have drawn down through the past year's prices.</p>
       </div>
 
       <!-- Position Risk Table -->
@@ -2115,10 +2038,11 @@
         <div class="panel risk-gauge-panel">
           <div class="panel-header">
             <h3 class="panel-title">Correlation Matrix (Top 5)</h3>
+            <span class="panel-subtitle-text">1y daily returns</span>
           </div>
           <div class="corr-heatmap-wrap">
             <table class="corr-heatmap" id="corrHeatmap">
-              <!-- Populated by JS: 5x5 grid -->
+              <!-- Populated by JS: real Pearson correlations over 1y closes -->
             </table>
           </div>
         </div>
@@ -2270,29 +2194,27 @@
             <span class="gs-modal-cap-badge" id="gsModalCapBadge">Large Cap</span>
           </div>
           <div class="gs-modal-price-info">
-            <span class="gs-modal-price" id="gsModalPrice">$875.40</span>
-            <span class="gs-modal-change profit" id="gsModalChange">+2.34%</span>
+            <span class="gs-modal-price" id="gsModalPrice">–</span>
+            <span class="gs-modal-change" id="gsModalChange"></span>
           </div>
         </div>
 
         <!-- Signal banner -->
         <div class="gs-modal-signal" id="gsModalSignal">
-          <span class="gs-modal-signal-type">Volume Anomaly</span>
-          <span class="gs-modal-signal-severity high">HIGH</span>
-          <span class="gs-modal-signal-confidence">Confidence: 87%</span>
+          <span class="gs-modal-signal-type">Analysis</span>
+          <span class="gs-modal-signal-severity">INFO</span>
+          <span class="gs-modal-signal-confidence">Live quote + fundamentals</span>
         </div>
 
         <!-- Content grid (2 columns) -->
         <div class="gs-modal-grid">
           <!-- Left column -->
           <div class="gs-modal-col">
-            <!-- AI Thesis -->
+            <!-- Thesis -->
             <div class="gs-modal-section">
-              <h4>AI Thesis</h4>
+              <h4>Thesis</h4>
               <div class="gs-modal-thesis" id="gsModalThesis">
-                <ul>
-                  <li>Loading analysis...</li>
-                </ul>
+                <p class="gs-thesis-note">Loading…</p>
               </div>
             </div>
 
@@ -2544,12 +2466,10 @@
             <span class="setting-name">Appearance</span>
             <span class="setting-desc">Visual theme for the platform</span>
           </div>
-          <div class="theme-option-group">
-            <button class="theme-option active" id="themeDark" data-theme="dark">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
-              Dark Terminal
-            </button>
-          </div>
+          <span class="setting-static" style="display:inline-flex;align-items:center;gap:6px;color:var(--text-muted);font-size:12px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+            Dark terminal (accent is configurable below)
+          </span>
         </div>
         <div class="setting-row">
           <div class="setting-info">
@@ -2973,6 +2893,8 @@
 <script src="services/cds-roc.js"></script>
 <script src="services/tax-pack.js"></script>
 <script src="services/contribution-room.js"></script>
+<script src="services/screener.js"></script>
+<script src="services/risk-analytics.js"></script>
 <script src="app.js"></script>
 <script src="services/auth-ui.js"></script>
 

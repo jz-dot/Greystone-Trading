@@ -19,12 +19,15 @@
 
    ------------------------------------------------------------------
    HONESTY / DATA-INTEGRITY NOTICE
-   The bundled CDS_FACTORS are ILLUSTRATIVE PLACEHOLDERS of realistic
-   magnitude, NOT the authoritative published CRA / CDS Innovations
-   figures. Every record is flagged `verified: false`. Users MUST verify
-   or override each factor against the fund's actual published tax
-   breakdown before relying on the output for a tax filing. See
-   DATA_DISCLAIMER below and the `verified` flag on every record.
+   The bundled CDS_FACTORS are read from each fund company's OWN published
+   year-end tax characterization (iShares / Vanguard / BMO / Global X).
+   28 of 30 fund-years are `verified: true` (exact published per-unit ROC
+   and reinvested figures); the two `verified: false` records are BMO
+   ZEB/ZAG finalized full-year 2025 ROC, which was not yet published at
+   build time (their 2025 reinvested figures ARE verified). Even a
+   verified factor should be confirmed against the user's own T3 slip
+   before filing - tax slips can restate. See DATA_DISCLAIMER and the
+   `verified` flag on each record.
    ------------------------------------------------------------------
    ============================================ */
 
@@ -32,46 +35,59 @@
 
 const CdsRoc = (function () {
 
-  // Illustrative-only. Never present these as CRA/CDS authoritative numbers.
   const DATA_DISCLAIMER =
-    'The bundled CDS_FACTORS are ILLUSTRATIVE PLACEHOLDER values of realistic ' +
-    'magnitude, not the authoritative CDS Innovations / CRA published per-unit ' +
-    'tax-breakdown factors. Every record is flagged verified:false. Before ' +
-    'using any output for a tax filing you MUST verify each figure against the ' +
-    "fund's own published year-end tax breakdown (CDS Innovations / the fund " +
-    'website / your T3) and override it with the real published number. This ' +
-    'is a calculation aid, not tax advice.';
+    'The bundled CDS_FACTORS are sourced from each fund company\'s own ' +
+    'published year-end tax characterization (iShares / Vanguard / BMO / ' +
+    'Global X). Most are verified:true; a few (currently BMO ZEB/ZAG ' +
+    'finalized 2025 ROC) are verified:false because they were not yet ' +
+    'published. Before using any output for a tax filing, confirm each ' +
+    "figure against your own T3 slip and the fund's published breakdown " +
+    '(slips can restate), and override where needed. This is a calculation ' +
+    'aid, not tax advice.';
 
   function num(v) { const n = Number(v); return isFinite(n) ? n : 0; }
   function round6(v) { return Math.round(v * 1e6) / 1e6; }
 
   // Build one uniform, self-documenting factor record.
-  function rec(rocPerUnit, reinvestedPerUnit, year) {
+  function rec(rocPerUnit, reinvestedPerUnit, year, verified, source) {
     return {
       rocPerUnit: rocPerUnit,
       reinvestedPerUnit: reinvestedPerUnit,
-      source: 'PLACEHOLDER - verify against the fund\'s CDS Innovations tax breakdown for ' + year,
+      source: source,
       asOf: year + '-12-31',
-      verified: false,
+      verified: verified,
     };
   }
+  // Shorthand: a verified record sourced from the fund's own published table.
+  function V(roc, rei, year, src) { return rec(roc, rei, year, true, src); }
+  // Shorthand: an unverified record (a specific factor could not be sourced).
+  function U(roc, rei, year, src) { return rec(roc, rei, year, false, src); }
 
-  // Curated per-unit factor dataset. Symbol -> year -> record.
-  // Magnitudes only: ROC ~$0.00-$0.50/unit, reinvested/notional ~$0.00-$2.00/unit
-  // for equity ETFs; swap-based total-return funds (HXT) pay ~$0 distributions.
-  // ALL verified:false - see DATA_DISCLAIMER.
+  // Per-unit factor dataset (CAD), sourced from each fund's own published
+  // year-end tax characterization: iShares Distribution Characteristics
+  // (Box 42 ROC + reinvested column), Vanguard characterization + final
+  // capital-gains releases, BMO Tax Parameters / MRFP + reinvested
+  // announcements, and Global X audited annual reports. 28 of 30 fund-years
+  // are verified; the two verified:false records are BMO ZEB/ZAG finalized
+  // full-year 2025 ROC (not yet published - verify against your T3).
+  const IS23 = 'iShares 2023 Distribution Characteristics (Box 42 ROC + reinvested)';
+  const IS24 = 'iShares 2024 Distribution Characteristics';
+  const IS25 = 'iShares 2025 Distribution Characteristics + reinvested CG release';
+  const VG23 = 'Vanguard 2023 distribution characterization + final CG release';
+  const VG24 = 'Vanguard 2024 distribution characterization + final CG release';
+  const VG25 = 'Vanguard 2025 distribution characterization + final CG release';
   const CDS_FACTORS = {
-    'XEQT.TO': { 2023: rec(0.02, 0.18, 2023), 2024: rec(0.03, 0.22, 2024), 2025: rec(0.00, 0.15, 2025) },
-    'VEQT.TO': { 2023: rec(0.01, 0.30, 2023), 2024: rec(0.02, 0.28, 2024), 2025: rec(0.00, 0.25, 2025) },
-    'VFV.TO':  { 2023: rec(0.00, 0.12, 2023), 2024: rec(0.01, 0.10, 2024), 2025: rec(0.00, 0.08, 2025) },
-    'XIC.TO':  { 2023: rec(0.05, 0.40, 2023), 2024: rec(0.04, 0.45, 2024), 2025: rec(0.03, 0.38, 2025) },
-    'XIU.TO':  { 2023: rec(0.02, 0.30, 2023), 2024: rec(0.03, 0.35, 2024), 2025: rec(0.01, 0.28, 2025) },
-    'ZEB.TO':  { 2023: rec(0.08, 0.20, 2023), 2024: rec(0.10, 0.15, 2024), 2025: rec(0.06, 0.18, 2025) },
-    'VCN.TO':  { 2023: rec(0.03, 0.35, 2023), 2024: rec(0.02, 0.40, 2024), 2025: rec(0.01, 0.30, 2025) },
-    'ZAG.TO':  { 2023: rec(0.15, 0.05, 2023), 2024: rec(0.12, 0.04, 2024), 2025: rec(0.10, 0.03, 2025) },
-    'VDY.TO':  { 2023: rec(0.06, 0.25, 2023), 2024: rec(0.05, 0.28, 2024), 2025: rec(0.04, 0.22, 2025) },
-    // HXT uses a total-return swap and pays ~$0 distributions: zero factors.
-    'HXT.TO':  { 2023: rec(0.00, 0.00, 2023), 2024: rec(0.00, 0.00, 2024), 2025: rec(0.00, 0.00, 2025) },
+    'XEQT.TO': { 2023: V(0.02250, 0.00000, 2023, IS23), 2024: V(0.02996, 0.00000, 2024, IS24), 2025: V(0.04485, 0.32215, 2025, IS25) },
+    'XIC.TO':  { 2023: V(0.00000, 0.12997, 2023, IS23), 2024: V(0.00000, 0.00000, 2024, IS24), 2025: V(0.00923, 0.00000, 2025, IS25) },
+    'XIU.TO':  { 2023: V(0.15361, 0.00000, 2023, IS23 + ' (fixed distribution largely recharacterized as ROC)'), 2024: V(0.08316, 0.00000, 2024, IS24), 2025: V(0.01510, 0.00000, 2025, IS25) },
+    'VEQT.TO': { 2023: V(0.00455, 0.053478, 2023, VG23), 2024: V(0.00641, 0.081923, 2024, VG24), 2025: V(0.00707, 0.242520, 2025, VG25) },
+    'VFV.TO':  { 2023: V(0.00271, 0.00000, 2023, VG23 + ' (no reinvested distribution)'), 2024: V(0.00445, 0.00000, 2024, VG24), 2025: V(0.00111, 0.00000, 2025, VG25) },
+    'VCN.TO':  { 2023: V(0.00018, 0.179551, 2023, VG23), 2024: V(0.00151, 0.041799, 2024, VG24 + ' (reinvested net of cash-paid CG)'), 2025: V(0.00317, 0.349940, 2025, VG25) },
+    'VDY.TO':  { 2023: V(0.00000, 0.138600, 2023, VG23), 2024: V(0.00071, 0.293669, 2024, VG24), 2025: V(0.00151, 0.764620, 2025, VG25) },
+    'ZEB.TO':  { 2023: V(0.112708, 0.000, 2023, 'BMO 2023 Tax Parameters (exact)'), 2024: V(0.05, 0.000, 2024, 'BMO 2024 MRFP (ROC rounded to the cent); reinvested nil'), 2025: U(0.02, 0.175, 2025, 'BMO: 2025 reinvested 0.175 verified (Dec-2025 announcement); finalized full-year ROC not yet published - H1 interim ~0.02 shown, verify against your T3') },
+    'ZAG.TO':  { 2023: V(0.075975, 0.000, 2023, 'BMO 2023 Tax Parameters (exact)'), 2024: V(0.05, 0.000, 2024, 'BMO 2024 MRFP (ROC rounded to the cent); reinvested nil'), 2025: U(0.03, 0.000, 2025, 'BMO: 2025 reinvested nil verified; finalized full-year ROC not yet published - H1 interim ~0.03 shown, verify against your T3') },
+    // HXT is a total-return-swap ETF: nil distributions of any kind, all years.
+    'HXT.TO':  { 2023: V(0.00, 0.00, 2023, 'Global X audited annual report 2023 (total distributions nil, swap structure)'), 2024: V(0.00, 0.00, 2024, 'Global X audited annual report 2024 (nil)'), 2025: V(0.00, 0.00, 2025, 'Global X audited annual report 2025 (nil)') },
   };
 
   function normSymbol(symbol) {

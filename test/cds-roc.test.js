@@ -37,23 +37,25 @@ test('CDS_FACTORS: magnitudes are realistic (roc <= 0.50, reinvested <= 2.00, no
   }
 });
 
-test('CDS_FACTORS: EVERY record is flagged verified:false (honesty guarantee)', () => {
+test('CDS_FACTORS: sourced records are verified; the BMO 2025 ROC gaps are not', () => {
+  // Verified from the funds' own published tables.
+  assert.strictEqual(CDS.CDS_FACTORS['XEQT.TO']['2024'].verified, true);
+  assert.strictEqual(CDS.CDS_FACTORS['VEQT.TO']['2023'].verified, true);
+  assert.strictEqual(CDS.CDS_FACTORS['XIU.TO']['2023'].verified, true);
+  assert.strictEqual(CDS.CDS_FACTORS['HXT.TO']['2023'].verified, true);
+  // Finalized full-year 2025 ROC not yet published for these two.
+  assert.strictEqual(CDS.CDS_FACTORS['ZEB.TO']['2025'].verified, false);
+  assert.strictEqual(CDS.CDS_FACTORS['ZAG.TO']['2025'].verified, false);
   let count = 0;
-  for (const sym of Object.keys(CDS.CDS_FACTORS)) {
-    for (const yr of Object.keys(CDS.CDS_FACTORS[sym])) {
-      assert.strictEqual(CDS.CDS_FACTORS[sym][yr].verified, false,
-        sym + ' ' + yr + ' must be verified:false');
-      count++;
-    }
-  }
-  assert.ok(count >= 30, 'expected >=30 records, got ' + count);
+  for (const sym of Object.keys(CDS.CDS_FACTORS))
+    for (const yr of Object.keys(CDS.CDS_FACTORS[sym])) count++;
+  assert.strictEqual(count, 30);
 });
 
-test('DATA_DISCLAIMER: exists, non-empty, flags placeholder / verify', () => {
+test('DATA_DISCLAIMER: exists, non-empty, tells the user to confirm against their T3', () => {
   assert.strictEqual(typeof CDS.DATA_DISCLAIMER, 'string');
   assert.ok(CDS.DATA_DISCLAIMER.length > 0);
-  assert.match(CDS.DATA_DISCLAIMER, /PLACEHOLDER/i);
-  assert.match(CDS.DATA_DISCLAIMER, /verify/i);
+  assert.match(CDS.DATA_DISCLAIMER, /T3|confirm|verify/i);
 });
 
 test('HXT.TO is a swap-based ~$0-distribution fund: zero factors', () => {
@@ -67,9 +69,9 @@ test('HXT.TO is a swap-based ~$0-distribution fund: zero factors', () => {
 test('getFactors: hit returns the record', () => {
   const r = CDS.getFactors('XEQT.TO', 2024);
   assert.ok(r);
-  assert.strictEqual(r.rocPerUnit, 0.03);
-  assert.strictEqual(r.reinvestedPerUnit, 0.22);
-  assert.strictEqual(r.verified, false);
+  assert.strictEqual(r.rocPerUnit, 0.02996);
+  assert.strictEqual(r.reinvestedPerUnit, 0.00000);
+  assert.strictEqual(r.verified, true);
 });
 
 test('getFactors: miss returns null (unknown symbol and unknown year)', () => {
@@ -100,18 +102,18 @@ test('listCoverage: one entry per symbol with ascending years', () => {
 });
 
 test('computeAcbAdjustments: roc math = unitsHeld * rocPerUnit', () => {
-  // ZAG.TO 2023: roc 0.15/unit. 200 units -> 30.00
+  // ZAG.TO 2023: roc 0.075975/unit. 200 units -> 15.195
   const a = CDS.computeAcbAdjustments({ symbol: 'ZAG.TO', unitsHeld: 200, year: 2023 });
-  assert.strictEqual(a.rocPerUnit, 0.15);
-  assert.strictEqual(a.rocAmount, 30);
-  assert.strictEqual(a.verified, false);
+  assert.strictEqual(a.rocPerUnit, 0.075975);
+  assert.ok(Math.abs(a.rocAmount - 15.195) < 1e-6);
+  assert.strictEqual(a.verified, true);
 });
 
 test('computeAcbAdjustments: reinvested math = unitsHeld * reinvestedPerUnit', () => {
-  // XIC.TO 2024: reinvested 0.45/unit. 100 units -> 45.00; roc 0.04 -> 4.00
-  const a = CDS.computeAcbAdjustments({ symbol: 'XIC.TO', unitsHeld: 100, year: 2024 });
-  assert.strictEqual(a.reinvestedAmount, 45);
-  assert.strictEqual(a.rocAmount, 4);
+  // XEQT.TO 2025: reinvested 0.32215/unit -> 100 units 32.215; roc 0.04485 -> 4.485
+  const a = CDS.computeAcbAdjustments({ symbol: 'XEQT.TO', unitsHeld: 100, year: 2025 });
+  assert.ok(Math.abs(a.reinvestedAmount - 32.215) < 1e-6);
+  assert.ok(Math.abs(a.rocAmount - 4.485) < 1e-6);
 });
 
 test('computeAcbAdjustments: override factors respected over dataset', () => {
@@ -160,8 +162,8 @@ test('computeAcbAdjustments: unknown symbol/year guard -> zeros with reason', ()
 });
 
 test('buildAdjustmentTxns: emits roc + reinvest legs, Dec-31 date, cds-import source', () => {
-  // XIC.TO 2024: roc 4.00, reinvested 45.00 for 100 units.
-  const txns = CDS.buildAdjustmentTxns({ symbol: 'XIC.TO', unitsHeld: 100, year: 2024, fxRate: 1, currency: 'CAD' });
+  // Override factors keep this a test of the leg-shaping logic, not the data.
+  const txns = CDS.buildAdjustmentTxns({ symbol: 'ANY.TO', unitsHeld: 100, year: 2024, factors: { rocPerUnit: 0.04, reinvestedPerUnit: 0.45 }, fxRate: 1, currency: 'CAD' });
   assert.strictEqual(txns.length, 2);
   const roc = txns.find((t) => t.type === 'roc');
   const rei = txns.find((t) => t.type === 'reinvest');
@@ -177,9 +179,8 @@ test('buildAdjustmentTxns: emits roc + reinvest legs, Dec-31 date, cds-import so
 
 test('buildAdjustmentTxns: carries fxRate and currency through to the legs', () => {
   const txns = CDS.buildAdjustmentTxns({
-    symbol: 'VFV.TO', unitsHeld: 100, year: 2024, fxRate: 1.37, currency: 'USD',
+    symbol: 'ANY.TO', unitsHeld: 100, year: 2024, factors: { rocPerUnit: 0.01, reinvestedPerUnit: 0.10 }, fxRate: 1.37, currency: 'USD',
   });
-  // VFV.TO 2024: roc 0.01 -> 1.00, reinvested 0.10 -> 10.00
   assert.ok(txns.length >= 1);
   for (const t of txns) {
     assert.strictEqual(t.fxRate, 1.37);
@@ -187,9 +188,8 @@ test('buildAdjustmentTxns: carries fxRate and currency through to the legs', () 
   }
 });
 
-test('buildAdjustmentTxns: skips a zero-factor leg (VFV.TO 2023 roc = 0 -> reinvest only)', () => {
-  // VFV.TO 2023: roc 0.00 (skip), reinvested 0.12 -> only the reinvest leg.
-  const txns = CDS.buildAdjustmentTxns({ symbol: 'VFV.TO', unitsHeld: 100, year: 2023, fxRate: 1 });
+test('buildAdjustmentTxns: skips a zero-factor leg (roc 0 -> reinvest only)', () => {
+  const txns = CDS.buildAdjustmentTxns({ symbol: 'ANY.TO', unitsHeld: 100, year: 2023, factors: { rocPerUnit: 0, reinvestedPerUnit: 0.12 }, fxRate: 1 });
   assert.strictEqual(txns.length, 1);
   assert.strictEqual(txns[0].type, 'reinvest');
   assert.ok(Math.abs(txns[0].amount - 12) < 1e-6);
@@ -202,13 +202,13 @@ test('buildAdjustmentTxns: zero-factor fund (HXT.TO) and guarded input -> []', (
 });
 
 test('END-TO-END: buy + generated adjustments move ACB by (reinvested - roc)', () => {
-  // Hold 100 units of XIC.TO bought during 2024, then apply CDS adjustments.
-  // XIC.TO 2024: roc 0.04/unit -> 4.00 (lowers ACB), reinvested 0.45/unit -> 45.00 (raises ACB).
+  // Hold 100 units bought during 2024, then apply CDS adjustments (override
+  // factors: roc 0.04/unit -> 4.00 lowers ACB, reinvested 0.45/unit -> 45.00 raises it).
   const buy = { type: 'buy', date: '2024-01-15', shares: 100, price: 30, commission: 0, fxRate: 1 };
   const baseline = ACB.computeACB([buy]).summary;
   assert.strictEqual(baseline.currentBookValue, 3000);
 
-  const adjTxns = CDS.buildAdjustmentTxns({ symbol: 'XIC.TO', unitsHeld: 100, year: 2024, fxRate: 1 });
+  const adjTxns = CDS.buildAdjustmentTxns({ symbol: 'ANY.TO', unitsHeld: 100, year: 2024, factors: { rocPerUnit: 0.04, reinvestedPerUnit: 0.45 }, fxRate: 1 });
   const withAdj = ACB.computeACB([buy].concat(adjTxns)).summary;
 
   const expectedNet = 45 - 4; // reinvested minus roc

@@ -787,6 +787,31 @@ function parseOptionsContract(c) {
   };
 }
 
+// Crumb-authenticated JSON GET (query2). Yahoo's v7 options endpoint now
+// requires the crumb + cookies, same as v7 quote; without it the request 401s
+// and the whole options view silently falls back to simulated data.
+async function yahooCrumbJson(basePath) {
+  await refreshYahooCrumb();
+  if (!yahooCrumb.crumb) return null;
+  var sep = basePath.indexOf('?') === -1 ? '?' : '&';
+  var mkPath = function () { return basePath + sep + 'crumb=' + encodeURIComponent(yahooCrumb.crumb); };
+  var doGet = function () {
+    return httpGetRaw({
+      hostname: 'query2.finance.yahoo.com', path: mkPath(),
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', 'Cookie': yahooCrumb.cookies },
+    });
+  };
+  var resp = await doGet();
+  if (resp.status === 401) {
+    yahooCrumb.expiry = 0;
+    await refreshYahooCrumb();
+    if (!yahooCrumb.crumb) return null;
+    resp = await doGet();
+  }
+  if (resp.status !== 200) return null;
+  try { return JSON.parse(resp.body); } catch (e) { return null; }
+}
+
 async function getOptionsData(symbol, expirationDate) {
   var cacheKey = 'options:' + symbol + ':' + (expirationDate || 'all');
   var cached = getCached(cacheKey);
@@ -795,9 +820,9 @@ async function getOptionsData(symbol, expirationDate) {
   var urlPath = '/v7/finance/options/' + encodeURIComponent(symbol);
   if (expirationDate) urlPath += '?date=' + expirationDate;
 
-  var raw = await yahooFetch(urlPath);
+  var raw = await yahooCrumbJson(urlPath);
 
-  if (!raw.optionChain || !raw.optionChain.result || raw.optionChain.result.length === 0) {
+  if (!raw || !raw.optionChain || !raw.optionChain.result || raw.optionChain.result.length === 0) {
     throw new Error('No options data returned from Yahoo Finance');
   }
 

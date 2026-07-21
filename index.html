@@ -798,17 +798,13 @@
               <div class="gs-ai-badge">
                 <div class="gs-ai-icon">GS</div>
                 <div>
-                  <h3 class="panel-title">Grey Sankore AI</h3>
+                  <h3 class="panel-title">Grey Sankore AI <span class="sample-badge" title="Illustrative insights for preview. Add your Anthropic API key in Settings for live, real-data analysis.">Sample</span></h3>
                   <span class="gs-ai-role">Head of Investment</span>
                 </div>
               </div>
             </div>
             <div class="gs-confidence">
-              <span class="confidence-label">Confidence</span>
-              <div class="confidence-bar">
-                <div class="confidence-fill" style="width: 87%"></div>
-              </div>
-              <span class="confidence-val">87%</span>
+              <span class="confidence-label">Preview - add an API key for live analysis</span>
             </div>
           </div>
           <div class="gs-insights-body">
@@ -1226,7 +1222,6 @@
           <div class="opt-view-toggle">
             <button class="ovt-btn active" data-optview="chain">Chain</button>
             <button class="ovt-btn" data-optview="strategy">Strategy</button>
-            <button class="ovt-btn" data-optview="volsurface">Vol Surface</button>
           </div>
         </div>
       </div>
@@ -1800,7 +1795,7 @@
         <div class="panel">
           <div class="panel-header">
             <h3 class="panel-title">Dark Pool Prints</h3>
-            <span class="panel-badge">Delayed 15s</span>
+            <span class="sample-badge" title="Simulated order flow for preview">Simulated</span>
           </div>
           <div class="dark-pool-feed" id="darkPoolFeed">
             <div class="dp-header-row">
@@ -1821,7 +1816,7 @@
       <div class="panel smart-money-panel">
         <div class="panel-header">
           <h3 class="panel-title">Smart Money Alerts</h3>
-          <span class="panel-badge live">Live</span>
+          <span class="sample-badge" title="Simulated smart-money alerts for preview">Simulated</span>
         </div>
         <div class="smart-money-alerts" id="smartMoneyAlerts">
           <div class="sma-empty">No alerts yet. Monitoring flow...</div>
@@ -2148,10 +2143,13 @@
           <h1>Trade Journal</h1>
           <span class="view-subtitle">Track, review, and learn from every trade</span>
         </div>
-        <button class="btn-primary" id="newJournalEntryBtn">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-          New Entry
-        </button>
+        <div style="display:flex;gap:8px;">
+          <button class="agent-btn" id="loadSampleJournalBtn" title="Load labeled sample trades to see the journal populated">Load sample entries</button>
+          <button class="btn-primary" id="newJournalEntryBtn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+            New Entry
+          </button>
+        </div>
       </div>
 
       <!-- P&L Calendar Heatmap -->

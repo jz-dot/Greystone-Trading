@@ -158,6 +158,14 @@ const MarketData = (function () {
           badgeEl.className = 'metric-badge ' + (isUp ? 'profit' : 'loss');
         }
       }
+      // Real volume for the price cards (the "Vol: X" sub-line was static).
+      // Skip the cards whose sub-line is a decorative label (Fear/Curve/FX).
+      var volEl = card.querySelector('.metric-vol');
+      if (volEl && typeof q.volume === 'number' && q.volume > 0 && /^Vol:/.test(volEl.textContent)) {
+        var v = q.volume;
+        var vs = v >= 1e9 ? (v / 1e9).toFixed(1) + 'B' : v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(1) + 'K' : String(v);
+        volEl.textContent = 'Vol: ' + vs;
+      }
     });
   }
 

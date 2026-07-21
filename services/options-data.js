@@ -11,18 +11,12 @@ const BS = (typeof BlackScholes !== 'undefined') ? BlackScholes :
 // Risk-free rate (10Y Treasury yield approximation)
 const RISK_FREE_RATE = 0.043;
 
-// API base: use local proxy when available, otherwise direct Yahoo Finance
-const API_BASE = (() => {
-  if (typeof window !== 'undefined' && window.location) {
-    // In browser, try the proxy server first
-    const port = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
-    // If we're served from the Express server, use same origin
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-      return `${window.location.protocol}//${window.location.hostname}:3927`;
-    }
-  }
-  return null;
-})();
+// The Express app serves /api/options at the SAME ORIGIN both locally
+// (npm start) and deployed (Vercel routes /api/* to the function), so use a
+// relative path. The old logic hardcoded port 3927 for localhost and null
+// everywhere else, which forced simulated options on the live site even
+// though real chain data was reachable.
+const API_BASE = '';
 
 // In-memory cache
 const _cache = {};
@@ -52,17 +46,12 @@ async function getOptionsChain(symbol, expirationDate) {
   if (cached) return cached;
 
   try {
-    let data;
-    if (API_BASE) {
-      const url = expirationDate
-        ? `${API_BASE}/api/options/${symbol}/${expirationDate}`
-        : `${API_BASE}/api/options/${symbol}`;
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      data = await resp.json();
-    } else {
-      throw new Error('No API available');
-    }
+    const url = expirationDate
+      ? `${API_BASE}/api/options/${symbol}/${expirationDate}`
+      : `${API_BASE}/api/options/${symbol}`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
 
     if (data && data.calls && data.calls.length > 0) {
       // Enrich with calculated Greeks
@@ -90,7 +79,7 @@ async function getExpirations(symbol) {
   if (cached) return cached;
 
   try {
-    if (API_BASE) {
+    {
       const resp = await fetch(`${API_BASE}/api/options/${symbol}`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();

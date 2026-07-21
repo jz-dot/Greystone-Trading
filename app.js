@@ -591,17 +591,46 @@ async function loadExpirations(symbol) {
  * Update the options stats bar
  */
 function updateOptionsStats(chain) {
-  if (!chain || !chain.stats) return;
-  const s = chain.stats;
   const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  if (!chain) return;
 
-  setEl('statIVRank', s.ivRank ? s.ivRank.toFixed(1) + '%' : '--');
-  setEl('statIVPctile', s.ivPercentile ? s.ivPercentile.toFixed(1) + '%' : '--');
-  setEl('statPCRatio', s.putCallRatio ? s.putCallRatio.toFixed(2) : '--');
-  setEl('statExpMove', s.expectedMove ? '+/- $' + s.expectedMove.toFixed(2) : '--');
-  setEl('statTotalOI', formatK((s.totalCallOI || 0) + (s.totalPutOI || 0)));
-  setEl('statTotalVol', formatK((s.totalCallVolume || 0) + (s.totalPutVolume || 0)));
-  setEl('statSizzle', s.sizzleIndex ? s.sizzleIndex.toFixed(1) + 'x' : '--');
+  // Simulated chains carry a precomputed stats block. A REAL Yahoo chain does
+  // not, so compute the stats the chain actually supports (P/C ratio, OI,
+  // volume, expected move) and honestly blank the ones that need external
+  // data (IV rank/percentile and the volume-sizzle need IV/volume history)
+  // instead of leaving the hardcoded sample values on screen.
+  const s = chain.stats;
+  if (s) {
+    setEl('statIVRank', s.ivRank ? s.ivRank.toFixed(1) + '%' : '--');
+    setEl('statIVPctile', s.ivPercentile ? s.ivPercentile.toFixed(1) + '%' : '--');
+    setEl('statPCRatio', s.putCallRatio ? s.putCallRatio.toFixed(2) : '--');
+    setEl('statExpMove', s.expectedMove ? '+/- $' + s.expectedMove.toFixed(2) : '--');
+    setEl('statTotalOI', formatK((s.totalCallOI || 0) + (s.totalPutOI || 0)));
+    setEl('statTotalVol', formatK((s.totalCallVolume || 0) + (s.totalPutVolume || 0)));
+    setEl('statSizzle', s.sizzleIndex ? s.sizzleIndex.toFixed(1) + 'x' : '--');
+    return;
+  }
+
+  const calls = chain.calls || [], puts = chain.puts || [];
+  const sum = (arr, k) => arr.reduce((t, c) => t + (Number(c[k]) || 0), 0);
+  const callOI = sum(calls, 'openInterest'), putOI = sum(puts, 'openInterest');
+  const totalOI = callOI + putOI, totalVol = sum(calls, 'volume') + sum(puts, 'volume');
+  setEl('statTotalOI', totalOI ? formatK(totalOI) : '--');
+  setEl('statTotalVol', totalVol ? formatK(totalVol) : '--');
+  setEl('statPCRatio', callOI > 0 ? (putOI / callOI).toFixed(2) : '--');
+
+  const spot = chain.spotPrice || (chain.quote && chain.quote.price) || 0;
+  let expMove = null;
+  if (spot && calls.length && puts.length) {
+    const nearest = (arr) => arr.reduce((a, b) => Math.abs(b.strike - spot) < Math.abs(a.strike - spot) ? b : a);
+    const c = nearest(calls), p = nearest(puts);
+    const cp = c.last || c.ask || 0, pp = p.last || p.ask || 0;
+    if (cp && pp) expMove = cp + pp; // ATM straddle premium
+  }
+  setEl('statExpMove', expMove ? '+/- $' + expMove.toFixed(2) : '--');
+  setEl('statIVRank', '--');
+  setEl('statIVPctile', '--');
+  setEl('statSizzle', '--');
 }
 
 /**
@@ -3291,70 +3320,78 @@ function setupWatchlistTabs() {
   });
 }
 
-// ---- SECTOR HEATMAP PERIOD BUTTONS ----
+// ---- SECTOR HEATMAP (real data via sector SPDR ETFs) ----
+// Each cell maps to its sector SPDR ETF; performance comes from the same
+// live /api/quotes (1D) and /api/chart (1W/1M/YTD) the rest of the app uses.
+const SECTOR_ETFS = {
+  'TECHNOLOGY': 'XLK', 'HEALTHCARE': 'XLV', 'ENERGY': 'XLE', 'FINANCIALS': 'XLF',
+  'CONSUMER DISC.': 'XLY', 'INDUSTRIALS': 'XLI', 'MATERIALS': 'XLB', 'UTILITIES': 'XLU',
+  'REITS': 'XLRE', 'STAPLES': 'XLP', 'COMM. SERVICES': 'XLC',
+};
+
+function sectorCellClass(ch) {
+  if (ch >= 1.0) return 'profit-strong';
+  if (ch >= 0.2) return 'profit';
+  if (ch >= 0) return 'profit-mild';
+  if (ch > -0.2) return 'loss-mild';
+  return 'loss';
+}
+
+function applySectorData(bySector) {
+  document.querySelectorAll('#sectorHeatmap .heatmap-cell').forEach(function (cell) {
+    const labelEl = cell.querySelector('.hm-label');
+    const valEl = cell.querySelector('.hm-value');
+    if (!labelEl || !valEl) return;
+    const ch = bySector[labelEl.textContent.trim().toUpperCase()];
+    if (typeof ch !== 'number') return;
+    valEl.textContent = (ch >= 0 ? '+' : '') + ch.toFixed(2) + '%';
+    cell.classList.remove('profit-strong', 'profit', 'profit-mild', 'loss', 'loss-mild');
+    cell.classList.add(sectorCellClass(ch));
+  });
+}
+
+async function fetchSectorPerformance(period) {
+  const names = Object.keys(SECTOR_ETFS);
+  const bySector = {};
+  if (period === '1D') {
+    const r = await fetch('/api/quotes?symbols=' + names.map(n => SECTOR_ETFS[n]).join(','));
+    const q = await r.json();
+    names.forEach(function (n) {
+      const s = q[SECTOR_ETFS[n]];
+      if (s && typeof s.changePct === 'number') bySector[n] = s.changePct;
+    });
+  } else {
+    const range = period === '1W' ? '5d' : period === '1M' ? '1mo' : 'ytd';
+    const rows = await Promise.all(names.map(function (n) {
+      return fetch('/api/chart/' + SECTOR_ETFS[n] + '?interval=1d&range=' + range)
+        .then(r => r.ok ? r.json() : null)
+        .then(function (d) {
+          const c = (d && d.candles || []).filter(x => x.close != null);
+          return (c.length >= 2) ? [n, (c[c.length - 1].close / c[0].close - 1) * 100] : [n, null];
+        })
+        .catch(() => [n, null]);
+    }));
+    rows.forEach(function (row) { if (row[1] != null) bySector[row[0]] = row[1]; });
+  }
+  return bySector;
+}
+
+async function loadSectorHeatmap(period) {
+  try {
+    const bySector = await fetchSectorPerformance(period);
+    if (Object.keys(bySector).length) applySectorData(bySector);
+  } catch (e) { /* keep last values on failure */ }
+}
+
 function setupHeatmapPeriodButtons() {
   document.querySelectorAll('.hp-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.hp-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-
-      // If BigData is available, fetch real sector data for the selected period
-      const period = btn.textContent.trim() || btn.dataset.period || '1D';
-      fetchBigDataSectors(period);
+      loadSectorHeatmap(btn.textContent.trim() || '1D');
     });
   });
-}
-
-async function fetchBigDataSectors(period) {
-  if (typeof BigDataService === 'undefined' || !BigDataService.isAvailable()) return;
-
-  try {
-    const data = await BigDataService.getSectors(period);
-    if (!data) return;
-
-    const sectors = BigDataService.normalizeSectorData(data);
-    if (!sectors || sectors.length === 0) return;
-
-    updateHeatmapWithRealData(sectors);
-  } catch (err) {
-    console.error('[BigData] Sector heatmap error:', err);
-  }
-}
-
-function updateHeatmapWithRealData(sectors) {
-  // Find all heatmap cells and update them
-  const heatmapCells = document.querySelectorAll('.hm-cell');
-  if (!heatmapCells || heatmapCells.length === 0) return;
-
-  // Map sector names to cells
-  const sectorMap = {};
-  sectors.forEach(function (s) { sectorMap[s.name.toUpperCase()] = s; });
-
-  heatmapCells.forEach(function (cell) {
-    const nameEl = cell.querySelector('.hm-name');
-    const changeEl = cell.querySelector('.hm-change');
-    if (!nameEl || !changeEl) return;
-
-    const cellName = nameEl.textContent.trim().toUpperCase();
-    // Try to match sector
-    const match = sectorMap[cellName] ||
-      Object.values(sectorMap).find(function (s) {
-        return cellName.includes(s.name.toUpperCase()) || s.name.toUpperCase().includes(cellName);
-      });
-
-    if (match) {
-      const change = match.change;
-      const isUp = change >= 0;
-      changeEl.textContent = (isUp ? '+' : '') + change.toFixed(2) + '%';
-
-      // Update cell color based on performance
-      cell.classList.remove('profit', 'loss');
-      cell.classList.add(isUp ? 'profit' : 'loss');
-      cell.style.background = isUp
-        ? 'rgba(16, 185, 129, ' + Math.min(0.3, Math.abs(change) * 0.05) + ')'
-        : 'rgba(239, 68, 68, ' + Math.min(0.3, Math.abs(change) * 0.05) + ')';
-    }
-  });
+  loadSectorHeatmap('1D');
 }
 
 // ---- TICKER SEARCH (with autocomplete) ----
@@ -3671,48 +3708,10 @@ async function drawSparklinesReal() {
 // Initial click handlers are set up by setupWatchlistClickToChart()
 
 // ---- SIMULATED LIVE PRICE UPDATES ----
-function simulatePriceUpdate() {
-  // Only run simulated updates if MarketData is not connected
-  if (typeof MarketData !== 'undefined' && MarketData.isConnected()) return;
-
-  const rows = document.querySelectorAll('.wl-row');
-  if (!rows.length) return;
-  const row = rows[Math.floor(Math.random() * rows.length)];
-  const priceEl = row.querySelector('.wl-price');
-  const changeEl = row.querySelector('.wl-change');
-  if (!priceEl || priceEl.textContent === '--') return;
-
-  const oldPrice = parseFloat(priceEl.textContent);
-  if (isNaN(oldPrice)) return;
-  const delta = (Math.random() - 0.48) * oldPrice * 0.002;
-  const newPrice = oldPrice + delta;
-  priceEl.textContent = newPrice.toFixed(2);
-
-  const pctChange = (delta / oldPrice) * 100;
-  const totalChange = parseFloat(changeEl.textContent) + pctChange;
-
-  if (delta > 0) {
-    changeEl.textContent = '+' + Math.abs(totalChange).toFixed(2) + '%';
-    changeEl.className = 'wl-change profit';
-    row.classList.remove('flash-down', 'loss', 'profit');
-    row.classList.add('flash-up', 'profit');
-  } else {
-    changeEl.textContent = '-' + Math.abs(totalChange).toFixed(2) + '%';
-    changeEl.className = 'wl-change loss';
-    row.classList.remove('flash-up', 'loss', 'profit');
-    row.classList.add('flash-down', 'loss');
-  }
-  setTimeout(() => row.classList.remove('flash-up', 'flash-down'), 600);
-
-  // If the updated ticker matches the chart, update chart overlay price
-  const ticker = row.dataset.ticker;
-  if (ticker === currentChartSymbol && currentChartCandles && currentChartCandles.length > 0) {
-    const last = currentChartCandles[currentChartCandles.length - 1];
-    last.close = newPrice;
-    updateChartOverlay(currentChartCandles);
-  }
-}
-setInterval(simulatePriceUpdate, 1500);
+// Removed: a 1.5s random-walk that perturbed watchlist prices when the live
+// feed was unreachable, making stale/offline data look like a live feed.
+// When quotes are unavailable the watchlist now simply holds its last real
+// values (honest) rather than inventing movement.
 
 // ---- CLICKABLE METRIC CARDS ----
 function setupMetricCardClicks() {
@@ -5739,7 +5738,7 @@ function riskFormatCurrency(val, decimals) {
 function populateRiskSummary(data) {
   var el = function(id, val) { var e = document.getElementById(id); if (e) e.textContent = val; };
   el('riskTotalExposure', riskFormatCurrency(data.totalValue));
-  el('riskNetDelta', riskFormatCurrency(data.netDelta));
+  el('riskNetDelta', riskFormatCurrency(data.betaWeightedDelta));
   el('riskPortBeta', data.weightedBeta.toFixed(2));
   el('riskSharpe', data.sharpe.toFixed(2));
   el('riskVaR', '-' + riskFormatCurrency(data.var95));
@@ -6262,13 +6261,44 @@ function showToast(message, type) {
   }
 })();
 
-document.querySelectorAll('.accent-swatch').forEach(function(swatch) {
-  swatch.addEventListener('click', function() {
-    document.querySelectorAll('.accent-swatch').forEach(function(s) { s.classList.remove('active'); });
-    swatch.classList.add('active');
-    showToast('Accent color updated', 'info');
+// Accent color: actually recolor the app's primary accent (--accent-gold and
+// its alpha variants), persist the choice, and re-apply on load - previously
+// the swatch only toggled .active and toasted "updated" while nothing changed.
+(function initAccentColor() {
+  var ACCENTS = {
+    gold: [245, 158, 11], blue: [59, 130, 246], teal: [20, 184, 166], purple: [139, 92, 246],
+  };
+  function applyAccent(name) {
+    var rgb = ACCENTS[name]; if (!rgb) return;
+    var root = document.documentElement.style;
+    var hex = '#' + rgb.map(function (n) { return ('0' + n.toString(16)).slice(-2); }).join('');
+    root.setProperty('--accent-gold', hex);
+    var a = function (alpha) { return 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + alpha + ')'; };
+    root.setProperty('--gold-a08', a(0.08));
+    root.setProperty('--gold-a10', a(0.10));
+    root.setProperty('--gold-a15', a(0.15));
+    root.setProperty('--gold-a25', a(0.25));
+    root.setProperty('--gold-a30', a(0.30));
+  }
+  var saved = null;
+  try { saved = localStorage.getItem('gs_accent'); } catch (e) {}
+  if (saved && ACCENTS[saved]) {
+    applyAccent(saved);
+    document.querySelectorAll('.accent-swatch').forEach(function (s) {
+      s.classList.toggle('active', s.dataset.color === saved);
+    });
+  }
+  document.querySelectorAll('.accent-swatch').forEach(function (swatch) {
+    swatch.addEventListener('click', function () {
+      var name = swatch.dataset.color;
+      document.querySelectorAll('.accent-swatch').forEach(function (s) { s.classList.remove('active'); });
+      swatch.classList.add('active');
+      applyAccent(name);
+      try { localStorage.setItem('gs_accent', name); } catch (e) {}
+      if (typeof showToast === 'function') showToast('Accent color updated', 'success');
+    });
   });
-});
+})();
 
 // ---- BIGDATA.COM SERVICE INITIALIZATION ----
 
@@ -7377,11 +7407,9 @@ if (document.readyState === 'loading') {
   var STORAGE_KEY = 'gs_journal_entries';
   var entries = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
 
-  // Seed sample data on first load
-  if (entries.length === 0) {
-    entries = generateSampleEntries();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
-  }
+  // No auto-seed: a new user starts with a real empty journal (the empty
+  // state exists) rather than 18 fabricated trades presented as their own
+  // track record. Sample entries are available on demand via the button.
 
   var newEntryBtn = document.getElementById('newJournalEntryBtn');
   var saveBtn = document.getElementById('saveJournalEntryBtn');
@@ -8053,6 +8081,18 @@ if (document.readyState === 'loading') {
         notes: s.notes,
         emotion: s.emotion
       };
+    });
+  }
+
+  // Opt-in sample entries (replaces the old silent auto-seed).
+  var loadSampleBtn = document.getElementById('loadSampleJournalBtn');
+  if (loadSampleBtn) {
+    loadSampleBtn.addEventListener('click', function () {
+      entries = generateSampleEntries();
+      saveEntriesToStorage();
+      updateJournalStats();
+      renderJournalTable();
+      if (typeof showToast === 'function') showToast('Sample journal entries loaded', 'success');
     });
   }
 

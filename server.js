@@ -209,6 +209,18 @@ app.use(cors({
 
 app.use(express.json({ limit: '1mb' }));
 
+// A malformed JSON body is a client error, not a server error: return 400
+// instead of letting the SyntaxError fall through to the 500 handler.
+app.use(function (err, req, res, next) {
+  if (err && err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'INVALID_JSON', message: 'Request body is not valid JSON.' });
+  }
+  if (err && err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'BODY_TOO_LARGE', message: 'Request body exceeds the size limit.' });
+  }
+  next(err);
+});
+
 // General rate limiter for all API routes, with stricter limits on the AI
 // proxy (server-funded Anthropic calls) and the auth/credential routes.
 const generalLimiter = rateLimit({
@@ -1134,9 +1146,14 @@ app.post('/api/ai/key', authLimiter, requireAuth, requireOwner, (req, res) => {
   res.json({ status: 'ok', message: 'API key saved' });
 });
 
-// POST /api/ai/key/validate - Test the API key
-app.post('/api/ai/key/validate', (req, res) => {
-  if (!anthropicApiKey) {
+// POST /api/ai/key/validate - Test the CALLER'S resolved Anthropic key with a
+// real (tiny) Anthropic call. Requires auth so it can never be triggered
+// anonymously to burn a key's quota, and it resolves the caller's own key
+// (owner -> server key, BYO user -> their stored key) rather than always
+// testing the server global.
+app.post('/api/ai/key/validate', authLimiter, requireAuth, async (req, res) => {
+  const resolved = await resolveAnthropicKey(req);
+  if (!resolved.key) {
     return res.json({ valid: false, message: 'No API key configured' });
   }
 
@@ -1153,7 +1170,7 @@ app.post('/api/ai/key/validate', (req, res) => {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': anthropicApiKey,
+      'x-api-key': resolved.key,
       'anthropic-version': '2023-06-01',
       'Content-Length': Buffer.byteLength(postData)
     }

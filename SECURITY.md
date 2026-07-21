@@ -6,9 +6,7 @@ GSP Trading handles brokerage credentials and personal financial data, so we tak
 
 Please report vulnerabilities privately. Do not open a public issue, pull request, or discussion for a security problem, because that discloses the issue before a fix is available.
 
-Email: security@gsptrading.example
-
-(This is a placeholder address. The project owner will replace it with a monitored contact before public launch.)
+Report privately through GitHub's private vulnerability reporting for this repository: open the **Security** tab and choose **Report a vulnerability** (Security advisories). This routes the report directly and privately to the maintainers, with no email address to intercept.
 
 When you report, please include as much of the following as you can:
 

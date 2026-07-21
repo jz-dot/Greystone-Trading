@@ -474,7 +474,9 @@ Respond in valid JSON array format only, no markdown:
   // ---- Validate API Key ----
   async function validateApiKey() {
     try {
-      const res = await fetch('/api/ai/key/validate', { method: 'POST' });
+      // Must be authenticated: the endpoint validates the caller's own key.
+      const res = await fetch('/api/ai/key/validate', { method: 'POST', headers: aiAuthHeaders() });
+      if (res.status === 401) return { valid: false, message: 'Sign in to validate your key' };
       return await res.json();
     } catch (e) {
       return { valid: false, message: 'Cannot reach server' };

@@ -3415,7 +3415,7 @@ kbd {
   padding: 8px 12px;
 }
 .earnings-row {
-  display: grid; grid-template-columns: 80px 60px 50px 1fr 1fr;
+  display: grid; grid-template-columns: 1fr 70px 90px;
   gap: 8px; align-items: center;
   padding: 8px 0;
   border-bottom: 1px solid var(--border);
@@ -3438,7 +3438,7 @@ kbd {
 .earnings-time.amc { background: rgba(139, 92, 246, 0.15); color: var(--accent-purple); }
 .earnings-est { font-size: 10px; color: var(--text-muted); }
 .earnings-header {
-  display: grid; grid-template-columns: 80px 60px 50px 1fr 1fr;
+  display: grid; grid-template-columns: 1fr 70px 90px;
   gap: 8px; padding: 4px 0 8px;
   font-size: 9px; font-weight: 600; color: var(--text-dim);
   text-transform: uppercase; letter-spacing: 0.5px;

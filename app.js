@@ -7265,31 +7265,39 @@ if (document.readyState === 'loading') {
   var calendarEl = document.getElementById('earningsCalendar');
   if (!calendarEl) return;
 
-  // Generate realistic mock earnings data based on watchlist tickers
-  function getEarningsData() {
-    var today = new Date();
-    var data = [
-      { ticker: 'AAPL', date: addDays(today, 2), time: 'AMC', epsEst: '$2.14', revEst: '$94.2B' },
-      { ticker: 'NVDA', date: addDays(today, 5), time: 'AMC', epsEst: '$5.42', revEst: '$28.5B' },
-      { ticker: 'MSFT', date: addDays(today, 1), time: 'AMC', epsEst: '$3.18', revEst: '$62.1B' },
-      { ticker: 'AMZN', date: addDays(today, 3), time: 'AMC', epsEst: '$1.24', revEst: '$155.7B' },
-      { ticker: 'META', date: addDays(today, 8), time: 'AMC', epsEst: '$5.38', revEst: '$41.2B' },
-      { ticker: 'GOOGL', date: addDays(today, 9), time: 'AMC', epsEst: '$1.98', revEst: '$85.3B' },
-      { ticker: 'TSLA', date: addDays(today, 0), time: 'AMC', epsEst: '$0.78', revEst: '$25.8B' },
-      { ticker: 'AMD', date: addDays(today, 4), time: 'AMC', epsEst: '$0.92', revEst: '$6.8B' },
-      { ticker: 'JPM', date: addDays(today, 6), time: 'BMO', epsEst: '$4.62', revEst: '$42.1B' },
-      { ticker: 'COIN', date: addDays(today, 11), time: 'AMC', epsEst: '$1.87', revEst: '$1.8B' },
-      { ticker: 'DIS', date: addDays(today, 12), time: 'BMO', epsEst: '$1.21', revEst: '$23.4B' },
-    ];
-    // Sort by date
-    data.sort(function(a, b) { return a.date - b.date; });
-    return data;
+  // Real upcoming-earnings dates + forward EPS estimate, from /api/earnings
+  // (Yahoo v7 earningsTimestamp). Cached in memory for the session.
+  var earningsCache = null;
+
+  function watchlistTickers() {
+    var syms = [];
+    document.querySelectorAll('.wl-row[data-ticker]').forEach(function (row) {
+      var t = row.dataset.ticker;
+      if (t && syms.indexOf(t) === -1) syms.push(t);
+    });
+    // Fall back to the default large-cap set before the watchlist renders.
+    if (!syms.length && typeof CAP_SIZE_TICKERS !== 'undefined') syms = CAP_SIZE_TICKERS.large.slice();
+    return syms.slice(0, 20);
   }
 
-  function addDays(date, days) {
-    var d = new Date(date);
-    d.setDate(d.getDate() + days);
-    return d;
+  function fetchEarnings() {
+    if (earningsCache) return Promise.resolve(earningsCache);
+    var syms = watchlistTickers();
+    if (!syms.length) return Promise.resolve([]);
+    return fetch('/api/earnings?symbols=' + encodeURIComponent(syms.join(',')))
+      .then(function (r) { return r.ok ? r.json() : { earnings: [] }; })
+      .then(function (j) {
+        earningsCache = (j.earnings || []).map(function (e) {
+          return {
+            ticker: e.symbol,
+            date: new Date(e.earningsTs),
+            epsEst: (typeof e.epsEstimate === 'number') ? '$' + e.epsEstimate.toFixed(2) : '-',
+            estimated: !!e.isEstimateDate,
+          };
+        });
+        return earningsCache;
+      })
+      .catch(function () { return []; });
   }
 
   function formatDate(d) {
@@ -7309,57 +7317,53 @@ if (document.readyState === 'loading') {
   }
 
   function renderCalendar() {
-    var data = getEarningsData();
-    var html = '<div class="earnings-header"><span>Date</span><span>Ticker</span><span>Time</span><span>EPS Est.</span><span>Rev Est.</span></div>';
-
-    data.forEach(function(e) {
-      var dateClass = getDateClass(e.date);
-      html += '<div class="earnings-row">';
-      html += '<span class="earnings-date ' + dateClass + '">' + formatDate(e.date) + (dateClass === 'today' ? ' (Today)' : '') + '</span>';
-      html += '<span class="earnings-ticker">' + e.ticker + '</span>';
-      html += '<span class="earnings-time ' + e.time.toLowerCase() + '">' + e.time + '</span>';
-      html += '<span class="earnings-est">' + e.epsEst + '</span>';
-      html += '<span class="earnings-est">' + e.revEst + '</span>';
-      html += '</div>';
+    fetchEarnings().then(function (data) {
+      if (!data.length) {
+        calendarEl.innerHTML = '<div class="pf-activity-empty" style="padding:16px;color:var(--text-muted);font-size:12px;">No upcoming earnings dates found for your watchlist.</div>';
+        return;
+      }
+      var html = '<div class="earnings-header"><span>Date</span><span>Ticker</span><span>Fwd EPS est.</span></div>';
+      data.forEach(function (e) {
+        var dateClass = getDateClass(e.date);
+        html += '<div class="earnings-row">';
+        html += '<span class="earnings-date ' + dateClass + '">' + formatDate(e.date) + (dateClass === 'today' ? ' (Today)' : '') + (e.estimated ? ' ~' : '') + '</span>';
+        html += '<span class="earnings-ticker">' + e.ticker + '</span>';
+        html += '<span class="earnings-est">' + e.epsEst + '</span>';
+        html += '</div>';
+      });
+      calendarEl.innerHTML = html;
     });
-
-    calendarEl.innerHTML = html;
   }
 
-  // Add earnings badges to watchlist
+  // Add an "E" badge to watchlist rows reporting within 7 days.
   function addEarningsBadges() {
-    var data = getEarningsData();
-    var earningsMap = {};
-    var today = new Date();
-    today.setHours(0,0,0,0);
-
-    data.forEach(function(e) {
-      var target = new Date(e.date);
-      target.setHours(0,0,0,0);
-      var diff = (target - today) / (1000 * 60 * 60 * 24);
-      if (diff >= 0 && diff <= 7) {
-        earningsMap[e.ticker] = e;
-      }
-    });
-
-    document.querySelectorAll('.wl-row[data-ticker]').forEach(function(row) {
-      if (row.querySelector('.wl-earnings-badge')) return;
-      var ticker = row.dataset.ticker;
-      if (earningsMap[ticker]) {
+    fetchEarnings().then(function (data) {
+      var earningsMap = {};
+      var today = new Date(); today.setHours(0, 0, 0, 0);
+      data.forEach(function (e) {
+        var target = new Date(e.date); target.setHours(0, 0, 0, 0);
+        var diff = (target - today) / (1000 * 60 * 60 * 24);
+        if (diff >= 0 && diff <= 7) earningsMap[e.ticker] = e;
+      });
+      document.querySelectorAll('.wl-row[data-ticker]').forEach(function (row) {
+        var ticker = row.dataset.ticker;
+        var existing = row.querySelector('.wl-earnings-badge');
+        if (!earningsMap[ticker]) { if (existing) existing.remove(); return; }
+        if (existing) return;
         var badge = document.createElement('span');
         badge.className = 'wl-earnings-badge';
         badge.textContent = 'E';
-        badge.title = 'Earnings ' + formatDate(earningsMap[ticker].date) + ' ' + earningsMap[ticker].time + ' - EPS Est: ' + earningsMap[ticker].epsEst;
+        badge.title = 'Earnings ' + formatDate(earningsMap[ticker].date) + (earningsMap[ticker].estimated ? ' (estimated)' : '') + ' - Fwd EPS est: ' + earningsMap[ticker].epsEst;
         var symEl = row.querySelector('.wl-sym');
         if (symEl) symEl.after(badge);
-      }
+      });
     });
   }
 
   renderCalendar();
   addEarningsBadges();
 
-  // Observe watchlist for changes
+  // Observe watchlist for changes (re-badge without refetching).
   var wlObserver = new MutationObserver(addEarningsBadges);
   var wlTable = document.querySelector('.watchlist-table');
   if (wlTable) wlObserver.observe(wlTable, { childList: true, subtree: true });

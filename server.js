@@ -403,12 +403,15 @@ app.get('/api/config', (req, res) => {
 const cache = new Map();
 const CACHE_TTL = 15000;
 
-function getCached(key) {
+function getCached(key, maxAgeMs) {
   const entry = cache.get(key);
-  if (entry && Date.now() - entry.timestamp < CACHE_TTL) {
+  const ttl = (typeof maxAgeMs === 'number' && maxAgeMs > 0) ? maxAgeMs : CACHE_TTL;
+  if (entry && Date.now() - entry.timestamp < ttl) {
     return entry.data;
   }
-  cache.delete(key);
+  // Only evict when it is stale under the DEFAULT TTL; a short-TTL miss on an
+  // entry another caller wrote with a longer TTL must not delete it.
+  if (entry && Date.now() - entry.timestamp >= CACHE_TTL) cache.delete(key);
   return null;
 }
 
@@ -614,6 +617,49 @@ app.get('/api/quotes', async function (req, res) {
   } catch (err) {
     console.error('[API] Batch quotes error:', err.message);
     res.status(502).json({ error: 'Failed to fetch quotes' });
+  }
+});
+
+// Real upcoming-earnings dates for a set of symbols, from Yahoo's v7 quote
+// (earningsTimestamp = next scheduled report; epsForward = forward EPS
+// estimate). Only symbols with a FUTURE earnings date are returned, so the
+// UI shows real dates and never fabricates them. 6-hour cache.
+app.get('/api/earnings', async function (req, res) {
+  var symbolsParam = req.query.symbols;
+  if (!symbolsParam) return res.status(400).json({ error: 'Missing symbols parameter' });
+  var symbols = symbolsParam.split(',').map(function (s) { return s.trim().toUpperCase(); }).filter(Boolean).slice(0, 30);
+  if (!symbols.length) return res.status(400).json({ error: 'No valid symbols provided' });
+
+  var cacheKey = 'earnings:' + symbols.slice().sort().join(',');
+  var cached = getCached(cacheKey, 6 * 3600 * 1000);
+  if (cached) return res.json(cached);
+
+  try {
+    var map = await yahooV7Quote(symbols.join(','));
+    var nowSec = Math.floor(Date.now() / 1000);
+    var out = [];
+    symbols.forEach(function (sym) {
+      var q = map[sym];
+      if (!q) return;
+      // earningsTimestamp is seconds; prefer it, fall back to the start of the
+      // estimated window. Skip anything without a real future date.
+      var ts = q.earningsTimestamp || q.earningsTimestampStart || null;
+      if (!ts || ts < nowSec) return;
+      out.push({
+        symbol: sym,
+        earningsTs: ts * 1000,
+        epsEstimate: (typeof q.epsForward === 'number') ? q.epsForward
+          : (typeof q.epsCurrentYear === 'number') ? q.epsCurrentYear : null,
+        isEstimateDate: !!q.isEarningsDateEstimate,
+      });
+    });
+    out.sort(function (a, b) { return a.earningsTs - b.earningsTs; });
+    var result = { earnings: out, source: 'yahoo-finance' };
+    setCache(cacheKey, result);
+    res.json(result);
+  } catch (err) {
+    console.error('[API] Earnings error:', err.message);
+    res.json({ earnings: [], source: 'error' });
   }
 });
 
